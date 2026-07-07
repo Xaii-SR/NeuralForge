@@ -25,15 +25,14 @@ pub fn run() {
       terminal::write_to_pty,
       terminal::resize_pty,
       terminal::close_pty,
+      core::logging::get_recent_logs,
+      core::logging::export_logs,
     ])
     .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
+      let log_dir = app.path().app_log_dir()?;
+      let guard = core::logging::init(&log_dir)?;
+      app.manage(guard);
+      tracing::info!(target: "core", event = "app_started", "NeuralForge started");
       Ok(())
     })
     .build(tauri::generate_context!())

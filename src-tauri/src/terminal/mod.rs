@@ -77,6 +77,7 @@ pub fn spawn_shell(
     let spawned = spawn_pty(rows, cols)?;
     let mut reader = spawned.reader;
     let session_id = Uuid::new_v4().to_string();
+    tracing::info!(target: "terminal", event = "session_spawned", session_id = %session_id, rows, cols);
 
     {
         let mut sessions = registry.sessions.lock().unwrap();
@@ -148,6 +149,7 @@ pub fn close_pty(registry: State<TerminalRegistry>, session_id: String) -> AppRe
     let mut sessions = registry.sessions.lock().unwrap();
     if let Some(mut session) = sessions.remove(&session_id) {
         let _ = session.child.kill();
+        tracing::info!(target: "terminal", event = "session_closed", session_id = %session_id);
     }
     Ok(())
 }

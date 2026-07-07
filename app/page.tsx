@@ -4,6 +4,7 @@ import { useState } from "react";
 import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
+import LogViewer from "@/components/LogViewer";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
 
@@ -15,6 +16,7 @@ interface FileChangedPayload {
 export default function Home() {
   const workspace = useWorkspace();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs">("terminal");
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
     setLastEvent(`${payload.kind}: ${payload.path}`);
@@ -52,8 +54,33 @@ export default function Home() {
               onSave={workspace.saveFile}
             />
           </div>
-          <div className="h-56 shrink-0 border-t border-neutral-800">
-            <Terminal />
+          <div className="flex h-56 shrink-0 flex-col border-t border-neutral-800">
+            <div className="flex h-7 shrink-0 gap-1 border-b border-neutral-800 bg-neutral-900 px-2">
+              <button
+                onClick={() => setBottomTab("terminal")}
+                className={`px-2 text-xs ${
+                  bottomTab === "terminal" ? "text-neutral-100" : "text-neutral-500"
+                }`}
+              >
+                Terminal
+              </button>
+              <button
+                onClick={() => setBottomTab("logs")}
+                className={`px-2 text-xs ${
+                  bottomTab === "logs" ? "text-neutral-100" : "text-neutral-500"
+                }`}
+              >
+                Logs
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <div className={bottomTab === "terminal" ? "h-full" : "hidden"}>
+                <Terminal />
+              </div>
+              <div className={bottomTab === "logs" ? "h-full" : "hidden"}>
+                <LogViewer />
+              </div>
+            </div>
           </div>
         </div>
       </div>

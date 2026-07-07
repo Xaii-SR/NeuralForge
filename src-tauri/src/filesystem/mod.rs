@@ -91,6 +91,7 @@ pub fn open_workspace(state: State<AppState>, path: String) -> AppResult<String>
         return Err(AppError::InvalidPath(format!("{path} is not a directory")));
     }
     *state.workspace_root.lock().unwrap() = Some(root.clone());
+    tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
     Ok(root.to_string_lossy().to_string())
 }
 
@@ -113,6 +114,7 @@ pub fn write_file(app: AppHandle, state: State<AppState>, path: String, contents
     let root = workspace_root(&state)?;
     let target = validate_within_workspace(&root, &path)?;
     fs::write(&target, contents)?;
+    tracing::info!(target: "filesystem", event = "file_written", path = %target.display());
     let _ = emit_file_changed(&app, &target.to_string_lossy(), "modified");
     Ok(())
 }
@@ -144,6 +146,7 @@ pub fn delete_path(app: AppHandle, state: State<AppState>, path: String) -> AppR
     } else {
         fs::remove_file(&target)?;
     }
+    tracing::warn!(target: "filesystem", event = "path_deleted", path = %target.display());
     let _ = emit_file_changed(&app, &target.to_string_lossy(), "deleted");
     Ok(())
 }
