@@ -7,6 +7,8 @@ pub enum AppError {
     NotFound(String),
     InvalidPath(String),
     Terminal(String),
+    Provider(String),
+    InsufficientResources(String),
 }
 
 impl fmt::Display for AppError {
@@ -16,6 +18,8 @@ impl fmt::Display for AppError {
             AppError::NotFound(msg) => write!(f, "Not found: {msg}"),
             AppError::InvalidPath(msg) => write!(f, "Invalid path: {msg}"),
             AppError::Terminal(msg) => write!(f, "Terminal error: {msg}"),
+            AppError::Provider(msg) => write!(f, "Provider error: {msg}"),
+            AppError::InsufficientResources(msg) => write!(f, "Insufficient resources: {msg}"),
         }
     }
 }
