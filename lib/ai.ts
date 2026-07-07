@@ -88,3 +88,30 @@ export function chatWithModel(
 ): Promise<void> {
   return invoke("chat_with_model", { requestId, model, messages });
 }
+
+export interface IndexStats {
+  files_scanned: number;
+  files_indexed: number;
+  files_skipped_unchanged: number;
+  chunks_created: number;
+}
+
+export interface SearchResult {
+  path: string;
+  start_line: number;
+  end_line: number;
+  content: string;
+  score: number;
+}
+
+export function indexWorkspace(): Promise<IndexStats> {
+  return invoke("index_workspace");
+}
+
+export function searchWorkspace(query: string): Promise<SearchResult[]> {
+  return invoke("search_workspace", { query });
+}
+
+export function getContextForQuery(query: string): Promise<string> {
+  return invoke("get_context_for_query", { query });
+}

@@ -1,8 +1,11 @@
+pub mod context;
 pub mod health;
 pub mod model_manager;
 pub mod providers;
 
 use crate::core::errors::{AppError, AppResult};
+use crate::core::state::AppState;
+use crate::database::DbState;
 use health::{HealthRegistry, ProviderHealthInfo};
 use providers::{ollama, ProviderMetadata};
 use tauri::{AppHandle, Emitter, State};
@@ -44,6 +47,27 @@ pub fn check_vram_for_model(
 ) -> model_manager::VramCheckResult {
     let hardware = crate::hardware::detect_all();
     model_manager::check(&parameter_size, &quantization_level, &hardware)
+}
+
+#[tauri::command]
+pub fn get_context_for_query(
+    state: State<AppState>,
+    db: State<DbState>,
+    query: String,
+) -> AppResult<String> {
+    let root = state
+        .workspace_root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+
+    let db_guard = db.conn.lock().unwrap();
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+
+    Ok(context::build_context_prompt(&root, conn, &query))
 }
 
 /// Pure core: model lookup -> VRAM gate -> health-cooldown check -> stream ->

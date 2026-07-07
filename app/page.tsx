@@ -85,7 +85,7 @@ export default function Home() {
           </div>
         </div>
         <div className="w-80 shrink-0 border-l border-neutral-800">
-          <ChatPane />
+          <ChatPane workspaceOpen={!!workspace.workspaceRoot} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-800 bg-neutral-900 px-3 text-xs text-neutral-500">

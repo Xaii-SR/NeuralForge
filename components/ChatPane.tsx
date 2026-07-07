@@ -15,7 +15,11 @@ interface TokenPayload {
   done: boolean;
 }
 
-export default function ChatPane() {
+export interface ChatPaneProps {
+  workspaceOpen: boolean;
+}
+
+export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
@@ -23,8 +27,23 @@ export default function ChatPane() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [indexing, setIndexing] = useState(false);
+  const [indexStatus, setIndexStatus] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  async function handleIndex() {
+    setIndexing(true);
+    setIndexStatus(null);
+    try {
+      const stats = await ai.indexWorkspace();
+      setIndexStatus(`Indexed ${stats.files_indexed} files (${stats.chunks_created} chunks)`);
+    } catch (e) {
+      setIndexStatus(`Index failed: ${e}`);
+    } finally {
+      setIndexing(false);
+    }
+  }
 
   useEffect(() => {
     ai.ollamaHealthCheck().then(async (healthy) => {
@@ -70,12 +89,24 @@ export default function ChatPane() {
     setInput("");
     setSending(true);
 
+    // Best-effort workspace context injection: silently skipped if no
+    // workspace is open or the index is empty (get_context_for_query
+    // errors in that case, which we treat as "no context available").
+    let contextPrompt: string | null = null;
     try {
-      await ai.chatWithModel(
-        requestId,
-        selectedModel,
-        nextMessages.map((m) => ({ role: m.role, content: m.content }))
-      );
+      contextPrompt = await ai.getContextForQuery(userMessage.content);
+    } catch {
+      contextPrompt = null;
+    }
+
+    const outgoing: ai.ChatMessage[] = [];
+    if (contextPrompt) {
+      outgoing.push({ role: "system", content: contextPrompt });
+    }
+    outgoing.push(...nextMessages.map((m) => ({ role: m.role, content: m.content })));
+
+    try {
+      await ai.chatWithModel(requestId, selectedModel, outgoing);
     } catch (e) {
       setError(String(e));
       setSending(false);
@@ -110,7 +141,19 @@ export default function ChatPane() {
             </option>
           ))}
         </select>
+        {workspaceOpen && (
+          <button
+            onClick={handleIndex}
+            disabled={indexing}
+            className="ml-auto rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-700 disabled:opacity-50"
+          >
+            {indexing ? "Indexing..." : "Index Workspace"}
+          </button>
+        )}
       </div>
+      {indexStatus && (
+        <div className="border-b border-neutral-800 px-2 py-1 text-[10px] text-neutral-500">{indexStatus}</div>
+      )}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {messages.map((m, i) => (
           <div key={i} className="mb-3">
