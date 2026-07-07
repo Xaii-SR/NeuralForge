@@ -63,6 +63,22 @@ CREATE TABLE IF NOT EXISTS response_cache (
     created_at INTEGER NOT NULL,
     PRIMARY KEY (prompt_hash, model)
 );
+
+CREATE TABLE IF NOT EXISTS agent_tasks (
+    id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    original_content TEXT,
+    proposed_content TEXT,
+    risk_summary TEXT,
+    verification TEXT,
+    rollback TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 "#;
 
 pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {

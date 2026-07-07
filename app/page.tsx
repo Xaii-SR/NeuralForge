@@ -7,6 +7,7 @@ import Terminal from "@/components/Terminal";
 import LogViewer from "@/components/LogViewer";
 import ChatPane from "@/components/ChatPane";
 import SettingsPanel from "@/components/SettingsPanel";
+import AgentPanel from "@/components/AgentPanel";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
 
@@ -18,7 +19,7 @@ interface FileChangedPayload {
 export default function Home() {
   const workspace = useWorkspace();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"terminal" | "logs">("terminal");
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
@@ -64,7 +65,7 @@ export default function Home() {
               onSave={workspace.saveFile}
             />
           </div>
-          <div className="flex h-56 shrink-0 flex-col border-t border-neutral-800">
+          <div className="flex h-72 shrink-0 flex-col border-t border-neutral-800">
             <div className="flex h-7 shrink-0 gap-1 border-b border-neutral-800 bg-neutral-900 px-2">
               <button
                 onClick={() => setBottomTab("terminal")}
@@ -82,6 +83,14 @@ export default function Home() {
               >
                 Logs
               </button>
+              <button
+                onClick={() => setBottomTab("agent")}
+                className={`px-2 text-xs ${
+                  bottomTab === "agent" ? "text-neutral-100" : "text-neutral-500"
+                }`}
+              >
+                Agent
+              </button>
             </div>
             <div className="min-h-0 flex-1">
               <div className={bottomTab === "terminal" ? "h-full" : "hidden"}>
@@ -89,6 +98,9 @@ export default function Home() {
               </div>
               <div className={bottomTab === "logs" ? "h-full" : "hidden"}>
                 <LogViewer />
+              </div>
+              <div className={bottomTab === "agent" ? "h-full" : "hidden"}>
+                <AgentPanel workspaceOpen={!!workspace.workspaceRoot} />
               </div>
             </div>
           </div>
