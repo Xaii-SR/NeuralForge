@@ -1,5 +1,4 @@
 use crate::core::errors::{AppError, AppResult};
-use crate::core::events::AI_RESPONSE_TOKEN;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -207,22 +206,6 @@ where
     }
 
     Ok(())
-}
-
-pub async fn chat(app: &AppHandle, request_id: &str, model: &str, messages: Vec<ChatMessage>) -> AppResult<()> {
-    let request_id = request_id.to_string();
-    let app = app.clone();
-    chat_stream(model, messages, move |token, done| {
-        let _ = app.emit(
-            AI_RESPONSE_TOKEN,
-            serde_json::json!({
-                "request_id": request_id,
-                "token": token,
-                "done": done,
-            }),
-        );
-    })
-    .await
 }
 
 #[cfg(test)]
