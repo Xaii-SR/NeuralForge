@@ -7,12 +7,14 @@ import { useEvent } from "@/hooks/useEvent";
 interface DisplayMessage {
   role: "user" | "assistant";
   content: string;
+  fromCache?: boolean;
 }
 
 interface TokenPayload {
   request_id: string;
   token: string;
   done: boolean;
+  from_cache?: boolean;
 }
 
 export interface ChatPaneProps {
@@ -23,6 +25,8 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
+  const [autoMode, setAutoMode] = useState(true);
+  const [autoSelection, setAutoSelection] = useState<ai.AutoSelection | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -62,9 +66,9 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
       const next = [...prev];
       const last = next[next.length - 1];
       if (last && last.role === "assistant") {
-        next[next.length - 1] = { ...last, content: last.content + payload.token };
+        next[next.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache };
       } else {
-        next.push({ role: "assistant", content: payload.token });
+        next.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache });
       }
       return next;
     });
@@ -79,7 +83,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   }, [messages]);
 
   async function handleSend() {
-    if (!input.trim() || !selectedModel || sending) return;
+    if (!input.trim() || sending) return;
     setError(null);
     const requestId = crypto.randomUUID();
     activeRequestId.current = requestId;
@@ -88,6 +92,29 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
     setMessages(nextMessages);
     setInput("");
     setSending(true);
+
+    let modelToUse = selectedModel;
+    if (autoMode) {
+      try {
+        const selection = await ai.autoSelectModel(userMessage.content);
+        setAutoSelection(selection);
+        modelToUse = selection.model;
+      } catch (e) {
+        setError(String(e));
+        setSending(false);
+        activeRequestId.current = null;
+        return;
+      }
+    } else {
+      setAutoSelection(null);
+    }
+
+    if (!modelToUse) {
+      setError("No model available to chat with");
+      setSending(false);
+      activeRequestId.current = null;
+      return;
+    }
 
     // Best-effort workspace context injection: silently skipped if no
     // workspace is open or the index is empty (get_context_for_query
@@ -106,7 +133,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
     outgoing.push(...nextMessages.map((m) => ({ role: m.role, content: m.content })));
 
     try {
-      await ai.chatWithModel(requestId, selectedModel, outgoing);
+      await ai.chatWithModel(requestId, modelToUse, outgoing);
     } catch (e) {
       setError(String(e));
       setSending(false);
@@ -130,17 +157,25 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-neutral-800 px-2">
-        <select
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200"
+        <button
+          onClick={() => setAutoMode((v) => !v)}
+          className={`rounded px-2 py-0.5 text-xs ${autoMode ? "bg-blue-600 text-white" : "bg-neutral-800 text-neutral-300"}`}
         >
-          {models.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name} ({m.parameter_size})
-            </option>
-          ))}
-        </select>
+          Auto
+        </button>
+        {!autoMode && (
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200"
+          >
+            {models.map((m) => (
+              <option key={m.name} value={m.name}>
+                {m.name} ({m.parameter_size})
+              </option>
+            ))}
+          </select>
+        )}
         {workspaceOpen && (
           <button
             onClick={handleIndex}
@@ -154,10 +189,24 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
       {indexStatus && (
         <div className="border-b border-neutral-800 px-2 py-1 text-[10px] text-neutral-500">{indexStatus}</div>
       )}
+      {autoMode && autoSelection && (
+        <div className="border-b border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400">
+          Selected <span className="text-neutral-200">{autoSelection.model}</span> from {autoSelection.provider}{" "}
+          because {autoSelection.reason}.{" "}
+          {autoSelection.is_free ? (
+            <span className="text-green-400">Free</span>
+          ) : (
+            <span className="text-yellow-400">~${autoSelection.estimated_cost_usd.toFixed(4)}</span>
+          )}
+        </div>
+      )}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {messages.map((m, i) => (
           <div key={i} className="mb-3">
-            <div className="mb-1 text-[10px] uppercase text-neutral-500">{m.role}</div>
+            <div className="mb-1 text-[10px] uppercase text-neutral-500">
+              {m.role}
+              {m.fromCache && <span className="ml-2 normal-case text-yellow-400">from cache</span>}
+            </div>
             <div className="whitespace-pre-wrap text-sm text-neutral-200">{m.content}</div>
           </div>
         ))}
@@ -178,7 +227,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
         />
         <button
           onClick={handleSend}
-          disabled={sending || !selectedModel}
+          disabled={sending || (!autoMode && !selectedModel)}
           className="rounded bg-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-600 disabled:opacity-50"
         >
           {sending ? "..." : "Send"}

@@ -153,9 +153,30 @@ pub async fn pull_model(app: &AppHandle, name: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Ollama's final done:true chunk includes real generation stats - using
+/// these for TPS/latency is far more accurate than approximating from
+/// whitespace-split word counts on the client side.
+#[derive(Default, Clone, Copy)]
+pub struct ChatStats {
+    pub eval_count: Option<u64>,
+    pub eval_duration_ns: Option<u64>,
+    pub total_duration_ns: Option<u64>,
+}
+
+impl ChatStats {
+    pub fn tokens_per_second(&self) -> Option<f64> {
+        match (self.eval_count, self.eval_duration_ns) {
+            (Some(count), Some(duration_ns)) if duration_ns > 0 => {
+                Some(count as f64 / (duration_ns as f64 / 1_000_000_000.0))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Pure streaming logic, decoupled from Tauri so it's testable against a
 /// real Ollama instance without needing an AppHandle.
-pub async fn chat_stream<F>(model: &str, messages: Vec<ChatMessage>, mut on_token: F) -> AppResult<()>
+pub async fn chat_stream<F>(model: &str, messages: Vec<ChatMessage>, mut on_token: F) -> AppResult<ChatStats>
 where
     F: FnMut(&str, bool),
 {
@@ -179,6 +200,7 @@ where
 
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
+    let mut stats = ChatStats::default();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| AppError::Provider(e.to_string()))?;
@@ -202,10 +224,16 @@ where
             let done = parsed.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
 
             on_token(token, done);
+
+            if done {
+                stats.eval_count = parsed.get("eval_count").and_then(|v| v.as_u64());
+                stats.eval_duration_ns = parsed.get("eval_duration").and_then(|v| v.as_u64());
+                stats.total_duration_ns = parsed.get("total_duration").and_then(|v| v.as_u64());
+            }
         }
     }
 
-    Ok(())
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -225,7 +253,7 @@ mod tests {
         let mut accumulated = String::new();
         let mut saw_done = false;
 
-        chat_stream("deepseek-coder:latest", messages, |token, done| {
+        let stats = chat_stream("deepseek-coder:latest", messages, |token, done| {
             accumulated.push_str(token);
             if done {
                 saw_done = true;
@@ -236,5 +264,7 @@ mod tests {
 
         assert!(saw_done, "expected a final done:true chunk");
         assert!(!accumulated.trim().is_empty(), "expected non-empty streamed content");
+        assert!(stats.eval_count.is_some(), "expected Ollama to report eval_count");
+        assert!(stats.tokens_per_second().is_some(), "expected a computable TPS from real stats");
     }
 }

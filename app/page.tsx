@@ -6,6 +6,7 @@ import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
 import LogViewer from "@/components/LogViewer";
 import ChatPane from "@/components/ChatPane";
+import SettingsPanel from "@/components/SettingsPanel";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
 
@@ -18,6 +19,7 @@ export default function Home() {
   const workspace = useWorkspace();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<"terminal" | "logs">("terminal");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
     setLastEvent(`${payload.kind}: ${payload.path}`);
@@ -35,7 +37,14 @@ export default function Home() {
         {workspace.workspaceRoot && (
           <span className="truncate text-xs text-neutral-500">{workspace.workspaceRoot}</span>
         )}
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="ml-auto rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
+        >
+          Settings
+        </button>
       </div>
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <div className="flex min-h-0 flex-1">
         <div className="w-64 shrink-0 border-r border-neutral-800">
           {workspace.workspaceRoot ? (

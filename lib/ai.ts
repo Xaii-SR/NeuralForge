@@ -115,3 +115,63 @@ export function searchWorkspace(query: string): Promise<SearchResult[]> {
 export function getContextForQuery(query: string): Promise<string> {
   return invoke("get_context_for_query", { query });
 }
+
+export interface Preferences {
+  goal: "speed" | "quality";
+  cost_preference: "free" | "cheap" | "quality_first";
+}
+
+export interface CostEstimate {
+  estimated_tokens: number;
+  estimated_cost_usd: number;
+  is_free: boolean;
+}
+
+export interface BenchmarkResult {
+  model: string;
+  tokens_per_second: number | null;
+  latency_ms: number;
+  vram_required_mb: number;
+  reliable: boolean;
+  benchmarked_at: number;
+}
+
+export interface AutoSelection {
+  provider: string;
+  model: string;
+  reason: string;
+  estimated_cost_usd: number;
+  is_free: boolean;
+}
+
+export function savePreferences(prefs: Preferences): Promise<void> {
+  return invoke("save_preferences", { goal: prefs.goal, costPreference: prefs.cost_preference });
+}
+
+export function getPreferences(): Promise<Preferences> {
+  return invoke("get_preferences");
+}
+
+export function estimateCostForPrompt(prompt: string): Promise<CostEstimate> {
+  return invoke("estimate_cost_for_prompt", { prompt });
+}
+
+export function runModelBenchmark(model: string): Promise<BenchmarkResult> {
+  return invoke("run_model_benchmark", { model });
+}
+
+export function getBenchmarks(): Promise<BenchmarkResult[]> {
+  return invoke("get_benchmarks");
+}
+
+export function getBenchmarkForModel(model: string): Promise<BenchmarkResult | null> {
+  return invoke("get_benchmark_for_model", { model });
+}
+
+export function clearResponseCache(): Promise<number> {
+  return invoke("clear_response_cache");
+}
+
+export function autoSelectModel(prompt: string): Promise<AutoSelection> {
+  return invoke("auto_select_model", { prompt });
+}

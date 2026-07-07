@@ -49,6 +49,20 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
     INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
     INSERT INTO chunks_fts(rowid, content) VALUES (new.id, new.content);
 END;
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS response_cache (
+    prompt_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    response TEXT NOT NULL,
+    success_rating INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (prompt_hash, model)
+);
 "#;
 
 pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
@@ -64,7 +78,7 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     Ok(conn)
 }
 
-fn with_conn<T>(db: &State<DbState>, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
+pub fn with_conn<T>(db: &State<DbState>, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
     let guard = db.conn.lock().unwrap();
     let conn = guard
         .as_ref()
