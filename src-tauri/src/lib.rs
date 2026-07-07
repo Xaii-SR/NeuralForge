@@ -1,11 +1,13 @@
 mod ai;
 mod core;
+mod database;
 mod filesystem;
 mod hardware;
 mod terminal;
 
 use ai::health::HealthRegistry;
 use core::state::AppState;
+use database::DbState;
 use tauri::Manager;
 use terminal::TerminalRegistry;
 
@@ -15,6 +17,7 @@ pub fn run() {
     .manage(AppState::default())
     .manage(TerminalRegistry::default())
     .manage(HealthRegistry::default())
+    .manage(DbState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -40,6 +43,9 @@ pub fn run() {
       ai::get_provider_health,
       ai::check_vram_for_model,
       ai::chat_with_model,
+      ai::get_context_for_query,
+      database::index_workspace,
+      database::search_workspace,
     ])
     .setup(|app| {
       let log_dir = app.path().app_log_dir()?;

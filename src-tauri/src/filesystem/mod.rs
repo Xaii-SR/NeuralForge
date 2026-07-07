@@ -86,13 +86,18 @@ fn list_dir(dir: &Path) -> AppResult<Vec<FileEntry>> {
 }
 
 #[tauri::command]
-pub fn open_workspace(state: State<AppState>, path: String) -> AppResult<String> {
+pub fn open_workspace(
+    state: State<AppState>,
+    db: State<crate::database::DbState>,
+    path: String,
+) -> AppResult<String> {
     let root = fs::canonicalize(&path)?;
     if !root.is_dir() {
         return Err(AppError::InvalidPath(format!("{path} is not a directory")));
     }
     *state.workspace_root.lock().unwrap() = Some(root.clone());
     ensure_memory_scaffold(&root)?;
+    *db.conn.lock().unwrap() = Some(crate::database::open_for_workspace(&root)?);
     tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
     Ok(root.to_string_lossy().to_string())
 }
