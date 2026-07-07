@@ -1,12 +1,24 @@
 "use client";
 
+import { useState } from "react";
 import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
 import { useWorkspace } from "@/hooks/useWorkspace";
+import { useEvent } from "@/hooks/useEvent";
+
+interface FileChangedPayload {
+  path: string;
+  kind: string;
+}
 
 export default function Home() {
   const workspace = useWorkspace();
+  const [lastEvent, setLastEvent] = useState<string | null>(null);
+
+  useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
+    setLastEvent(`${payload.kind}: ${payload.path}`);
+  });
 
   return (
     <main className="flex h-screen w-screen flex-col">
@@ -44,6 +56,9 @@ export default function Home() {
             <Terminal />
           </div>
         </div>
+      </div>
+      <div className="flex h-6 shrink-0 items-center border-t border-neutral-800 bg-neutral-900 px-3 text-xs text-neutral-500">
+        {lastEvent ?? "Ready"}
       </div>
     </main>
   );
