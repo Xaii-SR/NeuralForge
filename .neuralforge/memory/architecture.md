@@ -59,12 +59,18 @@ src-tauri/src/
                  compared against detected GPU VRAM (falls back to system RAM
                  if no dedicated GPU)
     context.rs  - Phase 3: memory injection + prompt management, see below
+    cache.rs    - Phase 4: response cache, see below
+    benchmarks.rs - Phase 4: model benchmarking, see below
+    router.rs   - Phase 4: pricing/scoring/preferences, see below
     mod.rs      - command layer: chat_with_model_core (plain async fn, takes
                  &HealthRegistry + a token callback, no Tauri types at all)
                  composes list_models -> VRAM gate -> health cooldown check
-                 -> ollama::chat_stream, recording health either way. The
-                 #[tauri::command] chat_with_model is a thin shell that just
-                 adds the AppHandle::emit call.
+                 -> ollama::chat_stream, recording health either way.
+                 chat_or_use_cache wraps that with an owned Option<String>
+                 cache value (see Phase 4 note on why it's owned, not a
+                 &Connection). The #[tauri::command] chat_with_model is a
+                 thin shell: read cache (before any await) -> chat_or_use_cache
+                 -> write cache (after the await).
 ```
 
 Frontend additions: `lib/ai.ts` (typed IPC wrappers), `components/ChatPane.tsx`
@@ -96,6 +102,46 @@ src-tauri/src/
                  single context block, sent as a system message ahead of the
                  user's actual question.
 ```
+
+Not implemented: vector embeddings/semantic search (schema ready, no
+embedding model available - see decisions.md).
+
+## Phase 4: AI Optimization Engine (complete)
+
+```
+src-tauri/src/
+  ai/
+    cache.rs      - response_cache table (in the per-workspace index.db):
+                    prompt+model hash -> response. get_cached/store_response/
+                    clear_cache are plain sync functions over &Connection.
+    benchmarks.rs - separate global model_benchmarks.db (app data dir,
+                    Roaming on Windows - distinct from the Local dir logs
+                    use), opened once in lib.rs's .setup(). run_benchmark()
+                    runs a real short prompt and reads TPS from Ollama's own
+                    eval_count/eval_duration (ChatStats, added to
+                    ollama::chat_stream's return value for this).
+    router.rs     - Preferences (goal/cost_preference) stored in the
+                    workspace settings table. price_per_1k_tokens (static
+                    table, Ollama=$0) + estimate_cost. score_models is pure/
+                    testable: speed goal ranks by benchmarked TPS (falls back
+                    to smaller param count when unbenchmarked), quality goal
+                    ranks by larger param count. select_model layers in
+                    HealthRegistry status and cost into the final reason.
+```
+
+Command-layer detail worth remembering: `chat_or_use_cache` (in `ai/mod.rs`)
+takes an *owned* `Option<String>` for the cached value, not a `&Connection`.
+`#[tauri::command]` async fns must return `Send` futures, and
+`rusqlite::Connection` is `Send` but not `Sync` - a borrowed `&Connection`
+held across an `.await` makes the future non-Send. The fix is structural:
+DB reads happen before the await, DB writes happen after, and the async
+core function itself never touches the connection type at all.
+
+Frontend: `ChatPane` has an "Auto" toggle (default on) that calls
+`auto_select_model` before every send and shows the selection + reason +
+cost; cached responses get a "from cache" tag. `SettingsPanel` (new) exposes
+goal/cost preferences, per-model benchmark runs with live results, and a
+cache-clear button.
 
 Frontend: ChatPane fetches context via `get_context_for_query` before every
 send (best-effort - silently skipped if no workspace/index is open) and an

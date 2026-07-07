@@ -101,5 +101,31 @@ changes.
 
 **Not yet manually click-tested in the running GUI** (same caveat as Phases 1-2).
 
-**Next**: Phase 4 (AI Optimization Engine) — auto mode, cost router, free-tier
-optimizer, cache system, benchmarks, model scoring. Not started.
+**Phase 4 (AI Optimization Engine): complete.**
+
+Built: Preferences (goal: speed/quality, cost: free/cheap/quality_first)
+persisted in workspace settings; response cache (prompt+model hash ->
+response) checked before every chat; per-model benchmarking (real TPS from
+Ollama's own eval_count/eval_duration stats, not word-count approximation)
+in a global `model_benchmarks.db`; pure/testable model scoring combining
+benchmarks + preference; auto_select_model tying it together with a
+human-readable "why" string; ChatPane auto-mode + SettingsPanel UI.
+
+**Verification** (all real, not mocked):
+- `cargo test`: 33/33 passing, plus 4 `#[ignore]`d live tests against real
+  Ollama + `deepseek-coder:latest`, including the cache gate test itself:
+  identical question sent twice, second call proven (not just assumed) to
+  skip real generation - same content, >2x faster.
+- Full app boots clean with the complete module registered; confirmed
+  `model_benchmarks.db` actually gets created at startup in the Roaming app
+  data dir (distinct from the Local dir logs use - a real Tauri path-resolver
+  detail, not an assumption).
+
+**Not yet manually click-tested in the running GUI** (same caveat as
+Phases 1-3).
+
+**Next**: Phase 5 (Agent Platform) — supervisor, task queue, JSON protocol,
+permissions, simulation mode, snapshots, rollback. Not started. Per the
+blueprint's own SAFETY section, this phase's deliverables *are* the approval
+gates (plan mode before autonomous changes, snapshot+test+rollback) - not
+something layered on after the fact.

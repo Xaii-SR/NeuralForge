@@ -90,3 +90,35 @@
 - **rusqlite `bundled-full`, not `bundled` + a separate `fts5` feature**:
   rusqlite has no feature literally named `fts5` (cargo error caught this
   immediately) - FTS5/FTS3/RTREE all come together via `bundled-full`.
+- **model_benchmarks.db is a separate global DB, not part of the per-
+  workspace index.db**: benchmarks are about the user's machine + installed
+  Ollama models, not any particular project - reusing the workspace DB would
+  mean re-benchmarking the same model for every workspace even though
+  nothing about the model or hardware changed. Opened once at app startup in
+  `app_data_dir` (confirmed via `cargo tauri dev` that this actually lands in
+  the Roaming folder on Windows, not Local where logs go - these are
+  genuinely different base directories in Tauri's path resolver, not the
+  same dir with different subfolders).
+- **Real TPS from Ollama's own stats, not word-count approximation**:
+  `chat_stream` now returns `ChatStats` (eval_count/eval_duration/
+  total_duration parsed from the final `done:true` chunk) instead of `()`.
+  This changed an already-shipped, already-tested function's signature -
+  worth it because approximating token count from whitespace-split words
+  would have been meaningfully wrong (real tokenizers don't split on
+  whitespace) for a number whose entire purpose is to drive routing
+  decisions.
+- **`chat_or_use_cache` takes owned `Option<String>`, not `&Connection`**:
+  `#[tauri::command]` async fns must return `Send` futures; `rusqlite::
+  Connection` is `Send` but not `Sync`, so a `&Connection` held across an
+  `.await` inside the function would make it non-Send and fail to compile
+  as a real command (this was worked out ahead of time by reasoning through
+  the Send bound, not discovered via a failed build - unlike most other
+  gotchas this session, which were genuinely caught by tests/compiler
+  errors rather than anticipated).
+- **Cloud provider pricing is real but currently inert**: `router::
+  price_per_1k_tokens` has actual ballpark numbers per provider, but since
+  `providers::has_api_key()` still always returns false (Phase 2 decision,
+  unchanged), `select_model` only ever has Ollama candidates in practice.
+  The pricing table exists now so the scoring/cost logic has real numbers to
+  operate on rather than needing a rework when a second provider gets wired
+  up later.
