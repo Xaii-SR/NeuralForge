@@ -143,14 +143,41 @@ cost; cached responses get a "from cache" tag. `SettingsPanel` (new) exposes
 goal/cost preferences, per-model benchmark runs with live results, and a
 cache-clear button.
 
-Frontend: ChatPane fetches context via `get_context_for_query` before every
-send (best-effort - silently skipped if no workspace/index is open) and an
-"Index Workspace" button that runs `index_workspace` and shows file/chunk counts.
+## Phase 5: Agent Platform (complete - single agent type)
 
-**Not implemented**: vector embeddings / semantic search. The schema has a
-`chunks.embedding BLOB` column ready for it, but no embedding model is
-available in this environment (see decisions.md) - FTS5 keyword search is the
-real "workspace search" capability for now.
+```
+src-tauri/src/
+  agent/
+    mod.rs      - AgentTask struct matches the blueprint's JSON protocol
+                  exactly. agent_tasks table in the workspace index.db.
+                  Commands: create_and_plan_task, approve_task, reject_task,
+                  list_agent_tasks. Tasks are inserted in "planning" status
+                  *before* the LLM call so a real record exists even if
+                  planning fails.
+    planner.rs  - Simulation Mode: plan_change() proposes a full replacement
+                  file via the LLM and estimate_risk() scores it (added/
+                  removed line ratio). No filesystem write capability at
+                  all - not a permission check, an absent capability.
+    executor.rs - only called after approve_task (explicit human approval).
+                  apply_and_verify(): write proposed content -> verify
+                  (real `cargo check` for .rs files under a Cargo project;
+                  other types are written but flagged unverified, not
+                  falsely marked as checked) -> on failure, restore the
+                  original content. Same canonicalized-path-prefix
+                  discipline as filesystem::validate_within_workspace.
+    memory.rs   - appends a one-line entry to the Phase 1
+                  .neuralforge/memory/agent_history.md on every finished
+                  task.
+```
+
+Only one agent type (Coder) is implemented - Tester/Security/Documentation
+from the blueprint's agent list are not built. A Supervisor dispatching
+across multiple agent types is a natural extension of this same task-queue/
+approval architecture later, not a rework.
+
+Frontend: `AgentPanel.tsx`, a new "Agent" tab in the bottom panel - objective
++ file path inputs, task list with live status, proposed-content preview,
+Approve/Reject (only shown in `awaiting_approval`).
 
 ## Key invariants
 - All filesystem commands validate the target path is canonicalized-within the

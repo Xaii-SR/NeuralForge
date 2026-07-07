@@ -122,3 +122,29 @@
   The pricing table exists now so the scoring/cost logic has real numbers to
   operate on rather than needing a rework when a second provider gets wired
   up later.
+- **Phase 5 scoped to one working agent type (Coder), not four in
+  parallel**: the blueprint lists Coder/Tester/Security/Documentation, but
+  building all four with only foundation-level infra behind them would mean
+  four shallow, unverifiable agents instead of one that actually works
+  end-to-end with real safety guarantees proven by tests. Same call as
+  Phase 2's cloud-provider stubs and Phase 3's deferred vector search.
+- **Coder agent proposes a full replacement file, not a diff/patch**: local
+  models (even coding-oriented ones like deepseek-coder) are less reliable
+  at emitting correctly-formatted unified diffs than at just writing out a
+  complete file. A full-file replacement is simpler to apply (no patch
+  application logic that can itself fail) and simpler to reason about for
+  risk estimation (line-set difference between two known-complete texts).
+- **Verification is real or explicitly absent, never faked**: `executor::
+  verify()` only claims a check happened for `.rs` files under a Cargo
+  project (runs real `cargo check`). Every other file type gets written
+  with an honest "no automated verification available" note rather than a
+  fabricated pass. Proven by a test that plants a genuine syntax error in a
+  real temp Cargo project and confirms both that `cargo check` caught it
+  and that the original content was restored - not an assertion that our
+  code *would* catch it.
+- **Tasks persist in "planning" status before the LLM call runs**, not
+  after it succeeds. A first draft only wrote the task row after planning
+  completed, which meant a failed plan (e.g. a bad LLM response) left no
+  record at all - silently vanishing rather than showing up as a failed
+  task. Caught while fixing an unrelated dead-code warning on the `FAILED`
+  status constant, which turned out to be a real gap, not just unused code.

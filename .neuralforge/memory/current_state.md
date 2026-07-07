@@ -124,8 +124,40 @@ human-readable "why" string; ChatPane auto-mode + SettingsPanel UI.
 **Not yet manually click-tested in the running GUI** (same caveat as
 Phases 1-3).
 
-**Next**: Phase 5 (Agent Platform) — supervisor, task queue, JSON protocol,
-permissions, simulation mode, snapshots, rollback. Not started. Per the
-blueprint's own SAFETY section, this phase's deliverables *are* the approval
-gates (plan mode before autonomous changes, snapshot+test+rollback) - not
-something layered on after the fact.
+**Phase 5 (Agent Platform): complete** (single agent type - see below).
+
+Built: SQLite-backed task queue matching the blueprint's JSON protocol
+exactly ({id, objective, agent, files, status, verification, rollback}).
+Simulation Mode (planner.rs) proposes a full replacement file via the LLM
+and a risk estimate, with no filesystem write capability at all - a hard
+boundary, not a flag. Only after explicit human approval does the executor
+write the change, run real verification (`cargo check` for .rs files under
+a Cargo project), and roll back to the original content on failure.
+Finished tasks get appended to the Phase 1 `agent_history.md`. AgentPanel
+UI (new "Agent" tab): objective+file inputs, task list, proposed-content
+preview, Approve/Reject.
+
+**Scope decision**: implemented one fully-working agent type (Coder) rather
+than Coder+Tester+Security+Documentation in parallel - same pattern as every
+prior phase's scoping (cloud providers in Phase 2, vector search in Phase 3).
+A Supervisor that dispatches across multiple specialized agents is a
+natural Phase 6+ extension of this same task-queue/approval architecture,
+not a rework.
+
+**Verification** (all real, not mocked):
+- `cargo test`: 42/42 passing, plus 2 `#[ignore]`d live-Ollama tests. The
+  standout: `broken_rust_change_is_automatically_rolled_back` sets up a real
+  temp Cargo project, applies a genuine syntax error, and asserts both that
+  a real `cargo check` caught it AND that the original file content was
+  restored - the actual safety property, not a mocked assertion of it.
+- Full app boots clean with the complete agent module registered.
+
+**Not yet manually click-tested in the running GUI** (same caveat as
+Phases 1-4) - the plan/approve/reject flow works per the command-layer
+tests, but no human has clicked through it in the actual window yet.
+
+**Next**: Phases 6 (Advanced Platform: extensions, marketplace, plugin
+sandbox) and 7 (Self Bootstrap) are explicitly later-stage per the
+blueprint's own phase ordering and weren't part of this build session's
+instructions - stopping here for a check-in rather than continuing
+unprompted, same reasoning as the Phase 2->3 checkpoint.
