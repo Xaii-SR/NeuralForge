@@ -66,5 +66,40 @@ underlying HTTP/streaming pipeline is verified for real; the last mile
 (React state updates rendering correctly) is exercised by TypeScript's
 compiler and the code's own logic, not a human eye.
 
-**Next**: Phase 3 (Context Intelligence) — SQLite database, vector indexing,
-code parsing, workspace search, memory injection, prompt management.
+**Phase 3 (Context Intelligence): complete** (vector indexing deferred - see below).
+
+Built: SQLite index per workspace (`.neuralforge/index.db`, rusqlite bundled-full
+for FTS5), a walkdir-based indexer that chunks text files into overlapping
+line windows and skips unchanged files via content hash, FTS5 keyword search
+with the porter stemmer, memory injection (reads the Phase-1
+`.neuralforge/memory/*.md` files), and prompt management
+(`build_context_prompt` combining memory + top search matches into a system
+message). ChatPane now injects workspace context into every chat
+automatically, plus an "Index Workspace" button.
+
+**Vector indexing scope decision**: no embedding model is available locally
+(this Ollama instance is running without `--embeddings` enabled, and no
+dedicated embedding model like nomic-embed-text is pulled) - restarting a
+service the user has running for other purposes wasn't something to do
+unilaterally. Built the full schema/storage path for embeddings (chunks.embedding
+BLOB column exists) but did not implement embedding generation or vector
+similarity search. FTS5 keyword search is the real, working "workspace search"
+capability for now; vector search can be layered on later without schema
+changes.
+
+**Verification** (all real, not mocked):
+- `cargo test`: 24/24 passing, 2 `#[ignore]`d live-Ollama tests unaffected.
+- Two real bugs caught by the tests themselves, not just inferred: (1) FTS5's
+  default MATCH syntax ANDs every word, so natural-language queries almost
+  never matched anything - fixed by converting queries to OR-of-terms; (2)
+  even with OR-of-terms, "authentication" (query) didn't match "authenticate"
+  (code) - different exact tokens - fixed by enabling FTS5's porter stemmer.
+  Also hit and fixed a Windows-specific file-lock issue in three tests
+  (couldn't `remove_dir_all` a temp dir while its SQLite connection was still
+  open - scoped the connections to drop before cleanup).
+- `cargo tauri dev`: boots clean with the full database module registered.
+
+**Not yet manually click-tested in the running GUI** (same caveat as Phases 1-2).
+
+**Next**: Phase 4 (AI Optimization Engine) — auto mode, cost router, free-tier
+optimizer, cache system, benchmarks, model scoring. Not started.

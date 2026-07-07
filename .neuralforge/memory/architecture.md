@@ -52,22 +52,59 @@ src-tauri/src/
                  has_api_key() stub (always false - no credential storage)
       ollama.rs - real HTTP client (reqwest) against localhost:11434.
                  chat_stream() is the pure/testable core (NDJSON parsing,
-                 generic on_token callback); chat() wraps it to emit
-                 AI_RESPONSE_TOKEN via AppHandle.
+                 generic on_token callback) - no AppHandle dependency at all.
     health.rs   - HealthRegistry: rolling latency window (20 samples) +
                  failure-count cooldown (3 failures -> 30s) per provider
     model_manager.rs - VRAM estimate from parameter_size + quantization_level,
                  compared against detected GPU VRAM (falls back to system RAM
                  if no dedicated GPU)
-    mod.rs      - command layer: chat_with_model composes list_models (to find
-                 the target model's real metadata) -> VRAM gate -> health
-                 cooldown check -> ollama::chat, recording health either way
+    context.rs  - Phase 3: memory injection + prompt management, see below
+    mod.rs      - command layer: chat_with_model_core (plain async fn, takes
+                 &HealthRegistry + a token callback, no Tauri types at all)
+                 composes list_models -> VRAM gate -> health cooldown check
+                 -> ollama::chat_stream, recording health either way. The
+                 #[tauri::command] chat_with_model is a thin shell that just
+                 adds the AppHandle::emit call.
 ```
 
 Frontend additions: `lib/ai.ts` (typed IPC wrappers), `components/ChatPane.tsx`
 (model dropdown from real installed models, streams tokens into the active
 assistant message keyed by `request_id`, graceful "Ollama not detected"
 state). Mounted as a right-side panel in `app/page.tsx`.
+
+## Phase 3: Context Intelligence (complete)
+
+```
+src-tauri/src/
+  database/
+    mod.rs     - per-workspace SQLite at .neuralforge/index.db (rusqlite,
+                 bundled-full for FTS5). files/chunks tables + chunks_fts
+                 (FTS5, porter+unicode61 tokenizer) kept in sync via triggers.
+                 DbState { conn: Mutex<Option<Connection>> } managed state,
+                 (re)opened in filesystem::open_workspace.
+    indexer.rs - walkdir over the workspace (same excluded dirs as the repo's
+                 own .gitignore, plus .neuralforge itself), skips binaries/
+                 >1MB files, chunks into 40-line windows with 5-line overlap,
+                 skips re-indexing unchanged files via a content hash.
+    search.rs  - FTS5 keyword search. Converts the raw query into an
+                 OR-of-terms FTS5 query (FTS5's default MATCH ANDs every bare
+                 word, which is useless for natural-language questions).
+  ai/
+    context.rs - read_memory_context() reads .neuralforge/memory/*.md (Phase
+                 1), skipping empty/header-only files. build_context_prompt()
+                 combines that with the top FTS5 matches for the query into a
+                 single context block, sent as a system message ahead of the
+                 user's actual question.
+```
+
+Frontend: ChatPane fetches context via `get_context_for_query` before every
+send (best-effort - silently skipped if no workspace/index is open) and an
+"Index Workspace" button that runs `index_workspace` and shows file/chunk counts.
+
+**Not implemented**: vector embeddings / semantic search. The schema has a
+`chunks.embedding BLOB` column ready for it, but no embedding model is
+available in this environment (see decisions.md) - FTS5 keyword search is the
+real "workspace search" capability for now.
 
 ## Key invariants
 - All filesystem commands validate the target path is canonicalized-within the

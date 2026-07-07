@@ -72,3 +72,21 @@
   stub" in this phase and forbids storing secrets outside OS
   keychain/encrypted SQLite - neither exists yet, so building real key
   storage now would mean building it twice.
+- **No vector embeddings in Phase 3**: checked for a locally available
+  embedding model before starting - none pulled, and the running Ollama
+  instance doesn't have `--embeddings` enabled. Restarting a service the user
+  has running for their own purposes isn't something to do unilaterally just
+  to build this feature. Built the storage path (`chunks.embedding BLOB`)
+  but shipped FTS5 keyword search as the real, working search capability
+  instead of a semantic search that would silently do nothing.
+- **FTS5 query construction**: raw natural-language queries don't work with
+  FTS5's default MATCH syntax (bare words are ANDed - a question needs every
+  one of its words to literally appear in a chunk to match at all). Convert
+  to an OR-of-terms query instead. Also enabled the porter stemmer
+  (`tokenize = 'porter unicode61'`) after a test caught that "authentication"
+  (query) and "authenticate" (code) don't match as exact tokens even with
+  OR-of-terms - stemming both to the same root fixes it. Both were found by
+  a failing test, not code review.
+- **rusqlite `bundled-full`, not `bundled` + a separate `fts5` feature**:
+  rusqlite has no feature literally named `fts5` (cargo error caught this
+  immediately) - FTS5/FTS3/RTREE all come together via `bundled-full`.
