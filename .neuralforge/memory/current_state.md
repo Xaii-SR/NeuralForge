@@ -32,6 +32,28 @@ explicit instruction to avoid requiring manual confirmation between steps.
 Worth a real click-through before calling Phase 1 fully done from a UX
 standpoint, not just a correctness one.
 
-**Next**: Phase 2 (Local AI Engine) — Ollama integration, hardware detection,
-model manager, resource protection, provider registry/health. Not started;
-explicitly out of scope for Phase 1 per the blueprint's MVP boundary.
+**Phase 2 (Local AI Engine): complete.**
+
+Built: hardware detection (cpu/memory/gpu via sysinfo + DXGI), Ollama client
+(health/list/pull/remove/chat), provider registry (11 providers, auth stub -
+no credential storage), provider health tracking (latency window + failure
+cooldown), VRAM-gated model loading, streaming chat wired to a ChatPane UI.
+
+**Verification:**
+- `cargo test`: 16/16 passing, plus 1 `#[ignore]`d live test
+  (`chat_stream_produces_real_tokens_from_local_model`) run on demand against
+  the real local Ollama instance and `deepseek-coder:latest` - genuine
+  streamed content and a final `done:true`, not mocked.
+- `cargo tauri dev`: boots clean with the full AI module registered, no
+  runtime panics.
+- Ollama was already installed and running locally (v0.31.1, 4 models
+  pulled) - no install/download was needed for gate testing.
+
+**Not yet manually click-tested in the running GUI** (same caveat as Phase 1 -
+select model → type question → watch it stream in the actual window). The
+underlying HTTP/streaming pipeline is verified for real; the last mile
+(React state updates rendering correctly) is exercised by TypeScript's
+compiler and the code's own logic, not a human eye.
+
+**Next**: Phase 3 (Context Intelligence) — SQLite database, vector indexing,
+code parsing, workspace search, memory injection, prompt management.

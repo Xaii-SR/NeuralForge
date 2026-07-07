@@ -35,3 +35,27 @@
   `com.neuralforge.ide` — Tauri warned the `.app` suffix collides with macOS
   bundle conventions. Fixed immediately since bundle IDs are painful to
   change once anything (updater, installed-app registry) depends on them.
+- **GPU detection via DXGI, not a cross-platform crate**: `wgpu` doesn't
+  reliably expose total VRAM across backends; DXGI's
+  `DXGI_ADAPTER_DESC1.DedicatedVideoMemory` does, and the project targets
+  Windows first per the blueprint's Definition of Done. Utilization
+  (real-time %) is deliberately not implemented - that needs vendor-specific
+  SDKs (NVML for NVIDIA, etc.), disproportionate effort for Phase 2's
+  foundation-level gate ("VRAM check rejects if insufficient"), which only
+  needs static VRAM capacity, not live utilization.
+- **VRAM check runs server-side in `chat_with_model`**, not just as an
+  advisory frontend call: it re-fetches the model's real parameter/quant
+  info via `list_models()` and refuses with `InsufficientResources` before
+  ever hitting Ollama. A frontend-only check would be trivially bypassable
+  and wouldn't actually satisfy "refuse to load if insufficient VRAM."
+- **`ollama::chat` split into `chat_stream` (pure) + `chat` (Tauri wrapper)**:
+  same pattern as filesystem/terminal - lets the real HTTP/streaming logic be
+  integration-tested against a live Ollama instance without needing a mocked
+  `AppHandle`. The regression test (`chat_stream_produces_real_tokens_from_local_model`)
+  is `#[ignore]`d by default (needs a running local Ollama) but was run
+  explicitly during Phase 2 verification against `deepseek-coder:latest`.
+- **No credential storage in Phase 2**: `providers::has_api_key()` always
+  returns `false`. Blueprint explicitly asked for an "authentication handler
+  stub" in this phase and forbids storing secrets outside OS
+  keychain/encrypted SQLite - neither exists yet, so building real key
+  storage now would mean building it twice.

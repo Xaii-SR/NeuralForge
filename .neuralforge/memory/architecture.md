@@ -36,6 +36,39 @@ src-tauri/src/
 Not yet built (by design — Phase 1 boundary): `database/`, `hardware/`, `ai/`,
 `agent/`. These are Phase 2+.
 
+## Phase 2: Local AI Engine (complete)
+
+```
+src-tauri/src/
+  hardware/
+    cpu.rs, memory.rs  - sysinfo-based detection (cores, frequency, RAM)
+    gpu.rs             - DXGI adapter enumeration (Windows-only path; vendor
+                         from PCI vendor ID, dedicated VRAM). utilization_percent
+                         is always None for now - no NVML/ADLX integration yet.
+    mod.rs             - HardwareInfo aggregate + get_hardware_info command
+  ai/
+    providers/
+      mod.rs   - ProviderId enum (Ollama + 10 cloud providers), ProviderMetadata,
+                 has_api_key() stub (always false - no credential storage)
+      ollama.rs - real HTTP client (reqwest) against localhost:11434.
+                 chat_stream() is the pure/testable core (NDJSON parsing,
+                 generic on_token callback); chat() wraps it to emit
+                 AI_RESPONSE_TOKEN via AppHandle.
+    health.rs   - HealthRegistry: rolling latency window (20 samples) +
+                 failure-count cooldown (3 failures -> 30s) per provider
+    model_manager.rs - VRAM estimate from parameter_size + quantization_level,
+                 compared against detected GPU VRAM (falls back to system RAM
+                 if no dedicated GPU)
+    mod.rs      - command layer: chat_with_model composes list_models (to find
+                 the target model's real metadata) -> VRAM gate -> health
+                 cooldown check -> ollama::chat, recording health either way
+```
+
+Frontend additions: `lib/ai.ts` (typed IPC wrappers), `components/ChatPane.tsx`
+(model dropdown from real installed models, streams tokens into the active
+assistant message keyed by `request_id`, graceful "Ollama not detected"
+state). Mounted as a right-side panel in `app/page.tsx`.
+
 ## Key invariants
 - All filesystem commands validate the target path is canonicalized-within the
   open workspace root before touching disk (rejects traversal, symlink escape
