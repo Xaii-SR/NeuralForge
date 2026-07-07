@@ -2,6 +2,7 @@
 
 import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
+import Terminal from "@/components/Terminal";
 import { useWorkspace } from "@/hooks/useWorkspace";
 
 export default function Home() {
@@ -28,15 +29,20 @@ export default function Home() {
             <div className="p-3 text-xs text-neutral-500">No folder open</div>
           )}
         </div>
-        <div className="min-w-0 flex-1">
-          <EditorPane
-            openFiles={workspace.openFiles}
-            activePath={workspace.activePath}
-            onSelect={workspace.setActivePath}
-            onClose={workspace.closeFile}
-            onChange={workspace.updateContent}
-            onSave={workspace.saveFile}
-          />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-[2]">
+            <EditorPane
+              openFiles={workspace.openFiles}
+              activePath={workspace.activePath}
+              onSelect={workspace.setActivePath}
+              onClose={workspace.closeFile}
+              onChange={workspace.updateContent}
+              onSave={workspace.saveFile}
+            />
+          </div>
+          <div className="h-56 shrink-0 border-t border-neutral-800">
+            <Terminal />
+          </div>
         </div>
       </div>
     </main>
