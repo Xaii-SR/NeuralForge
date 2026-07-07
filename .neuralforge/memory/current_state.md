@@ -40,14 +40,25 @@ no credential storage), provider health tracking (latency window + failure
 cooldown), VRAM-gated model loading, streaming chat wired to a ChatPane UI.
 
 **Verification:**
-- `cargo test`: 16/16 passing, plus 1 `#[ignore]`d live test
-  (`chat_stream_produces_real_tokens_from_local_model`) run on demand against
-  the real local Ollama instance and `deepseek-coder:latest` - genuine
-  streamed content and a final `done:true`, not mocked.
+- `cargo test`: 16/16 passing, plus 2 `#[ignore]`d live tests run on demand
+  against the real local Ollama instance and `deepseek-coder:latest`:
+  - `chat_stream_produces_real_tokens_from_local_model` - the low-level HTTP
+    streaming layer, genuine streamed content and a final `done:true`.
+  - `chat_with_model_core_logs_and_records_health` - the *full* command path
+    (model lookup, VRAM gate, health-cooldown check, health recording, and
+    the exact `chat_completed` JSON log line LogViewer reads). Added after
+    noticing the first test only covered the low-level stream, not the
+    command a user's click actually triggers.
 - `cargo tauri dev`: boots clean with the full AI module registered, no
   runtime panics.
 - Ollama was already installed and running locally (v0.31.1, 4 models
   pulled) - no install/download was needed for gate testing.
+- Note: `tauri::test`'s `MockRuntime` crashes this project's test binary at
+  process launch (`STATUS_ENTRYPOINT_NOT_FOUND`) in this environment -
+  confirmed unrelated to app correctness (the real app binary launches
+  fine). Worked around by keeping Tauri-dependent commands as thin wrappers
+  around plain, runtime-independent core functions instead of using
+  MockRuntime at all. See decisions.md.
 
 **Not yet manually click-tested in the running GUI** (same caveat as Phase 1 -
 select model → type question → watch it stream in the actual window). The

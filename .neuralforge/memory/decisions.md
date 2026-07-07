@@ -48,12 +48,25 @@
   info via `list_models()` and refuses with `InsufficientResources` before
   ever hitting Ollama. A frontend-only check would be trivially bypassable
   and wouldn't actually satisfy "refuse to load if insufficient VRAM."
-- **`ollama::chat` split into `chat_stream` (pure) + `chat` (Tauri wrapper)**:
-  same pattern as filesystem/terminal - lets the real HTTP/streaming logic be
-  integration-tested against a live Ollama instance without needing a mocked
-  `AppHandle`. The regression test (`chat_stream_produces_real_tokens_from_local_model`)
-  is `#[ignore]`d by default (needs a running local Ollama) but was run
-  explicitly during Phase 2 verification against `deepseek-coder:latest`.
+- **`ollama::chat_stream` is pure (no AppHandle)**; `ai::chat_with_model_core`
+  wraps it with the model-lookup/VRAM-gate/health-recording logic, also
+  without an AppHandle; the `#[tauri::command] chat_with_model` is a thin
+  shell that just adds the `AppHandle::emit` call. Same pure-core/thin-wrapper
+  pattern as filesystem/terminal. Both `#[ignore]`d-by-default regression
+  tests (`chat_stream_produces_real_tokens_from_local_model`,
+  `chat_with_model_core_logs_and_records_health`) run against a live local
+  Ollama + `deepseek-coder:latest` without needing any Tauri runtime at all.
+- **Rejected `tauri::test`'s `MockRuntime`** for testing `chat_with_model`:
+  first attempt added it as a dev-dependency to construct a real `AppHandle`
+  for testing, but it crashed the *entire* test binary at process launch
+  (`STATUS_ENTRYPOINT_NOT_FOUND`) - confirmed Windows-specific to that
+  feature by verifying the real (non-test) app binary still launched fine
+  with identical code otherwise. Rather than debug Tauri's Windows linking
+  internals, made `chat_with_model` generic-over-nothing again and pushed
+  all its logic into a plain async function (`chat_with_model_core`) that
+  takes `&HealthRegistry` and a token callback instead of `AppHandle` +
+  `State`. Zero Tauri runtime dependency for the test, zero risk of hitting
+  this class of bug again.
 - **No credential storage in Phase 2**: `providers::has_api_key()` always
   returns `false`. Blueprint explicitly asked for an "authentication handler
   stub" in this phase and forbids storing secrets outside OS
