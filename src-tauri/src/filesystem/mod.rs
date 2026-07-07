@@ -1,3 +1,4 @@
+use crate::core::config::ensure_memory_scaffold;
 use crate::core::errors::{AppError, AppResult};
 use crate::core::events::emit_file_changed;
 use crate::core::state::AppState;
@@ -91,6 +92,7 @@ pub fn open_workspace(state: State<AppState>, path: String) -> AppResult<String>
         return Err(AppError::InvalidPath(format!("{path} is not a directory")));
     }
     *state.workspace_root.lock().unwrap() = Some(root.clone());
+    ensure_memory_scaffold(&root)?;
     tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
     Ok(root.to_string_lossy().to_string())
 }
