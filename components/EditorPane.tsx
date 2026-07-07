@@ -1,41 +1,28 @@
 "use client";
 
-import { useState } from "react";
 import Editor from "./Editor";
-import TabBar, { Tab } from "./TabBar";
+import TabBar from "./TabBar";
 import { languageFromPath } from "@/lib/language";
-
-interface OpenFile extends Tab {
-  content: string;
-}
+import type { OpenFile } from "@/hooks/useWorkspace";
 
 export interface EditorPaneProps {
-  initialFiles?: { path: string; content: string }[];
+  openFiles: OpenFile[];
+  activePath: string | null;
+  onSelect: (path: string) => void;
+  onClose: (path: string) => void;
+  onChange: (path: string, value: string) => void;
+  onSave: (path: string) => void;
 }
 
-export default function EditorPane({ initialFiles = [] }: EditorPaneProps) {
-  const [files, setFiles] = useState<OpenFile[]>(
-    initialFiles.map((f) => ({ path: f.path, content: f.content, isDirty: false }))
-  );
-  const [activePath, setActivePath] = useState<string | null>(
-    initialFiles[0]?.path ?? null
-  );
-
-  const activeFile = files.find((f) => f.path === activePath) ?? null;
-
-  function handleChange(path: string, value: string) {
-    setFiles((prev) =>
-      prev.map((f) => (f.path === path ? { ...f, content: value, isDirty: true } : f))
-    );
-  }
-
-  function handleClose(path: string) {
-    setFiles((prev) => prev.filter((f) => f.path !== path));
-    if (activePath === path) {
-      const remaining = files.filter((f) => f.path !== path);
-      setActivePath(remaining[remaining.length - 1]?.path ?? null);
-    }
-  }
+export default function EditorPane({
+  openFiles,
+  activePath,
+  onSelect,
+  onClose,
+  onChange,
+  onSave,
+}: EditorPaneProps) {
+  const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
   if (!activeFile) {
     return (
@@ -47,18 +34,14 @@ export default function EditorPane({ initialFiles = [] }: EditorPaneProps) {
 
   return (
     <div className="flex h-full w-full flex-col">
-      <TabBar
-        tabs={files}
-        activePath={activePath}
-        onSelect={setActivePath}
-        onClose={handleClose}
-      />
+      <TabBar tabs={openFiles} activePath={activePath} onSelect={onSelect} onClose={onClose} />
       <div className="min-h-0 flex-1">
         <Editor
           path={activeFile.path}
           language={languageFromPath(activeFile.path)}
           value={activeFile.content}
-          onChange={(v) => handleChange(activeFile.path, v)}
+          onChange={(v) => onChange(activeFile.path, v)}
+          onSave={() => onSave(activeFile.path)}
         />
       </div>
     </div>
