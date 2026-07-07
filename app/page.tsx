@@ -5,6 +5,7 @@ import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
 import LogViewer from "@/components/LogViewer";
+import ChatPane from "@/components/ChatPane";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
 
@@ -82,6 +83,9 @@ export default function Home() {
               </div>
             </div>
           </div>
+        </div>
+        <div className="w-80 shrink-0 border-l border-neutral-800">
+          <ChatPane />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-800 bg-neutral-900 px-3 text-xs text-neutral-500">
