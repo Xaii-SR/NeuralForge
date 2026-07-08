@@ -25,6 +25,12 @@ pub struct AgentTask {
     pub proposed_content: Option<String>,
     pub risk_summary: Option<String>,
     pub error: Option<String>,
+    /// Sprint 1: the requirement that gated this task. None for run_code
+    /// tasks (still ungated this sprint) and pre-Sprint-1 rows.
+    pub requirement_id: Option<String>,
+    /// Copied from the gating requirement so the whole chain (requirement
+    /// -> task -> future evidence/ledger records) shares one queryable ID.
+    pub correlation_id: Option<String>,
 }
 
 pub mod status {
@@ -48,6 +54,7 @@ fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn insert_task(
     conn: &Connection,
     id: &str,
@@ -58,12 +65,14 @@ pub fn insert_task(
     original_content: &str,
     proposed_content: &str,
     risk_summary: &str,
+    requirement_id: Option<&str>,
+    correlation_id: Option<&str>,
 ) -> AppResult<()> {
     let now = now_secs();
     conn.execute(
-        "INSERT INTO agent_tasks (id, objective, agent, task_type, file_path, status, original_content, proposed_content, risk_summary, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-        params![id, objective, CODER_AGENT, task_type, file_path, status, original_content, proposed_content, risk_summary, now],
+        "INSERT INTO agent_tasks (id, objective, agent, task_type, file_path, status, original_content, proposed_content, risk_summary, requirement_id, correlation_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+        params![id, objective, CODER_AGENT, task_type, file_path, status, original_content, proposed_content, risk_summary, requirement_id, correlation_id, now],
     )
     .map_err(|e| AppError::Provider(format!("failed to create task: {e}")))?;
     Ok(())
@@ -103,6 +112,8 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
         proposed_content: row.get("proposed_content")?,
         risk_summary: row.get("risk_summary")?,
         error: row.get("error")?,
+        requirement_id: row.get("requirement_id")?,
+        correlation_id: row.get("correlation_id")?,
     })
 }
 
@@ -131,11 +142,30 @@ pub fn list_tasks(conn: &Connection) -> AppResult<Vec<AgentTask>> {
         .map_err(|e| AppError::Provider(format!("failed to read task row: {e}")))
 }
 
+/// Flattens a validated requirement into the objective string the
+/// (unchanged) planner consumes: intent plus an explicit acceptance-
+/// criteria checklist, so the model plans against the contract instead
+/// of a raw prompt.
+pub fn objective_from_requirement(req: &crate::governance::requirements::RequirementContract) -> String {
+    let criteria = req
+        .acceptance_criteria
+        .iter()
+        .map(|c| format!("- {c}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{}\n\nThe change is only acceptable if all of these criteria hold:\n{criteria}", req.intent)
+}
+
+/// Sprint 1 (Requirement Intelligence): edit_file tasks no longer accept a
+/// raw prompt - they take the ID of a validated, ACTIVE requirement, and
+/// the planner refuses to run without one. run_code tasks
+/// (create_and_plan_code_task below) are deliberately still ungated this
+/// sprint - flagged as a Sprint 2 follow-up, not silently bundled here.
 #[tauri::command]
 pub async fn create_and_plan_task(
     state: tauri::State<'_, crate::core::state::AppState>,
     db: tauri::State<'_, crate::database::DbState>,
-    objective: String,
+    requirement_id: String,
     file_path: String,
 ) -> AppResult<AgentTask> {
     let root = state
@@ -155,17 +185,34 @@ pub async fn create_and_plan_task(
     let original_content = std::fs::read_to_string(&target)?;
     let id = uuid::Uuid::new_v4().to_string();
 
+    // The requirement gate runs before the task row exists and long before
+    // any LLM call: a missing or retired requirement is a hard refusal
+    // that leaves no trace in agent_tasks, because no work was authorized.
     // Insert the row in PLANNING state before the (potentially slow) LLM
     // call, so the task is genuinely queryable/visible while in flight -
-    // not just after it succeeds. A crash or failure mid-plan still leaves
-    // a real, honest record instead of the task silently never existing.
-    {
+    // a crash or failure mid-plan still leaves a real, honest record.
+    let (objective, correlation_id) = {
         let guard = db.conn.lock().unwrap();
         let conn = guard
             .as_ref()
             .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-        insert_task(conn, &id, &objective, task_type::EDIT_FILE, &file_path, status::PLANNING, &original_content, "", "")?;
-    }
+        let requirement = crate::governance::requirements::get_active(conn, &requirement_id)?;
+        let objective = objective_from_requirement(&requirement);
+        insert_task(
+            conn,
+            &id,
+            &objective,
+            task_type::EDIT_FILE,
+            &file_path,
+            status::PLANNING,
+            &original_content,
+            "",
+            "",
+            Some(&requirement_id),
+            Some(&requirement.correlation_id),
+        )?;
+        (objective, requirement.correlation_id)
+    };
 
     let plan_result = planner::plan_change(&objective, &file_path, &original_content).await;
 
@@ -182,7 +229,7 @@ pub async fn create_and_plan_task(
             )
             .map_err(|e| AppError::Provider(format!("failed to save plan: {e}")))?;
 
-            tracing::info!(target: "agent", event = "task_planned", task_id = %id, agent = CODER_AGENT, file = %file_path, risk = %risk_summary);
+            tracing::info!(target: "agent", event = "task_planned", task_id = %id, requirement_id = %requirement_id, correlation_id = %correlation_id, agent = CODER_AGENT, file = %file_path, risk = %risk_summary);
 
             Ok(AgentTask {
                 id,
@@ -196,6 +243,8 @@ pub async fn create_and_plan_task(
                 proposed_content: Some(proposed_content),
                 risk_summary: Some(risk_summary),
                 error: None,
+                requirement_id: Some(requirement_id),
+                correlation_id: Some(correlation_id),
             })
         }
         Err(e) => {
@@ -219,7 +268,7 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
         let conn = guard
             .as_ref()
             .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-        insert_task(conn, &id, &objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "")?;
+        insert_task(conn, &id, &objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "", None, None)?;
     }
 
     let plan_result = planner::plan_code(&objective).await;
@@ -251,6 +300,8 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
                 proposed_content: Some(code),
                 risk_summary: Some(risk_summary),
                 error: None,
+                requirement_id: None,
+                correlation_id: None,
             })
         }
         Err(e) => {
@@ -375,7 +426,7 @@ mod tests {
     fn insert_get_update_roundtrip() {
         let (dir, conn) = temp_conn();
 
-        insert_task(&conn, "task-1", "add a comment", task_type::EDIT_FILE, "main.rs", status::AWAITING_APPROVAL, "old", "new", "1 line changed").unwrap();
+        insert_task(&conn, "task-1", "add a comment", task_type::EDIT_FILE, "main.rs", status::AWAITING_APPROVAL, "old", "new", "1 line changed", Some("req-1"), Some("corr-1")).unwrap();
 
         let task = get_task(&conn, "task-1").unwrap();
         assert_eq!(task.objective, "add a comment");
@@ -397,6 +448,83 @@ mod tests {
 
         assert!(get_task(&conn, "nonexistent").is_err());
 
+        assert_eq!(task.requirement_id.as_deref(), Some("req-1"));
+        assert_eq!(task.correlation_id.as_deref(), Some("corr-1"));
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The Sprint 1 gate at the level create_and_plan_task actually calls
+    /// it (the command itself needs a live tauri::State - see the
+    /// MockRuntime decision in decisions.md - so the gate function is
+    /// tested directly, same pattern as every other command-layer test).
+    #[test]
+    fn planning_gate_refuses_missing_or_retired_requirement() {
+        let (dir, conn) = temp_conn();
+
+        // Missing requirement: hard error, and no task row may exist.
+        assert!(crate::governance::requirements::get_active(&conn, "no-such-requirement").is_err());
+        assert!(list_tasks(&conn).unwrap().is_empty());
+
+        // Retired requirement: also refused.
+        let req = crate::governance::requirements::create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            vec!["the output contains the user's name".to_string()],
+            "test-user",
+        )
+        .unwrap();
+        crate::governance::requirements::set_status(&conn, &req.id, crate::governance::requirements::status::RETIRED).unwrap();
+        assert!(crate::governance::requirements::get_active(&conn, &req.id).is_err());
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End-to-end at the pure-core level: a valid requirement produces an
+    /// objective containing its intent and every acceptance criterion, and
+    /// the resulting task row carries the requirement's IDs - the exact
+    /// data flow create_and_plan_task performs before calling the planner.
+    #[test]
+    fn valid_requirement_flows_into_task_objective_and_links() {
+        let (dir, conn) = temp_conn();
+
+        let req = crate::governance::requirements::create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            vec!["the output contains the user's name".to_string(), "existing tests still pass".to_string()],
+            "test-user",
+        )
+        .unwrap();
+
+        let active = crate::governance::requirements::get_active(&conn, &req.id).unwrap();
+        let objective = objective_from_requirement(&active);
+        assert!(objective.contains("address the user by name"));
+        assert!(objective.contains("- the output contains the user's name"));
+        assert!(objective.contains("- existing tests still pass"));
+
+        insert_task(
+            &conn,
+            "gated-task",
+            &objective,
+            task_type::EDIT_FILE,
+            "main.rs",
+            status::PLANNING,
+            "old",
+            "",
+            "",
+            Some(&req.id),
+            Some(&req.correlation_id),
+        )
+        .unwrap();
+
+        let task = get_task(&conn, "gated-task").unwrap();
+        assert_eq!(task.requirement_id.as_deref(), Some(req.id.as_str()));
+        assert_eq!(task.correlation_id.as_deref(), Some(req.correlation_id.as_str()), "task must share the requirement's correlation ID");
+
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -405,7 +533,7 @@ mod tests {
     fn run_code_task_reports_no_files_since_it_never_touches_the_workspace() {
         let (dir, conn) = temp_conn();
 
-        insert_task(&conn, "code-task-1", "print 42", task_type::RUN_CODE, "", status::AWAITING_APPROVAL, "", "print(42)", "low risk").unwrap();
+        insert_task(&conn, "code-task-1", "print 42", task_type::RUN_CODE, "", status::AWAITING_APPROVAL, "", "print(42)", "low risk", None, None).unwrap();
 
         let task = get_task(&conn, "code-task-1").unwrap();
         assert_eq!(task.task_type, task_type::RUN_CODE);
@@ -459,7 +587,7 @@ mod tests {
         let id = "code-gate-task";
         let objective = "print the sum of 40 and 2";
         let code = "print(40 + 2)";
-        insert_task(&conn, id, objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "").unwrap();
+        insert_task(&conn, id, objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "", None, None).unwrap();
         conn.execute(
             "UPDATE agent_tasks SET status = ?1, proposed_content = ?2, risk_summary = ?3 WHERE id = ?4",
             rusqlite::params![status::AWAITING_APPROVAL, code, "low risk: 1 line", id],

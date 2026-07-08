@@ -78,8 +78,34 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     verification TEXT,
     rollback TEXT,
     error TEXT,
+    requirement_id TEXT,
+    correlation_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS requirements (
+    id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    acceptance_criteria TEXT NOT NULL,
+    status TEXT NOT NULL,
+    correlation_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    created_by TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS requirement_history (
+    id INTEGER PRIMARY KEY,
+    requirement_id TEXT NOT NULL REFERENCES requirements(id),
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    acceptance_criteria TEXT NOT NULL,
+    changed_at INTEGER NOT NULL
 );
 "#;
 
@@ -93,10 +119,15 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
 
-    // Additive column for DBs created before Phase 6 (run_code tasks). The
-    // CREATE TABLE above already includes it for brand-new DBs, so this
-    // errors with "duplicate column" there - that's expected, not a bug.
+    // Additive columns for DBs created before these features existed. The
+    // CREATE TABLE above already includes them for brand-new DBs, so these
+    // error with "duplicate column" there - that's expected, not a bug.
     let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'edit_file'", []);
+    // Sprint 1 (Requirement Intelligence): tasks link back to the
+    // requirement that gated them. Nullable because pre-Sprint-1 task rows
+    // (and run_code tasks, which stay ungated this sprint) have none.
+    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN requirement_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN correlation_id TEXT", []);
 
     Ok(conn)
 }

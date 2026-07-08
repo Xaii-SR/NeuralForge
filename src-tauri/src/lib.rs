@@ -2,6 +2,7 @@ mod agent;
 mod ai;
 mod bootstrap;
 mod core;
+mod governance;
 mod database;
 mod extensions;
 mod filesystem;
@@ -60,6 +61,12 @@ pub fn run() {
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,
+      governance::create_requirement,
+      governance::update_requirement,
+      governance::set_requirement_status,
+      governance::get_requirement,
+      governance::list_requirements,
+      governance::get_requirement_history,
       agent::create_and_plan_task,
       agent::create_and_plan_code_task,
       agent::approve_task,

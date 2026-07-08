@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import * as agent from "@/lib/agent";
+import * as governance from "@/lib/governance";
 import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
@@ -46,6 +47,11 @@ function StatusBadge({ status }: { status: string }) {
 export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   const [mode, setMode] = useState<"edit_file" | "run_code">("edit_file");
   const [objective, setObjective] = useState("");
+  // Sprint 1: edit_file tasks are gated behind a validated requirement -
+  // the form collects a contract (title/intent/criteria), not a raw prompt.
+  const [reqTitle, setReqTitle] = useState("");
+  const [reqIntent, setReqIntent] = useState("");
+  const [reqCriteria, setReqCriteria] = useState("");
   const [filePath, setFilePath] = useState("");
   const [tasks, setTasks] = useState<agent.AgentTask[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -77,9 +83,18 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
     setPlanning(true);
     setError(null);
     try {
-      const task = await agent.createAndPlanTask(objective, resolvedPath);
+      // Requirement first: a weak request is rejected by the validator
+      // here, before any task row exists or any LLM call happens.
+      const criteria = reqCriteria
+        .split("\n")
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0);
+      const requirement = await governance.createRequirement(reqTitle, reqIntent, criteria);
+      const task = await agent.createAndPlanTask(requirement.id, resolvedPath);
       setSelectedId(task.id);
-      setObjective("");
+      setReqTitle("");
+      setReqIntent("");
+      setReqCriteria("");
       setFilePath("");
       setCandidates(null);
       await refresh();
@@ -90,8 +105,12 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
     }
   }
 
+  const editFileReady = reqTitle.trim().length > 0 && reqIntent.trim().length > 0 && reqCriteria.trim().length > 0;
+
   async function handlePlan() {
-    if (!objective.trim() || planning || resolving) return;
+    if (planning || resolving) return;
+    if (mode === "edit_file" && !editFileReady) return;
+    if (mode === "run_code" && !objective.trim()) return;
 
     if (mode === "run_code") {
       setError(null);
@@ -186,20 +205,40 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
               Run Code
             </button>
           </div>
-          <AutoResizeTextarea
-            value={objective}
-            onChange={(e) => setObjective(e.target.value)}
-            onSubmit={handlePlan}
-            maxRows={5}
-            placeholder={
-              mode === "edit_file"
-                ? "Objective (e.g. add a doc comment) - Shift+Enter for a new line"
-                : "Objective (e.g. print the first 10 primes) - Shift+Enter for a new line"
-            }
-            className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-          />
+          {mode === "run_code" && (
+            <AutoResizeTextarea
+              value={objective}
+              onChange={(e) => setObjective(e.target.value)}
+              onSubmit={handlePlan}
+              maxRows={5}
+              placeholder="Objective (e.g. print the first 10 primes) - Shift+Enter for a new line"
+              className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            />
+          )}
           {mode === "edit_file" && (
             <>
+              <input
+                value={reqTitle}
+                onChange={(e) => setReqTitle(e.target.value)}
+                placeholder="Requirement title (e.g. Add doc comment to add())"
+                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
+              <AutoResizeTextarea
+                value={reqIntent}
+                onChange={(e) => setReqIntent(e.target.value)}
+                onSubmit={handlePlan}
+                maxRows={4}
+                placeholder="Intent - what should change and why"
+                className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
+              <AutoResizeTextarea
+                value={reqCriteria}
+                onChange={(e) => setReqCriteria(e.target.value)}
+                onSubmit={handlePlan}
+                maxRows={4}
+                placeholder="Acceptance criteria - one checkable outcome per line"
+                className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
               <input
                 value={filePath}
                 onChange={(e) => {
@@ -233,7 +272,12 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
           )}
           <button
             onClick={handlePlan}
-            disabled={planning || resolving || !objective.trim() || (mode === "edit_file" && !filePath.trim())}
+            disabled={
+              planning ||
+              resolving ||
+              (mode === "edit_file" && (!editFileReady || !filePath.trim())) ||
+              (mode === "run_code" && !objective.trim())
+            }
             className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
           >
             {(planning || resolving) && <Spinner size={10} />}
@@ -278,8 +322,17 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
           <div className="space-y-3">
             <div>
               <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Objective</div>
-              <div className="text-neutral-800 dark:text-neutral-200">{selected.objective}</div>
+              <div className="whitespace-pre-wrap text-neutral-800 dark:text-neutral-200">{selected.objective}</div>
             </div>
+            {selected.requirement_id && (
+              <div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Requirement</div>
+                <div className="font-mono text-[10px] text-neutral-500 dark:text-neutral-400">
+                  {selected.requirement_id}
+                  {selected.correlation_id && <span> · correlation {selected.correlation_id}</span>}
+                </div>
+              </div>
+            )}
             {selected.task_type === "run_code" ? (
               <div>
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Type</div>

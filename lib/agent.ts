@@ -12,10 +12,14 @@ export interface AgentTask {
   proposed_content: string | null;
   risk_summary: string | null;
   error: string | null;
+  requirement_id: string | null;
+  correlation_id: string | null;
 }
 
-export function createAndPlanTask(objective: string, filePath: string): Promise<AgentTask> {
-  return invoke("create_and_plan_task", { objective, filePath });
+/** Sprint 1: edit_file tasks are gated behind a validated requirement -
+ * pass a requirement ID from lib/governance.ts, not a raw prompt. */
+export function createAndPlanTask(requirementId: string, filePath: string): Promise<AgentTask> {
+  return invoke("create_and_plan_task", { requirementId, filePath });
 }
 
 export function createAndPlanCodeTask(objective: string): Promise<AgentTask> {
