@@ -6,6 +6,7 @@ import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
 
 export interface AgentPanelProps {
   workspaceOpen: boolean;
@@ -185,12 +186,17 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
               Run Code
             </button>
           </div>
-          <input
+          <AutoResizeTextarea
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handlePlan()}
-            placeholder={mode === "edit_file" ? "Objective (e.g. add a doc comment)" : "Objective (e.g. print the first 10 primes)"}
-            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            onSubmit={handlePlan}
+            maxRows={5}
+            placeholder={
+              mode === "edit_file"
+                ? "Objective (e.g. add a doc comment) - Shift+Enter for a new line"
+                : "Objective (e.g. print the first 10 primes) - Shift+Enter for a new line"
+            }
+            className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
           {mode === "edit_file" && (
             <>

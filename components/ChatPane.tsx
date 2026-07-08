@@ -6,6 +6,7 @@ import { useEvent } from "@/hooks/useEvent";
 import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
 
 interface DisplayMessage {
   role: "user" | "assistant";
@@ -249,23 +250,18 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
         })}
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       </div>
-      <div className="flex shrink-0 gap-2 border-t border-neutral-200 p-2 dark:border-neutral-800">
-        <input
+      <div className="flex shrink-0 items-end gap-2 border-t border-neutral-200 p-2 dark:border-neutral-800">
+        <AutoResizeTextarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Ask a question..."
-          className="min-w-0 flex-1 rounded border border-neutral-200 bg-white px-2.5 py-1.5 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+          onSubmit={handleSend}
+          placeholder="Ask a question... (Shift+Enter for a new line)"
+          className="min-w-0 flex-1 resize-none rounded border border-neutral-200 bg-white px-2.5 py-1.5 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
         />
         <button
           onClick={handleSend}
           disabled={sending || (!autoMode && !selectedModel)}
-          className="flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
+          className="flex shrink-0 items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
         >
           {sending && <Spinner size={10} />}
           {sending ? "Sending" : "Send"}
