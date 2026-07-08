@@ -59,6 +59,7 @@ pub fn run() {
       ai::auto_select_model,
       database::index_workspace,
       database::search_workspace,
+      database::resolve_file_reference,
       agent::create_and_plan_task,
       agent::create_and_plan_code_task,
       agent::approve_task,

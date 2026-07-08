@@ -116,6 +116,21 @@ export function getContextForQuery(query: string): Promise<string> {
   return invoke("get_context_for_query", { query });
 }
 
+export interface FileCandidate {
+  path: string;
+  score: number;
+  match_kind: string;
+}
+
+export interface ResolutionResult {
+  resolved: string | null;
+  candidates: FileCandidate[];
+}
+
+export function resolveFileReference(query: string): Promise<ResolutionResult> {
+  return invoke("resolve_file_reference", { query });
+}
+
 export interface Preferences {
   goal: "speed" | "quality";
   cost_preference: "free" | "cheap" | "quality_first";

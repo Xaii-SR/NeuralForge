@@ -1,4 +1,5 @@
 pub mod indexer;
+pub mod resolver;
 pub mod search;
 
 use crate::core::errors::{AppError, AppResult};
@@ -133,4 +134,12 @@ pub fn index_workspace(
 #[tauri::command]
 pub fn search_workspace(db: State<DbState>, query: String) -> AppResult<Vec<search::SearchResult>> {
     with_conn(&db, |conn| search::keyword_search(conn, &query, 20))
+}
+
+/// Cursor-style "find the file the user meant" without requiring an exact
+/// path. Used by both chat context-building and agent task creation - see
+/// resolver::resolve_file_reference for the ranking rules.
+#[tauri::command]
+pub fn resolve_file_reference(db: State<DbState>, query: String) -> AppResult<resolver::ResolutionResult> {
+    with_conn(&db, |conn| resolver::resolve_file_reference(conn, &query))
 }

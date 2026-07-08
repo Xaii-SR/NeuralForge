@@ -1,10 +1,12 @@
 use crate::core::config::{MEMORY_DIR_NAME, MEMORY_FILES, MEMORY_SUBDIR_NAME};
+use crate::database::resolver::resolve_file_reference;
 use crate::database::search::{keyword_search, SearchResult};
 use rusqlite::Connection;
 use std::path::Path;
 
 const MAX_SEARCH_RESULTS: usize = 5;
 const MAX_CHUNK_CHARS: usize = 800;
+const MAX_RESOLVED_FILE_CHARS: usize = 4000;
 
 /// Reads .neuralforge/memory/*.md and concatenates non-empty files into a
 /// single context block. Missing files (workspace never opened through
@@ -43,6 +45,24 @@ fn format_search_results(results: &[SearchResult]) -> String {
         .join("\n\n")
 }
 
+/// Cursor-style file resolution for chat: if the query confidently names a
+/// specific file ("clear the UI JSON for the carina"), read its real
+/// content and surface it explicitly rather than relying on whatever
+/// fragments FTS5's chunking happens to surface. Only fires on a *clear*
+/// winner (see resolver::CLEAR_WINNER_RATIO) - an ambiguous reference stays
+/// silent here and is left to the frontend's disambiguation prompt instead
+/// of guessing inside a context block the user never sees.
+fn resolved_file_block(workspace_root: &Path, conn: &Connection, query: &str) -> Option<String> {
+    let result = resolve_file_reference(conn, query).ok()?;
+    let path = result.resolved?;
+    let mut content = std::fs::read_to_string(workspace_root.join(&path)).ok()?;
+    if content.len() > MAX_RESOLVED_FILE_CHARS {
+        content.truncate(MAX_RESOLVED_FILE_CHARS);
+        content.push_str("\n...(truncated)");
+    }
+    Some(format!("Resolved \"{query}\" to `{path}`:\n```\n{content}\n```"))
+}
+
 /// Combines project memory (architecture/decisions/rules/etc.) with the top
 /// keyword-search matches for the user's query into a single context block
 /// intended to be sent as a system message ahead of the user's actual
@@ -52,6 +72,7 @@ pub fn build_context_prompt(workspace_root: &Path, conn: &Connection, query: &st
     let memory = read_memory_context(workspace_root);
     let search_results = keyword_search(conn, query, MAX_SEARCH_RESULTS).unwrap_or_default();
     let code_context = format_search_results(&search_results);
+    let resolved_file = resolved_file_block(workspace_root, conn, query);
 
     let mut parts = Vec::new();
     parts.push(
@@ -59,6 +80,9 @@ pub fn build_context_prompt(workspace_root: &Path, conn: &Connection, query: &st
     );
     if !memory.is_empty() {
         parts.push(format!("# Project Memory\n{memory}"));
+    }
+    if let Some(file_block) = resolved_file {
+        parts.push(format!("# Referenced File\n{file_block}"));
     }
     if !code_context.is_empty() {
         parts.push(format!("# Relevant Code\n{code_context}"));
@@ -119,6 +143,25 @@ mod tests {
             let prompt = build_context_prompt(&dir, &conn, "how does authentication work");
             assert!(prompt.contains("Rust/Tauri"));
             assert!(prompt.contains("authenticate_user"));
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn build_context_prompt_includes_full_content_of_a_confidently_resolved_file() {
+        let dir = temp_workspace();
+        std::fs::create_dir_all(dir.join("carina_egti")).unwrap();
+        std::fs::write(dir.join("carina_egti").join("ui_car.json"), "{\"screen\": \"dashboard\", \"widgets\": []}").unwrap();
+        std::fs::write(dir.join("carina_egti").join("ext_config.ini"), "[general]\nname=carina").unwrap();
+
+        {
+            let conn = crate::database::open_for_workspace(&dir).unwrap();
+            crate::database::indexer::index_workspace(&conn, &dir).unwrap();
+
+            let prompt = build_context_prompt(&dir, &conn, "clear the UI JSON for the carina");
+            assert!(prompt.contains("Referenced File"));
+            assert!(prompt.contains("dashboard"), "expected the resolved file's real content in the prompt, got: {prompt}");
         }
 
         std::fs::remove_dir_all(&dir).unwrap();

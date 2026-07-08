@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import * as agent from "@/lib/agent";
+import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
@@ -48,6 +49,8 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   const [tasks, setTasks] = useState<agent.AgentTask[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [candidates, setCandidates] = useState<ai.FileCandidate[] | null>(null);
   const [approving, setApproving] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,23 +72,70 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceOpen]);
 
-  async function handlePlan() {
-    if (!objective.trim() || planning) return;
-    if (mode === "edit_file" && !filePath.trim()) return;
-    setError(null);
+  async function planEditFile(resolvedPath: string) {
     setPlanning(true);
+    setError(null);
     try {
-      const task =
-        mode === "edit_file" ? await agent.createAndPlanTask(objective, filePath) : await agent.createAndPlanCodeTask(objective);
+      const task = await agent.createAndPlanTask(objective, resolvedPath);
       setSelectedId(task.id);
       setObjective("");
       setFilePath("");
+      setCandidates(null);
       await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setPlanning(false);
     }
+  }
+
+  async function handlePlan() {
+    if (!objective.trim() || planning || resolving) return;
+
+    if (mode === "run_code") {
+      setError(null);
+      setPlanning(true);
+      try {
+        const task = await agent.createAndPlanCodeTask(objective);
+        setSelectedId(task.id);
+        setObjective("");
+        await refresh();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setPlanning(false);
+      }
+      return;
+    }
+
+    if (!filePath.trim()) return;
+
+    // Cursor-style resolution: the file field accepts a description, not
+    // just an exact path. A clear winner proceeds automatically (with the
+    // resolved path shown, not silently substituted); multiple close
+    // candidates surface a disambiguation list instead of guessing.
+    setError(null);
+    setCandidates(null);
+    setResolving(true);
+    try {
+      const result = await ai.resolveFileReference(filePath);
+      if (result.resolved) {
+        await planEditFile(result.resolved);
+      } else if (result.candidates.length > 0) {
+        setCandidates(result.candidates);
+      } else {
+        setError(`No file found matching "${filePath}"`);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  function handlePickCandidate(path: string) {
+    setCandidates(null);
+    planEditFile(path);
   }
 
   async function handleApprove(taskId: string) {
@@ -143,13 +193,32 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
             className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
           {mode === "edit_file" && (
-            <input
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handlePlan()}
-              placeholder="File path (relative to workspace)"
-              className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-            />
+            <>
+              <input
+                value={filePath}
+                onChange={(e) => {
+                  setFilePath(e.target.value);
+                  setCandidates(null);
+                }}
+                onKeyDown={(e) => e.key === "Enter" && handlePlan()}
+                placeholder="Describe the file (e.g. 'the carina UI json') or give an exact path"
+                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              />
+              {candidates && candidates.length > 0 && (
+                <div className="space-y-1 rounded border border-yellow-200 bg-yellow-50 p-1.5 dark:border-yellow-900/50 dark:bg-yellow-950/30">
+                  <div className="px-0.5 text-[10px] font-medium text-yellow-700 dark:text-yellow-400">Did you mean:</div>
+                  {candidates.map((c) => (
+                    <button
+                      key={c.path}
+                      onClick={() => handlePickCandidate(c.path)}
+                      className="block w-full truncate rounded px-1.5 py-1 text-left font-mono text-[11px] text-neutral-700 transition-colors hover:bg-yellow-100 dark:text-neutral-300 dark:hover:bg-yellow-900/40"
+                    >
+                      {c.path}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
           {mode === "run_code" && (
             <div className="text-[10px] text-neutral-400 dark:text-neutral-500">
@@ -158,11 +227,11 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
           )}
           <button
             onClick={handlePlan}
-            disabled={planning || !objective.trim() || (mode === "edit_file" && !filePath.trim())}
+            disabled={planning || resolving || !objective.trim() || (mode === "edit_file" && !filePath.trim())}
             className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
           >
-            {planning && <Spinner size={10} />}
-            {planning ? "Planning..." : "Plan Task"}
+            {(planning || resolving) && <Spinner size={10} />}
+            {resolving ? "Finding file..." : planning ? "Planning..." : "Plan Task"}
           </button>
           {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         </div>
