@@ -148,3 +148,51 @@
   record at all - silently vanishing rather than showing up as a failed
   task. Caught while fixing an unrelated dead-code warning on the `FAILED`
   status constant, which turned out to be a real gap, not just unused code.
+- **Extensions get process isolation with a mediated API, not a claimed
+  security sandbox**: no WASM runtime or OS-level container technology is
+  in this build. A plugin is a genuinely separate OS process (can't touch
+  host memory), but it could still make its own network calls or spawn
+  its own subprocesses - there's no seccomp/AppContainer restricting the
+  child process itself. Documented as an explicit non-claim rather than
+  glossed over, because "isolated" and "sandboxed" mean different,
+  specific things and conflating them would be dishonest about the actual
+  security boundary.
+- **run_code agent tasks reuse agent_tasks (task_type column), not a
+  separate table**: a file-edit task and a code-execution task differ in
+  what "apply" means (write+verify+rollback vs. invoke an extension) but
+  are otherwise the same shape (objective, status, proposed content,
+  verification, human-approval gate) - a second table would have
+  duplicated the entire plan/approve/reject lifecycle for no benefit. An
+  additive `ALTER TABLE ... ADD COLUMN` (swallowing the expected
+  "duplicate column" error on already-migrated DBs) keeps existing
+  workspace databases working without a migration framework.
+- **bootstrap::suggest asks for three delimited lines (FILE/TITLE/WHY),
+  not JSON**: smaller local coding models are noticeably less reliable at
+  emitting valid JSON on the first try than at following a fixed
+  three-line template, and a strict-JSON approach would need a
+  retry/repair loop this phase doesn't otherwise need. The named file is
+  still validated against the real scanned file list afterward, so an
+  off-template or hallucinated response fails loudly instead of silently
+  operating on the wrong (or a nonexistent) file.
+- **bootstrap::diff hand-rolls an LCS differ instead of adding a diff
+  crate dependency**: the files self-bootstrap targets are ordinary
+  source files (hundreds of lines, not megabytes), so an O(n*m) DP table
+  is cheap enough, and a ~60-line pure function is easy to test in
+  isolation without pulling in and trusting a new third-party dependency
+  for something this small. Capped with a size fallback rather than
+  removing the cap entirely, since a hallucinated target file could in
+  principle be large.
+- **Self-bootstrap reuses agent::planner::plan_change directly for the
+  "propose a change" step**, rather than writing a second prompt/parsing
+  path: the contract is identical (objective + file path + current
+  content -> full replacement content + risk summary), and the Phase 5
+  Simulation Mode guarantee (no filesystem write capability in the
+  planning function itself) applies to Phase 7's proposals for free
+  instead of needing to be re-proven.
+- **apply_self_improvement never runs `git push` or calls any GitHub
+  API** - this is the same boundary Phase 5's agent draws around
+  filesystem writes, one level up: local git operations (branch, commit,
+  test) are safe to automate because they're fully reversible and
+  invisible outside the developer's own machine; pushing and opening a
+  PR are public and hard to reverse, so they stay a human action,
+  permanently, not just for this initial release.

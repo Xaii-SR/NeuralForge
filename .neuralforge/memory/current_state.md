@@ -156,8 +156,109 @@ not a rework.
 Phases 1-4) - the plan/approve/reject flow works per the command-layer
 tests, but no human has clicked through it in the actual window yet.
 
-**Next**: Phases 6 (Advanced Platform: extensions, marketplace, plugin
-sandbox) and 7 (Self Bootstrap) are explicitly later-stage per the
-blueprint's own phase ordering and weren't part of this build session's
-instructions - stopping here for a check-in rather than continuing
-unprompted, same reasoning as the Phase 2->3 checkpoint.
+**v1.0 Polish (UI refinement + documentation): complete.**
+
+8px-grid spacing pass, hover/loading states, dark/light theme (persisted
+`html.dark` class + localStorage, blocking init script in `layout.tsx` to
+avoid a flash of the wrong theme), elegant empty states, ChatPane message
+bubbles/timestamps, AgentPanel status/risk badges + rollback banner. Real
+bug caught and fixed during this pass: `hover:bg-neutral-850` in
+`TabBar.tsx` isn't a valid Tailwind class (no 850 step on the neutral
+scale) - the hover state was silently a no-op. Six root-level docs added:
+README, INSTALLATION, USAGE_GUIDE, ARCHITECTURE, TROUBLESHOOTING,
+ROADMAP.
+
+**Phase 6 (Advanced Platform - Extension System): complete.**
+
+Built: `extensions/manifest.rs` (extension.json schema: name/version/
+author/entry_point/runtime/permissions), `extensions/loader.rs` (scans
+`~/.neuralforge/extensions/`, bundles two example extensions
+non-destructively on first access), `extensions/api.rs` (spawns the
+extension as an isolated child process via `tokio::process::Command`,
+one line of JSON on stdin, parses the last stdout line as the result -
+no direct host access of any kind). Two real bundled extensions:
+python-repl (execs Python, captures stdout, reports real exceptions) and
+file-search (fuzzy filename ranking). `ExtensionsPanel.tsx` (new
+"Extensions" tab): list/enable/disable/uninstall, plus a direct
+test-invoke UI. Agent integration: `agent_tasks` gained a `task_type`
+column (`edit_file` default, `run_code` new), `planner::plan_code()`
+generates Python for an objective, `executor::run_code_via_extension()`
+invokes python-repl through the exact same process-isolation path
+`run_extension` uses, and `approve_task` branches on `task_type` - a
+`run_code` task goes through the identical plan -> awaiting_approval ->
+approve -> execute flow as a file edit, not a lesser safety bar.
+
+**Explicit non-claims** (see ROADMAP.md "Deliberately not built"): no
+security sandbox in the WASM/OS-container sense - a plugin process could
+still make its own network calls or spawn its own subprocesses outside
+the mediated API, since there's no seccomp/AppContainer-level restriction
+on the child process itself. No marketplace backend - "install" means
+dropping a folder into `~/.neuralforge/extensions/`, not browsing a
+registry.
+
+**Verification** (all real, not mocked): `cargo test` (src-tauri):
+57/57 passing (6 `#[ignore]`d live-Ollama tests), including 3 tests that
+spawn a real `python.exe` subprocess through the full mediated protocol
+and a full lifecycle gate test
+(`agent::tests::gate_test_run_python_code_via_agent_task_lifecycle`)
+that loads python-repl via the real loader, plans a fixed code task,
+approves it, and asserts the real subprocess computed the right answer.
+`cargo tauri dev` boots clean with the Extensions tab wired to live data.
+
+**Phase 7 (Self Bootstrap): complete.**
+
+Built: `bootstrap/selfanalyze.rs` (reads a workspace's own project memory
+via the existing `ai::context::read_memory_context`, scans source files
+skipping build/dependency noise dirs, read-only). `bootstrap/suggest.rs`
+(asks the model to name exactly one file - validated against the real
+scanned list, a hallucinated path is rejected outright - plus a title/
+rationale; `slugify()` turns the title into a branch-safe string).
+`bootstrap/diff.rs` (a small hand-rolled LCS line differ, no new
+dependency, with a size-capped fallback for pathologically large files).
+`bootstrap/git.rs` (real `git checkout -b neuralforge/suggest-<slug>`,
+write + commit locally, then `cargo test --lib` or `npm test` if a
+runner is actually detected for the changed file - an honest "not
+checked" note otherwise, same discipline as the agent's `executor::
+verify`). `bootstrap::propose_self_improvement` composes analyze ->
+choose_target -> `agent::planner::plan_change` (reused directly, not
+reimplemented) -> diff, entirely read-only. `bootstrap::
+apply_self_improvement` is the only function that touches git/disk, and
+is only reachable after a human approves the diff in `BootstrapPanel.tsx`
+(new "Bootstrap" tab) - the same approve-before-write discipline as
+Phase 5's agent, applied one level up.
+
+**Hard boundary, not a missing feature**: nothing in Phase 7 pushes to a
+remote, opens a pull request, or merges anything. `apply_self_improvement`
+stops at a local commit on a local branch and a formatted PR-summary
+string; pushing and opening a PR stay a human clicking their own git
+tooling. There is no `git push` call anywhere in `bootstrap/`.
+
+**Verification** (all real, not mocked): `cargo test` (src-tauri):
+71/71 passing (7 `#[ignore]`d live-Ollama tests), including
+`bootstrap::tests::gate_test_self_improvement_lifecycle_on_a_throwaway_repo`
+- builds a real throwaway git repo + Cargo project (never the live
+NeuralForge checkout), runs the real analyze/diff pipeline, creates a
+real `neuralforge/suggest-*` branch, commits for real, and asserts a
+real `cargo test` run passes - then asserts `git remote` is empty,
+proving nothing was pushed. `cargo tauri dev` boots clean with the
+Bootstrap tab and both `propose_self_improvement`/
+`apply_self_improvement` commands registered.
+
+**Not yet manually click-tested in the running GUI** (same caveat as
+Phases 1-5, for Phase 6/7's UI specifically) - every backend path is
+covered by real, non-mocked tests, and the app has been confirmed to
+boot cleanly with all of it wired in, but no human has clicked through
+Extensions/Bootstrap in the actual window yet.
+
+**v1.0 status**: Phases 1-7 all built, tested, and committed
+individually per the blueprint's own phase ordering. 71 backend tests
+passing (7 intentionally `#[ignore]`d - they require a live local Ollama
+instance and are run explicitly during development, not on every
+`cargo test`). Known, honestly-scoped gaps carried forward from every
+phase (see ROADMAP.md "Deliberately not built, and why"): no vector/
+semantic search, no cloud AI providers wired up (no credential storage
+exists), only one agent type (Coder), no true OS-level extension
+sandboxing, no extension marketplace backend, Windows-only verification,
+no automated frontend E2E suite. None of these are silently broken
+features - each is a documented, deliberate scope boundary with a
+concrete "next step" written down.

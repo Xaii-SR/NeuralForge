@@ -179,6 +179,94 @@ Frontend: `AgentPanel.tsx`, a new "Agent" tab in the bottom panel - objective
 + file path inputs, task list with live status, proposed-content preview,
 Approve/Reject (only shown in `awaiting_approval`).
 
+## Phase 6: Advanced Platform - Extension System (complete)
+
+```
+src-tauri/src/
+  extensions/
+    manifest.rs - extension.json schema (name/version/author/entry_point/
+                  runtime/permissions), interpreter_for() maps runtime -> interpreter binary
+    loader.rs   - home_dir()/extensions_dir() (~/.neuralforge/extensions),
+                  ensure_bundled_extensions() writes the two example
+                  extensions if missing (never overwrites), scan() reads
+                  every extension.json, enabled_state.json for on/off
+    api.rs      - invoke_extension(): spawns the interpreter as a child
+                  process, writes one line of JSON to stdin, closes it,
+                  parses the last stdout line as the result. No direct
+                  host access - a plugin can only get what the host put
+                  in the request.
+    mod.rs      - command layer: list_extensions, set_extension_enabled,
+                  uninstall_extension, run_extension
+```
+
+Two bundled example extensions (Python, written into `~/.neuralforge/
+extensions/` on first access): `python-repl` (execs code, captures
+stdout via `contextlib.redirect_stdout`, reports real exceptions as
+`{"success": false, "error": ...}`) and `file-search` (substring-based
+fuzzy filename ranking over a file list the host provides).
+
+Agent integration: `agent_tasks` gained a `task_type` column
+(`edit_file` | `run_code`, additive `ALTER TABLE` migration for
+pre-existing DBs). `agent::planner::plan_code()` generates Python for an
+objective; `agent::executor::run_code_via_extension()` calls
+`extensions::ensure_and_scan()` then `invoke_extension()` against
+python-repl - the exact same path `run_extension` uses, so a run_code
+task gets no more host access than a manually-invoked extension.
+`approve_task` branches on `task_type`: `run_code` skips the
+workspace-write/rollback path entirely (nothing on disk to roll back)
+and goes straight to the extension call, but is gated behind the same
+`awaiting_approval` -> explicit-approve transition as a file edit.
+
+Frontend: `ExtensionsPanel.tsx` (new "Extensions" tab) - list installed
+extensions, enable/disable, uninstall, and a direct test-invoke panel.
+`AgentPanel.tsx` gained an Edit File / Run Code mode toggle.
+
+## Phase 7: Self Bootstrap (complete)
+
+```
+src-tauri/src/
+  bootstrap/
+    selfanalyze.rs - analyze(): read_memory_context() (reused from
+                     ai::context, Phase 3) + a walkdir scan for .rs/.ts/
+                     .tsx files, skipping target/node_modules/.git/.next/
+                     dist/.neuralforge, capped at 150 files. Read-only.
+    suggest.rs     - choose_target(): one Ollama call asking for exactly
+                     three lines (FILE/TITLE/WHY). The named file is
+                     validated against the real scanned list - a
+                     hallucinated path is a hard error, not a best-effort
+                     guess. slugify() turns the title into a branch-safe
+                     string (used directly in a git branch name).
+    diff.rs        - unified_diff(): hand-rolled O(n*m) LCS line diff (no
+                     new crate dependency), falls back to a summary line
+                     above a size cap instead of a huge DP table.
+    git.rs         - create_branch() (real `git checkout -b
+                     neuralforge/suggest-<slug>`, errors if not a git
+                     repo), write_and_commit() (real local commit, no
+                     push anywhere in this file), run_tests() (`cargo
+                     test --lib` if the file is under a Cargo project,
+                     `npm test` if package.json declares a test script,
+                     an honest "not checked" note otherwise).
+    mod.rs         - propose_self_improvement (read-only: analyze ->
+                     choose_target -> agent::planner::plan_change reused
+                     directly -> diff::unified_diff) and
+                     apply_self_improvement (git::create_branch ->
+                     git::write_and_commit -> git::run_tests ->
+                     format_pr_summary). apply_self_improvement is only
+                     ever called after a human approves the diff
+                     propose_self_improvement returned.
+```
+
+Frontend: `BootstrapPanel.tsx` (new "Bootstrap" tab) - Analyze & Propose
+shows the diff for review; Approve calls apply_self_improvement and
+displays the branch name, real test output, and formatted PR summary;
+Reject discards the proposal with zero side effects (no git operation
+of any kind happens before approval).
+
+**Hard boundary**: no function anywhere in `bootstrap/` calls `git
+push`, opens a pull request, or merges a branch. `apply_self_improvement`
+stops at a local commit and a summary string - pushing and opening a PR
+are left to the human, on purpose.
+
 ## Key invariants
 - All filesystem commands validate the target path is canonicalized-within the
   open workspace root before touching disk (rejects traversal, symlink escape
