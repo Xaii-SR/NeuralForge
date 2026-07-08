@@ -68,6 +68,8 @@ pub fn run() {
       extensions::set_extension_enabled,
       extensions::uninstall_extension,
       extensions::run_extension,
+      bootstrap::propose_self_improvement,
+      bootstrap::apply_self_improvement,
     ])
     .setup(|app| {
       let log_dir = app.path().app_log_dir()?;
