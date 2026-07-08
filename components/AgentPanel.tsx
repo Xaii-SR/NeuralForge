@@ -2,20 +2,44 @@
 
 import { useEffect, useState } from "react";
 import * as agent from "@/lib/agent";
+import Spinner from "@/components/ui/Spinner";
+import EmptyState from "@/components/ui/EmptyState";
+import ErrorBanner from "@/components/ui/ErrorBanner";
 
 export interface AgentPanelProps {
   workspaceOpen: boolean;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  planning: "text-neutral-400",
-  awaiting_approval: "text-yellow-400",
-  applying: "text-blue-400",
-  completed: "text-green-400",
-  rolled_back: "text-red-400",
-  failed: "text-red-400",
-  rejected: "text-neutral-500",
+const STATUS_BADGE: Record<string, string> = {
+  planning: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
+  awaiting_approval: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400",
+  applying: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  completed: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
+  rolled_back: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+  failed: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+  rejected: "bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500",
 };
+
+function riskLevel(summary: string): "low" | "medium" | "high" | null {
+  if (summary.startsWith("low")) return "low";
+  if (summary.startsWith("medium")) return "medium";
+  if (summary.startsWith("high")) return "high";
+  return null;
+}
+
+const RISK_BADGE: Record<string, string> = {
+  low: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
+  medium: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400",
+  high: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_BADGE[status] ?? "bg-neutral-200 text-neutral-500"}`}>
+      {status.replace("_", " ")}
+    </span>
+  );
+}
 
 export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   const [objective, setObjective] = useState("");
@@ -24,6 +48,7 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [loadingTasks, setLoadingTasks] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
@@ -32,11 +57,15 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
       setTasks(list);
     } catch {
       setTasks([]);
+    } finally {
+      setLoadingTasks(false);
     }
   }
 
   useEffect(() => {
     if (workspaceOpen) refresh();
+    else setLoadingTasks(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceOpen]);
 
   async function handlePlan() {
@@ -75,107 +104,141 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   }
 
   if (!workspaceOpen) {
-    return <div className="flex h-full items-center justify-center text-xs text-neutral-500">Open a folder to use the agent</div>;
+    return <EmptyState icon="🤖" title="Open a folder to use the agent" hint="The Coder agent proposes file changes for your review before applying anything" />;
   }
 
   const selected = tasks.find((t) => t.id === selectedId) ?? tasks[0] ?? null;
+  const risk = selected?.risk_summary ? riskLevel(selected.risk_summary) : null;
 
   return (
     <div className="flex h-full">
-      <div className="flex w-64 shrink-0 flex-col border-r border-neutral-800">
-        <div className="space-y-1 border-b border-neutral-800 p-2">
+      <div className="flex w-64 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800">
+        <div className="space-y-1.5 border-b border-neutral-200 p-2 dark:border-neutral-800">
           <input
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handlePlan()}
             placeholder="Objective (e.g. add a doc comment)"
-            className="w-full rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-200 outline-none"
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
           <input
             value={filePath}
             onChange={(e) => setFilePath(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handlePlan()}
             placeholder="File path (relative to workspace)"
-            className="w-full rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-200 outline-none"
+            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
           <button
             onClick={handlePlan}
             disabled={planning || !objective.trim() || !filePath.trim()}
-            className="w-full rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
           >
+            {planning && <Spinner size={10} />}
             {planning ? "Planning..." : "Plan Task"}
           </button>
-          {error && <div className="text-[10px] text-red-400">{error}</div>}
+          {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {tasks.map((t) => (
-            <div
-              key={t.id}
-              onClick={() => setSelectedId(t.id)}
-              className={`cursor-pointer border-b border-neutral-800 px-2 py-1.5 text-xs hover:bg-neutral-800 ${
-                selected?.id === t.id ? "bg-neutral-800" : ""
-              }`}
-            >
-              <div className="truncate text-neutral-300">{t.objective}</div>
-              <div className="truncate text-[10px] text-neutral-500">{t.files[0]}</div>
-              <div className={`text-[10px] ${STATUS_COLOR[t.status] ?? "text-neutral-500"}`}>{t.status}</div>
+          {loadingTasks ? (
+            <div className="flex items-center justify-center py-8">
+              <Spinner />
             </div>
-          ))}
-          {tasks.length === 0 && <div className="p-2 text-xs text-neutral-500">No tasks yet</div>}
+          ) : (
+            <>
+              {tasks.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setSelectedId(t.id)}
+                  className={`cursor-pointer space-y-1 border-b border-neutral-200 px-2 py-2 text-xs transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:hover:bg-neutral-800 ${
+                    selected?.id === t.id ? "bg-neutral-100 dark:bg-neutral-800" : ""
+                  }`}
+                >
+                  <div className="truncate font-medium text-neutral-700 dark:text-neutral-300">{t.objective}</div>
+                  <div className="truncate text-[10px] text-neutral-400 dark:text-neutral-500">{t.files[0]}</div>
+                  <StatusBadge status={t.status} />
+                </div>
+              ))}
+              {tasks.length === 0 && (
+                <div className="p-4 text-center text-xs text-neutral-400 dark:text-neutral-600">No tasks yet</div>
+              )}
+            </>
+          )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3 text-xs">
-        {!selected && <div className="text-neutral-500">Select or create a task</div>}
+        {!selected && !loadingTasks && (
+          <EmptyState icon="📋" title="Select or create a task" hint="Describe an objective and a file to have the agent propose a change" />
+        )}
         {selected && (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <div>
-              <div className="text-[10px] uppercase text-neutral-500">Objective</div>
-              <div className="text-neutral-200">{selected.objective}</div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Objective</div>
+              <div className="text-neutral-800 dark:text-neutral-200">{selected.objective}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase text-neutral-500">File</div>
-              <div className="text-neutral-200">{selected.files[0]}</div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">File</div>
+              <div className="font-mono text-neutral-800 dark:text-neutral-200">{selected.files[0]}</div>
             </div>
-            <div>
-              <div className="text-[10px] uppercase text-neutral-500">Status</div>
-              <div className={STATUS_COLOR[selected.status] ?? "text-neutral-200"}>{selected.status}</div>
+            <div className="flex items-center gap-2">
+              <div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Status</div>
+                <StatusBadge status={selected.status} />
+              </div>
+              {risk && (
+                <div>
+                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Risk</div>
+                  <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${RISK_BADGE[risk]}`}>{risk}</span>
+                </div>
+              )}
             </div>
             {selected.risk_summary && (
               <div>
-                <div className="text-[10px] uppercase text-neutral-500">Risk (Simulation Mode)</div>
-                <div className="text-neutral-300">{selected.risk_summary}</div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                  Simulation Mode analysis
+                </div>
+                <div className="text-neutral-600 dark:text-neutral-300">{selected.risk_summary}</div>
               </div>
             )}
             {selected.verification && (
               <div>
-                <div className="text-[10px] uppercase text-neutral-500">Verification</div>
-                <div className="whitespace-pre-wrap text-neutral-300">{selected.verification}</div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Verification</div>
+                <div className="whitespace-pre-wrap rounded bg-neutral-50 p-2 font-mono text-[11px] text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
+                  {selected.verification}
+                </div>
               </div>
             )}
             {selected.rollback && (
-              <div>
-                <div className="text-[10px] uppercase text-neutral-500">Rollback</div>
-                <div className="text-red-400">{selected.rollback}</div>
+              <div className="flex items-start gap-2 rounded border border-red-200 bg-red-50 px-2.5 py-2 dark:border-red-900/50 dark:bg-red-950/40">
+                <span aria-hidden>↩</span>
+                <div>
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-red-500 dark:text-red-400">Rolled back</div>
+                  <div className="text-red-600 dark:text-red-300">{selected.rollback}</div>
+                </div>
               </div>
             )}
             {selected.proposed_content && (
               <div>
-                <div className="text-[10px] uppercase text-neutral-500">Proposed content</div>
-                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-neutral-800 p-2 text-[11px] text-neutral-300">
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+                  Proposed content
+                </div>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
                   {selected.proposed_content}
                 </pre>
               </div>
             )}
             {selected.status === "awaiting_approval" && (
-              <div className="flex gap-2 pt-2">
+              <div className="flex gap-2 pt-1">
                 <button
                   onClick={() => handleApprove(selected.id)}
                   disabled={approving}
-                  className="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-500 disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50"
                 >
+                  {approving && <Spinner size={10} />}
                   {approving ? "Applying..." : "Approve"}
                 </button>
                 <button
                   onClick={() => handleReject(selected.id)}
-                  className="rounded bg-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
                 >
                   Reject
                 </button>

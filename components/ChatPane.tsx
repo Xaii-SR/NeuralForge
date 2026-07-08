@@ -3,11 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import * as ai from "@/lib/ai";
 import { useEvent } from "@/hooks/useEvent";
+import Spinner from "@/components/ui/Spinner";
+import EmptyState from "@/components/ui/EmptyState";
+import ErrorBanner from "@/components/ui/ErrorBanner";
 
 interface DisplayMessage {
   role: "user" | "assistant";
   content: string;
   fromCache?: boolean;
+  timestamp: number;
 }
 
 interface TokenPayload {
@@ -19,6 +23,10 @@ interface TokenPayload {
 
 export interface ChatPaneProps {
   workspaceOpen: boolean;
+}
+
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
@@ -68,7 +76,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
       if (last && last.role === "assistant") {
         next[next.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache };
       } else {
-        next.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache });
+        next.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() });
       }
       return next;
     });
@@ -79,7 +87,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   });
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   async function handleSend() {
@@ -87,7 +95,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
     setError(null);
     const requestId = crypto.randomUUID();
     activeRequestId.current = requestId;
-    const userMessage: DisplayMessage = { role: "user", content: input };
+    const userMessage: DisplayMessage = { role: "user", content: input, timestamp: Date.now() };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
     setInput("");
@@ -142,24 +150,34 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   }
 
   if (ollamaAvailable === null) {
-    return <div className="flex h-full items-center justify-center text-xs text-neutral-500">Checking Ollama...</div>;
-  }
-
-  if (!ollamaAvailable) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-xs text-neutral-500">
-        <div>Ollama not detected at localhost:11434</div>
-        <div>Install and start Ollama to use local AI chat.</div>
+      <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500">
+        <Spinner size={12} />
+        Checking Ollama...
       </div>
     );
   }
 
+  if (!ollamaAvailable) {
+    return (
+      <EmptyState
+        icon="🔌"
+        title="Ollama not detected"
+        hint="Install Ollama and make sure it's running at localhost:11434, then reopen NeuralForge."
+      />
+    );
+  }
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-neutral-800 px-2">
+    <div className="flex h-full flex-col bg-white dark:bg-neutral-900">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-neutral-200 px-2 dark:border-neutral-800">
         <button
           onClick={() => setAutoMode((v) => !v)}
-          className={`rounded px-2 py-0.5 text-xs ${autoMode ? "bg-blue-600 text-white" : "bg-neutral-800 text-neutral-300"}`}
+          className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
+            autoMode
+              ? "bg-blue-600 text-white hover:bg-blue-500"
+              : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+          }`}
         >
           Auto
         </button>
@@ -167,7 +185,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200"
+            className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           >
             {models.map((m) => (
               <option key={m.name} value={m.name}>
@@ -180,39 +198,58 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
           <button
             onClick={handleIndex}
             disabled={indexing}
-            className="ml-auto rounded bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300 hover:bg-neutral-700 disabled:opacity-50"
+            className="ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-300 dark:hover:bg-neutral-800"
           >
+            {indexing && <Spinner size={10} />}
             {indexing ? "Indexing..." : "Index Workspace"}
           </button>
         )}
       </div>
       {indexStatus && (
-        <div className="border-b border-neutral-800 px-2 py-1 text-[10px] text-neutral-500">{indexStatus}</div>
+        <div className="border-b border-neutral-200 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">
+          {indexStatus}
+        </div>
       )}
       {autoMode && autoSelection && (
-        <div className="border-b border-neutral-800 bg-neutral-900 px-2 py-1 text-[10px] text-neutral-400">
-          Selected <span className="text-neutral-200">{autoSelection.model}</span> from {autoSelection.provider}{" "}
-          because {autoSelection.reason}.{" "}
+        <div className="border-b border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[10px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+          Selected <span className="font-medium text-neutral-800 dark:text-neutral-200">{autoSelection.model}</span> from{" "}
+          {autoSelection.provider} because {autoSelection.reason}.{" "}
           {autoSelection.is_free ? (
-            <span className="text-green-400">Free</span>
+            <span className="font-medium text-green-600 dark:text-green-400">Free</span>
           ) : (
-            <span className="text-yellow-400">~${autoSelection.estimated_cost_usd.toFixed(4)}</span>
+            <span className="font-medium text-yellow-600 dark:text-yellow-400">~${autoSelection.estimated_cost_usd.toFixed(4)}</span>
           )}
         </div>
       )}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-        {messages.map((m, i) => (
-          <div key={i} className="mb-3">
-            <div className="mb-1 text-[10px] uppercase text-neutral-500">
-              {m.role}
-              {m.fromCache && <span className="ml-2 normal-case text-yellow-400">from cache</span>}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {messages.length === 0 && (
+          <EmptyState icon="💬" title="Ask NeuralForge anything" hint="Questions about your code get workspace context automatically" />
+        )}
+        {messages.map((m, i) => {
+          const isUser = m.role === "user";
+          return (
+            <div key={i} className={`mb-3 flex ${isUser ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[85%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
+                <div
+                  className={`rounded-lg px-3 py-2 text-sm leading-relaxed shadow-sm ${
+                    isUser
+                      ? "bg-blue-600 text-white"
+                      : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100"
+                  }`}
+                >
+                  <div className="whitespace-pre-wrap">{m.content || (sending && i === messages.length - 1 ? "…" : "")}</div>
+                </div>
+                <div className="flex items-center gap-1.5 px-1 text-[10px] text-neutral-400 dark:text-neutral-600">
+                  <span>{formatTime(m.timestamp)}</span>
+                  {m.fromCache && <span className="font-medium text-yellow-600 dark:text-yellow-500">from cache</span>}
+                </div>
+              </div>
             </div>
-            <div className="whitespace-pre-wrap text-sm text-neutral-200">{m.content}</div>
-          </div>
-        ))}
-        {error && <div className="text-sm text-red-400">{error}</div>}
+          );
+        })}
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       </div>
-      <div className="flex shrink-0 gap-2 border-t border-neutral-800 p-2">
+      <div className="flex shrink-0 gap-2 border-t border-neutral-200 p-2 dark:border-neutral-800">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -223,14 +260,15 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
             }
           }}
           placeholder="Ask a question..."
-          className="min-w-0 flex-1 rounded bg-neutral-800 px-2 py-1 text-sm text-neutral-200 outline-none"
+          className="min-w-0 flex-1 rounded border border-neutral-200 bg-white px-2.5 py-1.5 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
         />
         <button
           onClick={handleSend}
           disabled={sending || (!autoMode && !selectedModel)}
-          className="rounded bg-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-600 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
         >
-          {sending ? "..." : "Send"}
+          {sending && <Spinner size={10} />}
+          {sending ? "Sending" : "Send"}
         </button>
       </div>
     </div>

@@ -14,7 +14,7 @@ export interface TabBarProps {
 
 export default function TabBar({ tabs, activePath, onSelect, onClose }: TabBarProps) {
   return (
-    <div className="flex h-9 shrink-0 overflow-x-auto border-b border-neutral-800 bg-neutral-900">
+    <div className="flex h-9 shrink-0 overflow-x-auto border-b border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-900">
       {tabs.map((tab) => {
         const name = tab.path.split(/[/\\]/).pop() ?? tab.path;
         const isActive = tab.path === activePath;
@@ -22,15 +22,15 @@ export default function TabBar({ tabs, activePath, onSelect, onClose }: TabBarPr
           <div
             key={tab.path}
             onClick={() => onSelect(tab.path)}
-            className={`flex cursor-pointer items-center gap-2 border-r border-neutral-800 px-3 text-xs ${
+            className={`group flex cursor-pointer items-center gap-2 border-r border-neutral-200 px-3 text-xs transition-colors dark:border-neutral-800 ${
               isActive
-                ? "bg-neutral-800 text-neutral-100"
-                : "text-neutral-400 hover:bg-neutral-850 hover:text-neutral-200"
+                ? "bg-white text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
+                : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800/60 dark:hover:text-neutral-200"
             }`}
           >
-            <span>
+            <span className="flex items-center gap-1">
               {name}
-              {tab.isDirty ? " ●" : ""}
+              {tab.isDirty && <span className="text-blue-500 dark:text-blue-400">●</span>}
             </span>
             <button
               aria-label={`Close ${name}`}
@@ -38,7 +38,7 @@ export default function TabBar({ tabs, activePath, onSelect, onClose }: TabBarPr
                 e.stopPropagation();
                 onClose(tab.path);
               }}
-              className="rounded px-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-200"
+              className="rounded px-1 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-neutral-700 group-hover:opacity-100 dark:text-neutral-500 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
             >
               ×
             </button>

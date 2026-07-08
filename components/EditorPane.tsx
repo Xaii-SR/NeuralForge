@@ -2,6 +2,7 @@
 
 import Editor from "./Editor";
 import TabBar from "./TabBar";
+import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
 import type { OpenFile } from "@/hooks/useWorkspace";
 
@@ -26,9 +27,11 @@ export default function EditorPane({
 
   if (!activeFile) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-sm text-neutral-500">
-        No file open
-      </div>
+      <EmptyState
+        icon="📝"
+        title="No file open"
+        hint="Select a file from the explorer, or open a folder to get started"
+      />
     );
   }
 

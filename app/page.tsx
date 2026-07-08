@@ -8,18 +8,26 @@ import LogViewer from "@/components/LogViewer";
 import ChatPane from "@/components/ChatPane";
 import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
+import ExtensionsPanel from "@/components/ExtensionsPanel";
+import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
+import { useTheme } from "@/hooks/useTheme";
 
 interface FileChangedPayload {
   path: string;
   kind: string;
 }
 
+const TAB_BUTTON = "px-3 py-1.5 text-xs font-medium transition-colors border-b-2";
+const TAB_ACTIVE = "border-blue-500 text-neutral-900 dark:text-neutral-100";
+const TAB_INACTIVE = "border-transparent text-neutral-500 hover:text-neutral-700 dark:text-neutral-500 dark:hover:text-neutral-300";
+
 export default function Home() {
   const workspace = useWorkspace();
+  const { theme, toggleTheme } = useTheme();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent">("terminal");
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
@@ -27,31 +35,41 @@ export default function Home() {
   });
 
   return (
-    <main className="flex h-screen w-screen flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-3">
+    <main className="flex h-screen w-screen flex-col bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-200 bg-neutral-50 px-3 dark:border-neutral-800 dark:bg-neutral-900">
         <button
           onClick={workspace.openFolder}
-          className="rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
+          className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800"
         >
           Open Folder
         </button>
         {workspace.workspaceRoot && (
-          <span className="truncate text-xs text-neutral-500">{workspace.workspaceRoot}</span>
+          <span className="truncate text-xs text-neutral-500 dark:text-neutral-500">{workspace.workspaceRoot}</span>
         )}
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="ml-auto rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
-        >
-          Settings
-        </button>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            className="rounded px-2 py-1 text-xs text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            {theme === "dark" ? "☀" : "🌙"}
+          </button>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            Settings
+          </button>
+        </div>
       </div>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <div className="flex min-h-0 flex-1">
-        <div className="w-64 shrink-0 border-r border-neutral-800">
+        <div className="w-64 shrink-0 border-r border-neutral-200 dark:border-neutral-800">
           {workspace.workspaceRoot ? (
             <FileExplorer workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} />
           ) : (
-            <div className="p-3 text-xs text-neutral-500">No folder open</div>
+            <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />
           )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
@@ -65,31 +83,31 @@ export default function Home() {
               onSave={workspace.saveFile}
             />
           </div>
-          <div className="flex h-72 shrink-0 flex-col border-t border-neutral-800">
-            <div className="flex h-7 shrink-0 gap-1 border-b border-neutral-800 bg-neutral-900 px-2">
+          <div className="flex h-72 shrink-0 flex-col border-t border-neutral-200 dark:border-neutral-800">
+            <div className="flex h-9 shrink-0 gap-1 border-b border-neutral-200 bg-neutral-50 px-2 dark:border-neutral-800 dark:bg-neutral-900">
               <button
                 onClick={() => setBottomTab("terminal")}
-                className={`px-2 text-xs ${
-                  bottomTab === "terminal" ? "text-neutral-100" : "text-neutral-500"
-                }`}
+                className={`${TAB_BUTTON} ${bottomTab === "terminal" ? TAB_ACTIVE : TAB_INACTIVE}`}
               >
                 Terminal
               </button>
               <button
                 onClick={() => setBottomTab("logs")}
-                className={`px-2 text-xs ${
-                  bottomTab === "logs" ? "text-neutral-100" : "text-neutral-500"
-                }`}
+                className={`${TAB_BUTTON} ${bottomTab === "logs" ? TAB_ACTIVE : TAB_INACTIVE}`}
               >
                 Logs
               </button>
               <button
                 onClick={() => setBottomTab("agent")}
-                className={`px-2 text-xs ${
-                  bottomTab === "agent" ? "text-neutral-100" : "text-neutral-500"
-                }`}
+                className={`${TAB_BUTTON} ${bottomTab === "agent" ? TAB_ACTIVE : TAB_INACTIVE}`}
               >
                 Agent
+              </button>
+              <button
+                onClick={() => setBottomTab("extensions")}
+                className={`${TAB_BUTTON} ${bottomTab === "extensions" ? TAB_ACTIVE : TAB_INACTIVE}`}
+              >
+                Extensions
               </button>
             </div>
             <div className="min-h-0 flex-1">
@@ -102,14 +120,17 @@ export default function Home() {
               <div className={bottomTab === "agent" ? "h-full" : "hidden"}>
                 <AgentPanel workspaceOpen={!!workspace.workspaceRoot} />
               </div>
+              <div className={bottomTab === "extensions" ? "h-full" : "hidden"}>
+                <ExtensionsPanel />
+              </div>
             </div>
           </div>
         </div>
-        <div className="w-80 shrink-0 border-l border-neutral-800">
+        <div className="w-80 shrink-0 border-l border-neutral-200 dark:border-neutral-800">
           <ChatPane workspaceOpen={!!workspace.workspaceRoot} />
         </div>
       </div>
-      <div className="flex h-6 shrink-0 items-center border-t border-neutral-800 bg-neutral-900 px-3 text-xs text-neutral-500">
+      <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">
         {lastEvent ?? "Ready"}
       </div>
     </main>
