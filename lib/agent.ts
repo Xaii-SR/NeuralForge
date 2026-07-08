@@ -4,6 +4,7 @@ export interface AgentTask {
   id: string;
   objective: string;
   agent: string;
+  task_type: string;
   files: string[];
   status: string;
   verification: string | null;
@@ -15,6 +16,10 @@ export interface AgentTask {
 
 export function createAndPlanTask(objective: string, filePath: string): Promise<AgentTask> {
   return invoke("create_and_plan_task", { objective, filePath });
+}
+
+export function createAndPlanCodeTask(objective: string): Promise<AgentTask> {
+  return invoke("create_and_plan_code_task", { objective });
 }
 
 export function approveTask(taskId: string): Promise<AgentTask> {

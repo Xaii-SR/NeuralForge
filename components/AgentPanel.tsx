@@ -42,6 +42,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
+  const [mode, setMode] = useState<"edit_file" | "run_code">("edit_file");
   const [objective, setObjective] = useState("");
   const [filePath, setFilePath] = useState("");
   const [tasks, setTasks] = useState<agent.AgentTask[]>([]);
@@ -69,11 +70,13 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   }, [workspaceOpen]);
 
   async function handlePlan() {
-    if (!objective.trim() || !filePath.trim() || planning) return;
+    if (!objective.trim() || planning) return;
+    if (mode === "edit_file" && !filePath.trim()) return;
     setError(null);
     setPlanning(true);
     try {
-      const task = await agent.createAndPlanTask(objective, filePath);
+      const task =
+        mode === "edit_file" ? await agent.createAndPlanTask(objective, filePath) : await agent.createAndPlanCodeTask(objective);
       setSelectedId(task.id);
       setObjective("");
       setFilePath("");
@@ -114,23 +117,48 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
     <div className="flex h-full">
       <div className="flex w-64 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-800">
         <div className="space-y-1.5 border-b border-neutral-200 p-2 dark:border-neutral-800">
+          <div className="flex rounded border border-neutral-200 p-0.5 text-[10px] font-medium dark:border-neutral-700">
+            <button
+              onClick={() => setMode("edit_file")}
+              className={`flex-1 rounded px-2 py-1 transition-colors ${
+                mode === "edit_file" ? "bg-blue-600 text-white" : "text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+              }`}
+            >
+              Edit File
+            </button>
+            <button
+              onClick={() => setMode("run_code")}
+              className={`flex-1 rounded px-2 py-1 transition-colors ${
+                mode === "run_code" ? "bg-blue-600 text-white" : "text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+              }`}
+            >
+              Run Code
+            </button>
+          </div>
           <input
             value={objective}
             onChange={(e) => setObjective(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handlePlan()}
-            placeholder="Objective (e.g. add a doc comment)"
+            placeholder={mode === "edit_file" ? "Objective (e.g. add a doc comment)" : "Objective (e.g. print the first 10 primes)"}
             className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
           />
-          <input
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handlePlan()}
-            placeholder="File path (relative to workspace)"
-            className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-          />
+          {mode === "edit_file" && (
+            <input
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handlePlan()}
+              placeholder="File path (relative to workspace)"
+              className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            />
+          )}
+          {mode === "run_code" && (
+            <div className="text-[10px] text-neutral-400 dark:text-neutral-500">
+              Generates Python and runs it via the python-repl extension in an isolated process, after your approval.
+            </div>
+          )}
           <button
             onClick={handlePlan}
-            disabled={planning || !objective.trim() || !filePath.trim()}
+            disabled={planning || !objective.trim() || (mode === "edit_file" && !filePath.trim())}
             className="flex w-full items-center justify-center gap-1.5 rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
           >
             {planning && <Spinner size={10} />}
@@ -154,7 +182,9 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
                   }`}
                 >
                   <div className="truncate font-medium text-neutral-700 dark:text-neutral-300">{t.objective}</div>
-                  <div className="truncate text-[10px] text-neutral-400 dark:text-neutral-500">{t.files[0]}</div>
+                  <div className="truncate text-[10px] text-neutral-400 dark:text-neutral-500">
+                    {t.task_type === "run_code" ? "🐍 Python code" : t.files[0]}
+                  </div>
                   <StatusBadge status={t.status} />
                 </div>
               ))}
@@ -175,10 +205,17 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
               <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Objective</div>
               <div className="text-neutral-800 dark:text-neutral-200">{selected.objective}</div>
             </div>
-            <div>
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">File</div>
-              <div className="font-mono text-neutral-800 dark:text-neutral-200">{selected.files[0]}</div>
-            </div>
+            {selected.task_type === "run_code" ? (
+              <div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Type</div>
+                <div className="text-neutral-800 dark:text-neutral-200">🐍 Run Python via python-repl extension</div>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">File</div>
+                <div className="font-mono text-neutral-800 dark:text-neutral-200">{selected.files[0]}</div>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <div>
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Status</div>

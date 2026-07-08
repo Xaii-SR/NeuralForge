@@ -39,6 +39,25 @@ pub async fn apply_and_verify(
     }
 }
 
+/// Runs approved code through the same process-isolated extension path that
+/// `extensions::run_extension` uses - a run_code task gets no more host
+/// access than a manually-invoked extension would. Requires the bundled
+/// python-repl extension to be present and enabled; it is not this
+/// function's job to install or enable it.
+pub async fn run_code_via_extension(code: &str) -> AppResult<crate::extensions::api::ExtensionResult> {
+    let extensions = crate::extensions::ensure_and_scan()?;
+    let ext = extensions
+        .into_iter()
+        .find(|e| e.manifest.name == "python-repl")
+        .ok_or_else(|| AppError::Provider("python-repl extension is not installed".to_string()))?;
+
+    if !ext.enabled {
+        return Err(AppError::Provider("python-repl extension is disabled".to_string()));
+    }
+
+    crate::extensions::api::invoke_extension(&ext, serde_json::json!({ "code": code })).await
+}
+
 fn find_cargo_dir(file: &Path, workspace_root: &Path) -> Option<PathBuf> {
     let mut dir = file.parent()?;
     loop {
@@ -178,5 +197,44 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&lib_path).unwrap(), valid_change);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Points HOME/USERPROFILE at a fresh temp dir so this test never
+    /// touches the developer's real ~/.neuralforge/extensions, then proves
+    /// run_code_via_extension genuinely round-trips through a spawned
+    /// python-repl child process rather than mocking the extension layer.
+    #[tokio::test]
+    async fn run_code_via_extension_executes_real_python() {
+        if std::process::Command::new("python").arg("--version").output().is_err() {
+            eprintln!("skipping: python not on PATH");
+            return;
+        }
+
+        let mut home = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        home.push(format!("neuralforge_executor_home_test_{nanos}"));
+        std::fs::create_dir_all(&home).unwrap();
+
+        #[cfg(windows)]
+        let var = "USERPROFILE";
+        #[cfg(not(windows))]
+        let var = "HOME";
+        let previous = std::env::var(var).ok();
+        unsafe { std::env::set_var(var, &home) };
+
+        let result = run_code_via_extension("print(6 * 7)").await;
+
+        unsafe {
+            if let Some(prev) = previous {
+                std::env::set_var(var, prev);
+            } else {
+                std::env::remove_var(var);
+            }
+        }
+        std::fs::remove_dir_all(&home).ok();
+
+        let result = result.unwrap();
+        assert!(result.success, "expected success, got error: {:?}", result.error);
+        assert_eq!(result.output.as_str().unwrap().trim(), "42");
     }
 }

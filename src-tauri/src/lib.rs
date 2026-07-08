@@ -2,6 +2,7 @@ mod agent;
 mod ai;
 mod core;
 mod database;
+mod extensions;
 mod filesystem;
 mod hardware;
 mod terminal;
@@ -58,9 +59,14 @@ pub fn run() {
       database::index_workspace,
       database::search_workspace,
       agent::create_and_plan_task,
+      agent::create_and_plan_code_task,
       agent::approve_task,
       agent::reject_task,
       agent::list_agent_tasks,
+      extensions::list_extensions,
+      extensions::set_extension_enabled,
+      extensions::uninstall_extension,
+      extensions::run_extension,
     ])
     .setup(|app| {
       let log_dir = app.path().app_log_dir()?;

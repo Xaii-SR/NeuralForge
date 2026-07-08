@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     id TEXT PRIMARY KEY,
     objective TEXT NOT NULL,
     agent TEXT NOT NULL,
+    task_type TEXT NOT NULL DEFAULT 'edit_file',
     file_path TEXT NOT NULL,
     status TEXT NOT NULL,
     original_content TEXT,
@@ -90,6 +91,11 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
         .map_err(|e| AppError::Provider(format!("failed to open index.db: {e}")))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
+
+    // Additive column for DBs created before Phase 6 (run_code tasks). The
+    // CREATE TABLE above already includes it for brand-new DBs, so this
+    // errors with "duplicate column" there - that's expected, not a bug.
+    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'edit_file'", []);
 
     Ok(conn)
 }
