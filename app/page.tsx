@@ -9,6 +9,7 @@ import ChatPane from "@/components/ChatPane";
 import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
 import ExtensionsPanel from "@/components/ExtensionsPanel";
+import BootstrapPanel from "@/components/BootstrapPanel";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
@@ -27,7 +28,7 @@ export default function Home() {
   const workspace = useWorkspace();
   const { theme, toggleTheme } = useTheme();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions">("terminal");
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions" | "bootstrap">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
@@ -109,6 +110,12 @@ export default function Home() {
               >
                 Extensions
               </button>
+              <button
+                onClick={() => setBottomTab("bootstrap")}
+                className={`${TAB_BUTTON} ${bottomTab === "bootstrap" ? TAB_ACTIVE : TAB_INACTIVE}`}
+              >
+                Bootstrap
+              </button>
             </div>
             <div className="min-h-0 flex-1">
               <div className={bottomTab === "terminal" ? "h-full" : "hidden"}>
@@ -122,6 +129,9 @@ export default function Home() {
               </div>
               <div className={bottomTab === "extensions" ? "h-full" : "hidden"}>
                 <ExtensionsPanel />
+              </div>
+              <div className={bottomTab === "bootstrap" ? "h-full" : "hidden"}>
+                <BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} />
               </div>
             </div>
           </div>

@@ -41,9 +41,11 @@ src-tauri/src/
     loader.rs    - scans ~/.neuralforge/extensions/, spawns process-isolated plugins
     api.rs       - the mediated JSON-RPC API plugins can call (chat, file ops, search)
   bootstrap/
-    selfanalyze.rs - Phase 7: indexes and reads NeuralForge's own memory docs
-    suggest.rs      - generates improvement suggestions via the LLM
-    git.rs          - branch creation, diff generation (local only, never pushes)
+    selfanalyze.rs - Phase 7: reads a workspace's own memory docs + scans its source files
+    suggest.rs      - asks the LLM to pick one file and one improvement (validated against the real file list)
+    diff.rs         - small hand-rolled LCS line differ, renders a readable unified diff
+    git.rs          - branch creation, commit, real test run (local only, never pushes)
+    mod.rs          - propose_self_improvement / apply_self_improvement commands, PR-summary formatting
 ```
 
 ## Frontend layout
@@ -61,13 +63,14 @@ components/
   SettingsPanel.tsx   - preferences, benchmarking, cache control
   AgentPanel.tsx      - task creation, plan review, approve/reject
   ExtensionsPanel.tsx - extension manager
+  BootstrapPanel.tsx  - Phase 7: analyze/propose, diff review, approve -> branch+test+PR summary
   ui/                 - Spinner, EmptyState, ErrorBanner (shared primitives)
 hooks/
   useWorkspace.ts  - shared workspace/tab/file state
   useEvent.ts      - typed wrapper around Tauri's event listen()
   useTheme.ts      - light/dark theme, persisted to localStorage
 lib/
-  fs.ts, ai.ts, agent.ts  - typed IPC wrappers over the Rust commands
+  fs.ts, ai.ts, agent.ts, extensions.ts, bootstrap.ts  - typed IPC wrappers over the Rust commands
 ```
 
 ## Key invariants
