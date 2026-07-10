@@ -163,6 +163,31 @@ CREATE TABLE IF NOT EXISTS promotion_requests (
     promoted_at INTEGER
 );
 
+
+
+CREATE TABLE IF NOT EXISTS symbols (
+    id INTEGER PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    language TEXT NOT NULL,
+    module_path TEXT NOT NULL,
+    qualified_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    visibility TEXT,
+    signature TEXT,
+    documentation TEXT,
+    symbol_hash TEXT,
+    import_source TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_qualified ON symbols(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
+CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbols(module_path);
+
 CREATE TABLE IF NOT EXISTS worker_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
