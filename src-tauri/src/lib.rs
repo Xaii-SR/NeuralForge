@@ -8,6 +8,8 @@ mod extensions;
 mod filesystem;
 mod hardware;
 mod intelligence;
+#[cfg(test)]
+mod release_validation;
 mod planning;
 mod terminal;
 
