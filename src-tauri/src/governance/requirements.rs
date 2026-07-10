@@ -1,3 +1,4 @@
+use super::ledger::{self, LedgerEvent};
 use super::validator::{validate, RequirementInput};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
@@ -68,11 +69,47 @@ fn append_history(conn: &Connection, req: &RequirementContract) -> AppResult<()>
     Ok(())
 }
 
+/// Rejection payloads keep enough of the submitted input to audit what
+/// was rejected and why, without letting arbitrarily large garbage
+/// input bloat the ledger.
+const MAX_REJECTED_FIELD_CHARS: usize = 500;
+
+fn truncated(s: &str) -> String {
+    if s.len() > MAX_REJECTED_FIELD_CHARS {
+        let mut t: String = s.chars().take(MAX_REJECTED_FIELD_CHARS).collect();
+        t.push_str("...(truncated)");
+        t
+    } else {
+        s.to_string()
+    }
+}
+
+fn rejection_payload(title: &str, intent: &str, criteria_count: usize, problems: &[String]) -> serde_json::Value {
+    serde_json::json!({
+        "title": truncated(title),
+        "intent": truncated(intent),
+        "criteria_count": criteria_count,
+        "problems": problems,
+    })
+}
+
 /// Validates first, inserts only if validation passes - a weak request
-/// never becomes a row, let alone reaches the planner or an LLM.
+/// never becomes a row, let alone reaches the planner or an LLM. The
+/// rejection itself IS recorded: as a ledger event with no
+/// correlation_id (no lifecycle chain was ever born), never as a
+/// requirements row.
 pub fn create(conn: &Connection, title: &str, intent: &str, acceptance_criteria: Vec<String>, created_by: &str) -> AppResult<RequirementContract> {
-    validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria })
-        .map_err(|problems| AppError::Provider(format!("requirement rejected: {}", problems.join("; "))))?;
+    if let Err(problems) = validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria }) {
+        ledger::append(
+            conn,
+            LedgerEvent::RequirementRejected,
+            None,
+            None,
+            None,
+            rejection_payload(title, intent, acceptance_criteria.len(), &problems),
+        )?;
+        return Err(AppError::Provider(format!("requirement rejected: {}", problems.join("; "))));
+    }
 
     let now = now_secs();
     let req = RequirementContract {
@@ -107,16 +144,36 @@ pub fn create(conn: &Connection, title: &str, intent: &str, acceptance_criteria:
     .map_err(|e| AppError::Provider(format!("failed to create requirement: {e}")))?;
 
     append_history(conn, &req)?;
+    ledger::append(
+        conn,
+        LedgerEvent::RequirementCreated,
+        Some(&req.correlation_id),
+        Some(&req.id),
+        None,
+        serde_json::json!({ "title": req.title, "version": req.version, "created_by": created_by }),
+    )?;
     tracing::info!(target: "governance", event = "requirement_created", requirement_id = %req.id, correlation_id = %req.correlation_id);
     Ok(req)
 }
 
 /// Re-validates the new content, bumps the version, and appends a history
 /// row. The requirement's id and correlation_id never change across
-/// versions - that's the whole point of them.
+/// versions - that's the whole point of them. A rejected update is
+/// ledgered against the requirement's real correlation_id, since here
+/// (unlike a rejected create) the lifecycle chain does exist.
 pub fn update(conn: &Connection, id: &str, title: &str, intent: &str, acceptance_criteria: Vec<String>) -> AppResult<RequirementContract> {
-    validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria })
-        .map_err(|problems| AppError::Provider(format!("requirement rejected: {}", problems.join("; "))))?;
+    if let Err(problems) = validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria }) {
+        let correlation = get(conn, id).ok().map(|r| r.correlation_id);
+        ledger::append(
+            conn,
+            LedgerEvent::RequirementUpdateRejected,
+            correlation.as_deref(),
+            Some(id),
+            None,
+            rejection_payload(title, intent, acceptance_criteria.len(), &problems),
+        )?;
+        return Err(AppError::Provider(format!("requirement rejected: {}", problems.join("; "))));
+    }
 
     let mut req = get(conn, id)?;
     req.version += 1;
@@ -132,6 +189,14 @@ pub fn update(conn: &Connection, id: &str, title: &str, intent: &str, acceptance
     .map_err(|e| AppError::Provider(format!("failed to update requirement: {e}")))?;
 
     append_history(conn, &req)?;
+    ledger::append(
+        conn,
+        LedgerEvent::RequirementUpdated,
+        Some(&req.correlation_id),
+        Some(&req.id),
+        None,
+        serde_json::json!({ "title": req.title, "version": req.version }),
+    )?;
     tracing::info!(target: "governance", event = "requirement_updated", requirement_id = %req.id, version = req.version);
     Ok(req)
 }
@@ -151,6 +216,15 @@ pub fn set_status(conn: &Connection, id: &str, new_status: &str) -> AppResult<Re
     .map_err(|e| AppError::Provider(format!("failed to update requirement status: {e}")))?;
 
     append_history(conn, &req)?;
+    let event = if new_status == status::RETIRED { LedgerEvent::RequirementRetired } else { LedgerEvent::RequirementReactivated };
+    ledger::append(
+        conn,
+        event,
+        Some(&req.correlation_id),
+        Some(&req.id),
+        None,
+        serde_json::json!({ "status": new_status }),
+    )?;
     tracing::info!(target: "governance", event = "requirement_status_changed", requirement_id = %req.id, status = %new_status);
     Ok(req)
 }

@@ -129,6 +129,46 @@ pub fn score_models(
     scored
 }
 
+/// Sprint 5: capability-aware scoring layered ON TOP of the Phase 4
+/// scoring. This is a separate additive function - score_models above is
+/// byte-for-byte untouched and remains the code path every existing
+/// caller uses. Guarantee: with no capability requirement (empty
+/// `required_capabilities`), this returns EXACTLY what score_models
+/// returns - same scores, same order, same reasons - because it delegates
+/// to it and applies a uniform no-op adjustment. A capability requirement
+/// adds +B to every model that covers all required capabilities (per
+/// `model_capabilities`), where B exceeds any Phase 4 score in practice,
+/// so capable models outrank incapable ones while the Phase 4 ordering
+/// still decides among equally capable ones.
+pub fn score_models_with_capabilities(
+    models: &[OllamaModel],
+    benchmarks: &HashMap<String, BenchmarkResult>,
+    prefs: &Preferences,
+    required_capabilities: &[String],
+    model_capabilities: &HashMap<String, Vec<String>>,
+) -> Vec<(f64, String, String)> {
+    let base = score_models(models, benchmarks, prefs);
+    if required_capabilities.is_empty() {
+        return base;
+    }
+
+    const CAPABILITY_BOOST: f64 = 1_000_000.0;
+    let mut scored: Vec<(f64, String, String)> = base
+        .into_iter()
+        .map(|(score, name, reason)| {
+            let have: Vec<String> = model_capabilities.get(&name).map(|c| c.iter().map(|s| s.to_lowercase()).collect()).unwrap_or_default();
+            let covers_all = required_capabilities.iter().all(|r| have.contains(&r.to_lowercase()));
+            if covers_all {
+                (score + CAPABILITY_BOOST, name, format!("{reason}; covers required capabilities [{}]", required_capabilities.join(", ")))
+            } else {
+                (score, name, format!("{reason}; missing some required capabilities"))
+            }
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+}
+
 #[derive(Serialize, Clone)]
 pub struct AutoSelection {
     pub provider: String,
@@ -252,6 +292,64 @@ mod tests {
         let long = estimate_cost(&ProviderId::OpenAi, &"word ".repeat(1000));
         assert!(long.estimated_cost_usd > short.estimated_cost_usd);
         assert!(!short.is_free);
+    }
+
+    /// Sprint 5 regression proof: with no capability requirement, the
+    /// capability-aware entry point is EXACTLY the Phase 4 scorer - same
+    /// scores, same order, same reasons - for both goals.
+    #[test]
+    fn capability_scoring_with_no_requirement_is_identical_to_phase4_scoring() {
+        let models = vec![model("slow-model", "7B"), model("fast-model", "1B"), model("big", "70B")];
+        let mut benchmarks = HashMap::new();
+        benchmarks.insert("slow-model".to_string(), benchmark("slow-model", 10.0));
+        benchmarks.insert("fast-model".to_string(), benchmark("fast-model", 80.0));
+
+        for (goal, cost) in [("speed", "free"), ("quality", "quality_first")] {
+            let prefs = Preferences { goal: goal.to_string(), cost_preference: cost.to_string() };
+            let phase4 = score_models(&models, &benchmarks, &prefs);
+            let sprint5 = score_models_with_capabilities(&models, &benchmarks, &prefs, &[], &HashMap::new());
+            assert_eq!(phase4.len(), sprint5.len());
+            for (a, b) in phase4.iter().zip(sprint5.iter()) {
+                assert_eq!(a.0, b.0, "scores must be identical for goal {goal}");
+                assert_eq!(a.1, b.1, "order must be identical for goal {goal}");
+                assert_eq!(a.2, b.2, "reasons must be identical for goal {goal}");
+            }
+        }
+    }
+
+    /// A capability requirement outranks the Phase 4 dimensions: the model
+    /// that covers "testing" wins even when another model is far faster.
+    #[test]
+    fn capability_requirement_outranks_speed_scoring() {
+        let models = vec![model("fast-generalist", "1B"), model("test-capable", "7B")];
+        let mut benchmarks = HashMap::new();
+        benchmarks.insert("fast-generalist".to_string(), benchmark("fast-generalist", 500.0));
+
+        let mut caps = HashMap::new();
+        caps.insert("test-capable".to_string(), vec!["testing".to_string()]);
+
+        let prefs = Preferences::default(); // speed goal
+        let scored = score_models_with_capabilities(&models, &benchmarks, &prefs, &["testing".to_string()], &caps);
+        assert_eq!(scored[0].1, "test-capable");
+        assert!(scored[0].2.contains("covers required capabilities"));
+        assert!(scored[1].2.contains("missing some required capabilities"));
+    }
+
+    /// Among equally capable models, the Phase 4 ordering still decides.
+    #[test]
+    fn phase4_ordering_decides_among_equally_capable_models() {
+        let models = vec![model("cap-slow", "7B"), model("cap-fast", "1B")];
+        let mut benchmarks = HashMap::new();
+        benchmarks.insert("cap-slow".to_string(), benchmark("cap-slow", 10.0));
+        benchmarks.insert("cap-fast".to_string(), benchmark("cap-fast", 80.0));
+
+        let mut caps = HashMap::new();
+        caps.insert("cap-slow".to_string(), vec!["testing".to_string()]);
+        caps.insert("cap-fast".to_string(), vec!["testing".to_string()]);
+
+        let prefs = Preferences::default();
+        let scored = score_models_with_capabilities(&models, &benchmarks, &prefs, &["testing".to_string()], &caps);
+        assert_eq!(scored[0].1, "cap-fast");
     }
 
     #[test]

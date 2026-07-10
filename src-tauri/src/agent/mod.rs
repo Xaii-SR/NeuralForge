@@ -7,6 +7,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::governance::ledger::{self, LedgerEvent};
+
 /// Matches the blueprint's task JSON protocol exactly:
 /// {"id","objective","agent","files","status","verification","rollback"}.
 /// "files" is a single-element list for now (Phase 5 foundation scope is
@@ -31,6 +33,13 @@ pub struct AgentTask {
     /// Copied from the gating requirement so the whole chain (requirement
     /// -> task -> future evidence/ledger records) shares one queryable ID.
     pub correlation_id: Option<String>,
+    /// Sprint 3: DAG membership. None for single-task (Sprint 1/2) flow -
+    /// that flow is unchanged and never sets these.
+    pub dag_id: Option<String>,
+    /// Task IDs that must be COMPLETED before this task may run.
+    pub depends_on: Vec<String>,
+    /// Sprint 8: the task this row is a retry of. None for first attempts.
+    pub retry_of: Option<String>,
 }
 
 pub mod status {
@@ -41,6 +50,10 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const ROLLED_BACK: &str = "rolled_back";
     pub const REJECTED: &str = "rejected";
+    /// Sprint 3: a dependency failed/rolled back, so this DAG node can
+    /// never legally run. Terminal, like FAILED, but distinguishes "this
+    /// task was never attempted" from "this task was attempted and failed".
+    pub const BLOCKED: &str = "blocked";
 }
 
 pub mod task_type {
@@ -96,10 +109,28 @@ pub fn set_rollback(conn: &Connection, id: &str, rollback_note: &str) -> AppResu
     Ok(())
 }
 
+/// Sprint 3: stamps DAG membership onto an existing task row. Separate
+/// from insert_task so the Sprint 1/2 single-task insert path is
+/// untouched - single tasks simply never get stamped.
+pub fn set_dag_membership(conn: &Connection, task_id: &str, dag_id: &str, depends_on: &[String]) -> AppResult<()> {
+    let deps_json = serde_json::to_string(depends_on).map_err(|e| AppError::Provider(format!("failed to encode depends_on: {e}")))?;
+    conn.execute(
+        "UPDATE agent_tasks SET dag_id = ?1, depends_on = ?2, updated_at = ?3 WHERE id = ?4",
+        params![dag_id, deps_json, now_secs(), task_id],
+    )
+    .map_err(|e| AppError::Provider(format!("failed to set DAG membership: {e}")))?;
+    Ok(())
+}
+
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
     let file_path: String = row.get("file_path")?;
     let task: String = row.get("task_type")?;
     let files = if task == task_type::RUN_CODE { vec![] } else { vec![file_path] };
+    let depends_on_json: Option<String> = row.get("depends_on")?;
+    let depends_on = depends_on_json
+        .as_deref()
+        .map(|j| serde_json::from_str(j).unwrap_or_default())
+        .unwrap_or_default();
     Ok(AgentTask {
         id: row.get("id")?,
         objective: row.get("objective")?,
@@ -114,6 +145,9 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
         error: row.get("error")?,
         requirement_id: row.get("requirement_id")?,
         correlation_id: row.get("correlation_id")?,
+        dag_id: row.get("dag_id")?,
+        depends_on,
+        retry_of: row.get("retry_of")?,
     })
 }
 
@@ -231,6 +265,33 @@ pub async fn create_and_plan_task(
 
             tracing::info!(target: "agent", event = "task_planned", task_id = %id, requirement_id = %requirement_id, correlation_id = %correlation_id, agent = CODER_AGENT, file = %file_path, risk = %risk_summary);
 
+            // Record ledger events for task lifecycle
+            if let Some(conn) = guard.as_ref() {
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskCreated,
+                    Some(correlation_id.as_str()),
+                    Some(requirement_id.as_str()),
+                    Some(&id),
+                    serde_json::json!({
+                        "objective": objective,
+                        "file_path": file_path,
+                        "risk_summary": risk_summary
+                    }),
+                );
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskPlanned,
+                    Some(correlation_id.as_str()),
+                    Some(requirement_id.as_str()),
+                    Some(&id),
+                    serde_json::json!({
+                        "status": status::AWAITING_APPROVAL,
+                        "planned_content_available": true
+                    }),
+                );
+            }
+
             Ok(AgentTask {
                 id,
                 objective,
@@ -245,10 +306,26 @@ pub async fn create_and_plan_task(
                 error: None,
                 requirement_id: Some(requirement_id),
                 correlation_id: Some(correlation_id),
+                dag_id: None,
+                depends_on: vec![],
+                retry_of: None,
             })
         }
         Err(e) => {
             update_status(conn, &id, status::FAILED, None, Some(&e.to_string()))?;
+            
+            // Record ledger event for task plan failure
+            let _ = ledger::append(
+                conn,
+                LedgerEvent::TaskPlanFailed,
+                if correlation_id.is_empty() { None } else { Some(correlation_id.as_str()) },
+                if requirement_id.is_empty() { None } else { Some(requirement_id.as_str()) },
+                Some(&id),
+                serde_json::json!({
+                    "error": e.to_string()
+                }),
+            );
+            
             tracing::warn!(target: "agent", event = "task_planning_failed", task_id = %id, error = %e);
             Err(e)
         }
@@ -288,6 +365,32 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
 
             tracing::info!(target: "agent", event = "code_task_planned", task_id = %id, risk = %risk_summary);
 
+            // Record ledger events for code task lifecycle
+            if let Some(conn) = guard.as_ref() {
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskCreated,
+                    None,
+                    None,
+                    Some(&id),
+                    serde_json::json!({
+                        "objective": objective,
+                        "task_type": task_type::RUN_CODE
+                    }),
+                );
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskPlanned,
+                    None,
+                    None,
+                    Some(&id),
+                    serde_json::json!({
+                        "status": status::AWAITING_APPROVAL,
+                        "planned_content_available": true
+                    }),
+                );
+            }
+
             Ok(AgentTask {
                 id,
                 objective,
@@ -302,10 +405,28 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
                 error: None,
                 requirement_id: None,
                 correlation_id: None,
+                dag_id: None,
+                depends_on: vec![],
+                retry_of: None,
             })
         }
         Err(e) => {
             update_status(conn, &id, status::FAILED, None, Some(&e.to_string()))?;
+            
+            // Record ledger event for code task plan failure
+            if let Some(conn_ref) = guard.as_ref() {
+                let _ = ledger::append(
+                    conn_ref,
+                    LedgerEvent::TaskPlanFailed,
+                    None,
+                    None,
+                    Some(&id),
+                    serde_json::json!({
+                        "error": e.to_string()
+                    }),
+                );
+            }
+            
             tracing::warn!(target: "agent", event = "code_task_planning_failed", task_id = %id, error = %e);
             Err(e)
         }
@@ -334,6 +455,20 @@ pub async fn approve_task(
         let task = get_task(conn, &task_id)?;
         let (original_content, proposed_content) = get_task_content(conn, &task_id)?;
         update_status(conn, &task_id, status::APPLYING, None, None)?;
+        
+        // Record ledger event for task approval
+        let _ = ledger::append(
+            conn,
+            LedgerEvent::TaskApproved,
+            task.correlation_id.as_ref().map(|s| s.as_str()),
+            task.requirement_id.as_ref().map(|s| s.as_str()),
+            Some(&task_id),
+            serde_json::json!({
+                "task_type": task.task_type,
+                "file_path": task.files.first().cloned().unwrap_or_default()
+            }),
+        );
+        
         (task, original_content, proposed_content)
     };
 
@@ -372,12 +507,11 @@ pub async fn approve_task(
         let conn = guard
             .as_ref()
             .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-        update_status(conn, &task_id, final_status, Some(&verification), error.as_deref())?;
-        if let Some(note) = &rollback_note {
-            set_rollback(conn, &task_id, note)?;
-        }
+        record_task_outcome_atomic(conn, &task, &task_id, final_status, &verification, error.as_deref(), rollback_note.as_deref())?;
     }
 
+    // The agent_history.md append is a plain file write - deliberately
+    // outside (after) the DB transaction, per the audit remediation.
     if let Some(root) = &memory_root {
         let file_path = task.files.first().cloned().unwrap_or_default();
         memory::record_task_outcome(root, &task_id, &task.objective, &file_path, final_status, &verification).ok();
@@ -393,13 +527,163 @@ pub async fn approve_task(
     );
 
     let guard = db.conn.lock().unwrap();
-    let conn = guard.as_ref().unwrap();
-    get_task(conn, &task_id)
+    read_task_after_finish(guard.as_ref(), &task_id)
+}
+
+/// Audit remediation (post-Sprint-7): the final task read-back after
+/// execution. Previously `guard.as_ref().unwrap()` - a panic if the
+/// workspace was closed while the executor's long await was in flight.
+/// Now a clean error, matching every other connection access in this file.
+pub(crate) fn read_task_after_finish(conn: Option<&Connection>, task_id: &str) -> AppResult<AgentTask> {
+    let conn = conn.ok_or_else(|| AppError::InvalidPath("workspace was closed while the task was finishing".to_string()))?;
+    get_task(conn, task_id)
+}
+
+/// Audit remediation (post-Sprint-7): the ENTIRE task outcome - status,
+/// rollback note, evidence (execution output for run_code; verification +
+/// optional rollback evidence for file edits), promotion verdict, ledger
+/// completion event, and DAG dependent-blocking - commits as ONE
+/// transaction. Previously the file-edit evidence + promotion lived in a
+/// second transaction; a kill between the two could leave a COMPLETED task
+/// with no evidence and no promotion row. What gets written is unchanged -
+/// only when it commits.
+pub(crate) fn record_task_outcome_atomic(
+    conn: &Connection,
+    task: &AgentTask,
+    task_id: &str,
+    final_status: &str,
+    verification: &str,
+    error: Option<&str>,
+    rollback_note: Option<&str>,
+) -> AppResult<()> {
+    use crate::governance::evidence::{self, kind};
+    crate::database::in_transaction(conn, |conn| {
+        update_status(conn, task_id, final_status, Some(verification), error)?;
+        if let Some(note) = rollback_note {
+            set_rollback(conn, task_id, note)?;
+        }
+
+        if task.task_type == task_type::RUN_CODE {
+            // Execution-output evidence for code runs.
+            evidence::record(
+                conn,
+                task_id,
+                task.correlation_id.as_ref().map(|s| s.as_str()),
+                kind::EXECUTION_OUTPUT,
+                verification,
+                error.is_none(), // success = true if no error
+            )?;
+        } else {
+            // Verification evidence (plus rollback evidence when the
+            // executor restored the original) for file edits.
+            evidence::record(
+                conn,
+                task_id,
+                task.correlation_id.as_ref().map(|s| s.as_str()),
+                kind::VERIFICATION,
+                verification,
+                error.is_none(), // success = true if no error
+            )?;
+            if let Some(note) = rollback_note {
+                evidence::record(
+                    conn,
+                    task_id,
+                    task.correlation_id.as_ref().map(|s| s.as_str()),
+                    kind::ROLLBACK,
+                    note,
+                    false, // rollback indicates failure
+                )?;
+            }
+        }
+
+        // Sprint 4: judge that evidence through the shared
+        // PromotionController - PROMOTED for a verified pass, BLOCKED for
+        // a failure/rollback - on the task's correlation chain.
+        let _ = crate::governance::promotion::request_promotion(conn, task_id, task.correlation_id.as_deref());
+
+        // Record ledger events for task completion
+        match final_status {
+            status::COMPLETED => {
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskCompleted,
+                    task.correlation_id.as_ref().map(|s| s.as_str()),
+                    task.requirement_id.as_ref().map(|s| s.as_str()),
+                    Some(&task_id),
+                    serde_json::json!({
+                        "verification": verification,
+                        "error": error,
+                        "rollback_occurred": rollback_note.is_some()
+                    }),
+                );
+            },
+            status::FAILED => {
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskFailed,
+                    task.correlation_id.as_ref().map(|s| s.as_str()),
+                    task.requirement_id.as_ref().map(|s| s.as_str()),
+                    Some(&task_id),
+                    serde_json::json!({
+                        "verification": verification,
+                        "error": error,
+                        "rollback_occurred": rollback_note.is_some()
+                    }),
+                );
+            },
+            status::ROLLED_BACK => {
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskRolledBack,
+                    task.correlation_id.as_ref().map(|s| s.as_str()),
+                    task.requirement_id.as_ref().map(|s| s.as_str()),
+                    Some(&task_id),
+                    serde_json::json!({
+                        "verification": verification,
+                        "error": error,
+                        "rollback_occurred": rollback_note.is_some()
+                    }),
+                );
+            },
+            _ => {}, // Don't record events for intermediate states
+        }
+
+        // Sprint 3: if this task is a DAG node and it just failed or rolled
+        // back, its dependents can never run - mark them blocked now.
+        // Sprint 8: if it COMPLETED and is a retry, previously-blocked
+        // dependents of the failed attempt become plannable again.
+        if let Some(dag_id) = &task.dag_id {
+            if matches!(final_status, status::FAILED | status::ROLLED_BACK) {
+                let _ = propagate_dag_blocks(conn, dag_id);
+            } else if final_status == status::COMPLETED && task.retry_of.is_some() {
+                let _ = reopen_blocked_dependents(conn, dag_id);
+            }
+        }
+        Ok(())
+    })
 }
 
 #[tauri::command]
 pub fn reject_task(db: tauri::State<crate::database::DbState>, task_id: String) -> AppResult<()> {
-    crate::database::with_conn(&db, |conn| update_status(conn, &task_id, status::REJECTED, None, None))?;
+    let task = crate::database::with_conn(&db, |conn| {
+        update_status(conn, &task_id, status::REJECTED, None, None)?;
+        get_task(conn, &task_id)
+    })?;
+    
+    // Record ledger event for task rejection
+    let _ = crate::database::with_conn(&db, |conn| {
+        ledger::append(
+            conn,
+            LedgerEvent::TaskRejected,
+            task.correlation_id.as_ref().map(|s| s.as_str()),
+            task.requirement_id.as_ref().map(|s| s.as_str()),
+            Some(&task_id),
+            serde_json::json!({
+                "reason": "user_rejection"
+            }),
+        )
+    });
+    
     tracing::info!(target: "agent", event = "task_rejected", task_id = %task_id);
     Ok(())
 }
@@ -407,6 +691,185 @@ pub fn reject_task(db: tauri::State<crate::database::DbState>, task_id: String) 
 #[tauri::command]
 pub fn list_agent_tasks(db: tauri::State<crate::database::DbState>) -> AppResult<Vec<AgentTask>> {
     crate::database::with_conn(&db, list_tasks)
+}
+
+/// All tasks belonging to one DAG, in insertion order.
+pub fn list_dag_tasks(conn: &Connection, dag_id: &str) -> AppResult<Vec<AgentTask>> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM agent_tasks WHERE dag_id = ?1 ORDER BY created_at ASC, id ASC")
+        .map_err(|e| AppError::Provider(format!("failed to query DAG tasks: {e}")))?;
+    let rows = stmt
+        .query_map(params![dag_id], row_to_task)
+        .map_err(|e| AppError::Provider(format!("failed to query DAG tasks: {e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Provider(format!("failed to read task row: {e}")))
+}
+
+/// Sprint 8: how a dependency looks once retry lineage is considered. A
+/// dependency is satisfied if IT or any retry of it (transitively)
+/// completed; it is pending while any attempt in the lineage is still
+/// in flight; it has failed only when every attempt is terminally failed.
+/// With no retry rows this reduces exactly to the Sprint 3 single-row
+/// judgment - the no-retry path is behavior-identical.
+#[derive(PartialEq, Clone, Copy)]
+enum DepState {
+    Completed,
+    Pending,
+    Failed,
+}
+
+fn dep_state_with_lineage(tasks: &[AgentTask], dep_id: &str) -> DepState {
+    // Collect dep_id plus every transitive retry-descendant (cycle-guarded).
+    let mut lineage: Vec<&AgentTask> = Vec::new();
+    let mut frontier: Vec<&str> = vec![dep_id];
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    while let Some(id) = frontier.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(t) = tasks.iter().find(|t| t.id == id) {
+            lineage.push(t);
+        }
+        for t in tasks.iter().filter(|t| t.retry_of.as_deref() == Some(id)) {
+            frontier.push(t.id.as_str());
+        }
+    }
+    if lineage.is_empty() {
+        return DepState::Failed; // missing dep row = never runnable
+    }
+    if lineage.iter().any(|t| t.status == status::COMPLETED) {
+        return DepState::Completed;
+    }
+    if lineage.iter().any(|t| matches!(t.status.as_str(), status::PLANNING | status::AWAITING_APPROVAL | status::APPLYING)) {
+        return DepState::Pending;
+    }
+    DepState::Failed
+}
+
+/// Sprint 3 DAG walk, step one: which tasks may run RIGHT NOW. A task is
+/// runnable when it hasn't reached a terminal state and every dependency
+/// is COMPLETED (directly, or - Sprint 8 - via a completed retry).
+/// Failed dependencies make a task blocked (handled by
+/// propagate_dag_blocks), never runnable. Independent branches stay
+/// runnable regardless of failures elsewhere in the DAG.
+pub fn dag_runnable_tasks(conn: &Connection, dag_id: &str) -> AppResult<Vec<AgentTask>> {
+    let tasks = list_dag_tasks(conn, dag_id)?;
+
+    Ok(tasks
+        .iter()
+        .filter(|t| {
+            matches!(t.status.as_str(), status::PLANNING | status::AWAITING_APPROVAL)
+                && t.depends_on.iter().all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed)
+        })
+        .cloned()
+        .collect())
+}
+
+/// Sprint 3 DAG walk, step two: after any task reaches a terminal failure
+/// state, mark every (transitive) dependent as BLOCKED. Iterates to a
+/// fixpoint so chains block all the way down. Each newly blocked task is
+/// ledgered under the DAG's correlation_id - the Sprint 2 chain records
+/// why work never happened, not just work that did.
+pub fn propagate_dag_blocks(conn: &Connection, dag_id: &str) -> AppResult<Vec<String>> {
+    let mut newly_blocked = Vec::new();
+    loop {
+        let tasks = list_dag_tasks(conn, dag_id)?;
+
+        let mut changed = false;
+        for task in &tasks {
+            if matches!(task.status.as_str(), status::COMPLETED | status::FAILED | status::ROLLED_BACK | status::BLOCKED | status::REJECTED) {
+                continue;
+            }
+            // Sprint 8: lineage-aware - a dependency with a pending or
+            // completed retry is NOT failed, so its dependents don't block.
+            let has_failed_dep = task.depends_on.iter().any(|d| dep_state_with_lineage(&tasks, d) == DepState::Failed);
+            if has_failed_dep {
+                update_status(conn, &task.id, status::BLOCKED, None, Some("a dependency failed - task was never attempted"))?;
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskFailed,
+                    task.correlation_id.as_deref(),
+                    task.requirement_id.as_deref(),
+                    Some(&task.id),
+                    serde_json::json!({ "dag_id": dag_id, "blocked": true, "reason": "dependency failed" }),
+                );
+                newly_blocked.push(task.id.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(newly_blocked)
+}
+
+/// Sprint 8: the inverse of propagate_dag_blocks. After a retry succeeds,
+/// BLOCKED dependents whose failed dependencies are now covered by a
+/// completed retry-descendant become PLANNING again - recoverable, exactly
+/// as if the dependency had succeeded first time. In a DAG with no retry
+/// rows this can never fire (a blocked task's deps have no completed
+/// lineage), so the Sprint 3 no-retry behavior is untouched.
+pub fn reopen_blocked_dependents(conn: &Connection, dag_id: &str) -> AppResult<Vec<String>> {
+    let mut reopened = Vec::new();
+    loop {
+        let tasks = list_dag_tasks(conn, dag_id)?;
+        let mut changed = false;
+        for task in &tasks {
+            if task.status != status::BLOCKED {
+                continue;
+            }
+            let all_deps_completed = task.depends_on.iter().all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed);
+            if all_deps_completed {
+                update_status(conn, &task.id, status::PLANNING, None, None)?;
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskPlanned,
+                    task.correlation_id.as_deref(),
+                    task.requirement_id.as_deref(),
+                    Some(&task.id),
+                    serde_json::json!({ "dag_id": dag_id, "reopened": true, "reason": "a retry of a failed dependency completed" }),
+                );
+                reopened.push(task.id.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(reopened)
+}
+
+/// Sprint 8: creates the retry row itself - a NEW task cloning the failed
+/// attempt's work (objective, file, contents, requirement/correlation
+/// linkage, DAG membership, worker assignment) with retry_of pointing at
+/// it. Status is AWAITING_APPROVAL: retries prepare work for the same
+/// human gate every task goes through; nothing executes unattended.
+pub fn insert_retry_task(conn: &Connection, failed: &AgentTask, new_id: &str) -> AppResult<()> {
+    let (original_content, proposed_content) = get_task_content(conn, &failed.id)?;
+    insert_task(
+        conn,
+        new_id,
+        &failed.objective,
+        &failed.task_type,
+        failed.files.first().map(|s| s.as_str()).unwrap_or_default(),
+        status::AWAITING_APPROVAL,
+        &original_content,
+        &proposed_content,
+        failed.risk_summary.as_deref().unwrap_or_default(),
+        failed.requirement_id.as_deref(),
+        failed.correlation_id.as_deref(),
+    )?;
+    conn.execute(
+        "UPDATE agent_tasks SET retry_of = ?1, worker_id = (SELECT worker_id FROM agent_tasks WHERE id = ?1) WHERE id = ?2",
+        params![failed.id, new_id],
+    )
+    .map_err(|e| AppError::Provider(format!("failed to link retry lineage: {e}")))?;
+    if let Some(dag_id) = &failed.dag_id {
+        set_dag_membership(conn, new_id, dag_id, &failed.depends_on)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -420,6 +883,97 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         (dir, conn)
+    }
+
+    /// Audit remediation 1: the post-execution read-back with the
+    /// connection gone returns a clean, explanatory error - it must not
+    /// panic (the old code was `guard.as_ref().unwrap()`).
+    #[test]
+    fn read_task_after_finish_with_no_connection_errors_instead_of_panicking() {
+        let err = match read_task_after_finish(None, "any-task") {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("must error with no connection"),
+        };
+        assert!(err.contains("workspace was closed"), "got: {err}");
+
+        // And with a live connection it still reads the task (success path
+        // preserved).
+        let (dir, conn) = temp_conn();
+        insert_task(&conn, "rb-task", "obj", task_type::EDIT_FILE, "f.rs", status::COMPLETED, "o", "n", "low", None, None).unwrap();
+        assert_eq!(read_task_after_finish(Some(&conn), "rb-task").unwrap().id, "rb-task");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Audit remediation 2: the whole task outcome (status + evidence +
+    /// promotion + ledger) is ONE transaction. Sabotage the evidence table
+    /// mid-sequence (rename it away) and the ENTIRE outcome must roll back
+    /// - no COMPLETED task with missing evidence/promotion can exist.
+    #[test]
+    fn task_outcome_is_all_or_nothing() {
+        let (dir, conn) = temp_conn();
+        insert_task(&conn, "atomic-task", "obj", task_type::EDIT_FILE, "f.rs", status::APPLYING, "old", "new", "low", Some("req-1"), Some("corr-atomic")).unwrap();
+        let task = get_task(&conn, "atomic-task").unwrap();
+        let ledger_before: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+
+        // Sabotage: the evidence write mid-transaction will fail.
+        conn.execute("ALTER TABLE evidence RENAME TO evidence_sabotaged", []).unwrap();
+        let result = record_task_outcome_atomic(&conn, &task, "atomic-task", status::COMPLETED, "cargo check passed", None, None);
+        conn.execute("ALTER TABLE evidence_sabotaged RENAME TO evidence", []).unwrap();
+
+        assert!(result.is_err(), "a failed evidence write must fail the outcome");
+        // NOTHING partial persisted: status untouched, no ledger growth,
+        // no evidence, no promotion.
+        assert_eq!(get_task(&conn, "atomic-task").unwrap().status, status::APPLYING, "status update must have rolled back");
+        let ledger_after: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+        assert_eq!(ledger_before, ledger_after, "no ledger events may survive the rollback");
+        assert!(crate::governance::evidence::for_task(&conn, "atomic-task").unwrap().is_empty());
+        assert!(crate::governance::promotion::for_task(&conn, "atomic-task").unwrap().is_empty());
+
+        // Un-sabotaged, the identical call commits everything together.
+        record_task_outcome_atomic(&conn, &task, "atomic-task", status::COMPLETED, "cargo check passed", None, None).unwrap();
+        assert_eq!(get_task(&conn, "atomic-task").unwrap().status, status::COMPLETED);
+        let evidence = crate::governance::evidence::for_task(&conn, "atomic-task").unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].success);
+        let promotions = crate::governance::promotion::for_task(&conn, "atomic-task").unwrap();
+        assert_eq!(promotions.len(), 1);
+        assert_eq!(promotions[0].status, crate::governance::promotion::status::PROMOTED);
+        let chain = crate::governance::ledger::list_by_correlation(&conn, "corr-atomic").unwrap();
+        assert!(chain.iter().any(|e| e.event_type == "task_completed"));
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Audit remediation 2, failure side: a rolled-back task's outcome
+    /// (rollback evidence + BLOCKED promotion + task_rolled_back event)
+    /// also lands atomically and with the same content as before the
+    /// remediation.
+    #[test]
+    fn rolled_back_task_outcome_writes_rollback_evidence_and_blocked_promotion() {
+        let (dir, conn) = temp_conn();
+        insert_task(&conn, "rb-atomic", "obj", task_type::EDIT_FILE, "f.rs", status::APPLYING, "old", "new", "low", None, Some("corr-rb")).unwrap();
+        let task = get_task(&conn, "rb-atomic").unwrap();
+
+        record_task_outcome_atomic(
+            &conn, &task, "rb-atomic", status::ROLLED_BACK,
+            "cargo check failed:\nerror[E0308]", Some("verification failed"),
+            Some("original content restored after failed verification"),
+        ).unwrap();
+
+        let task = get_task(&conn, "rb-atomic").unwrap();
+        assert_eq!(task.status, status::ROLLED_BACK);
+        let evidence = crate::governance::evidence::for_task(&conn, "rb-atomic").unwrap();
+        assert_eq!(evidence.len(), 2, "verification + rollback evidence");
+        assert_eq!(evidence[0].kind, crate::governance::evidence::kind::VERIFICATION);
+        assert!(!evidence[0].success);
+        assert_eq!(evidence[1].kind, crate::governance::evidence::kind::ROLLBACK);
+        let promotions = crate::governance::promotion::for_task(&conn, "rb-atomic").unwrap();
+        assert_eq!(promotions[0].status, crate::governance::promotion::status::BLOCKED);
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

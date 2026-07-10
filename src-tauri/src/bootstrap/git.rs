@@ -36,7 +36,11 @@ pub async fn create_branch(root: &Path, slug: &str) -> AppResult<String> {
 /// ROADMAP.md "Autonomous GitHub operations").
 pub async fn write_and_commit(root: &Path, file_path: &str, content: &str, title: &str) -> AppResult<()> {
     let target = root.join(file_path);
-    std::fs::write(&target, content)?;
+    // Sprint 4: the write goes through the PromotionController's shared
+    // file-mutation primitive - same bytes, same path, same result as the
+    // direct std::fs::write it replaces; the point is that both promotion
+    // flows (this one and the agent's) now share one apply code path.
+    crate::governance::promotion::write_promoted_content(&target, content)?;
     run_git(root, &["add", "--", file_path]).await?;
     run_git(root, &["commit", "-m", &format!("neuralforge: {title}")]).await?;
     Ok(())

@@ -94,6 +94,46 @@ pub async fn propose_self_improvement(state: tauri::State<'_, crate::core::state
     })
 }
 
+/// Sprint 4: records the bootstrap flow's outcome through the same
+/// governance chain the agent flow uses - a real agent_tasks row, a real
+/// evidence row carrying the actual test output, and a promotion verdict
+/// from the shared PromotionController (PROMOTED when the tests passed,
+/// BLOCKED when they failed). Pure bookkeeping: the git branch/commit/test
+/// behavior is complete before this runs and is not altered by it.
+pub fn record_promotion_bookkeeping(
+    conn: &rusqlite::Connection,
+    proposal: &SelfImprovementProposal,
+    tests_passed: bool,
+    test_output: &str,
+) -> AppResult<crate::governance::promotion::PromotionRequest> {
+    let task_id = format!("bootstrap-{}", uuid::Uuid::new_v4());
+    // Sprint 7: task + evidence + promotion verdict land atomically.
+    crate::database::in_transaction(conn, |conn| {
+    crate::agent::insert_task(
+        conn,
+        &task_id,
+        &proposal.title,
+        crate::agent::task_type::EDIT_FILE,
+        &proposal.file_path,
+        if tests_passed { crate::agent::status::COMPLETED } else { crate::agent::status::FAILED },
+        &proposal.original_content,
+        &proposal.proposed_content,
+        &proposal.risk_summary,
+        None,
+        None,
+    )?;
+    crate::governance::evidence::record(
+        conn,
+        &task_id,
+        None,
+        crate::governance::evidence::kind::VERIFICATION,
+        test_output,
+        tests_passed,
+    )?;
+    crate::governance::promotion::request_promotion(conn, &task_id, None)
+    })
+}
+
 /// "Create branch" + "Run tests" + "Format PR". Only reachable after a
 /// human has reviewed the proposal's diff and explicitly clicked Approve -
 /// the frontend gates this call behind that click, the same discipline as
@@ -104,6 +144,7 @@ pub async fn propose_self_improvement(state: tauri::State<'_, crate::core::state
 #[tauri::command]
 pub async fn apply_self_improvement(
     state: tauri::State<'_, crate::core::state::AppState>,
+    db: tauri::State<'_, crate::database::DbState>,
     proposal: SelfImprovementProposal,
 ) -> AppResult<SelfImprovementResult> {
     let root = state
@@ -116,6 +157,17 @@ pub async fn apply_self_improvement(
     let branch_name = git::create_branch(&root, &proposal.slug).await?;
     git::write_and_commit(&root, &proposal.file_path, &proposal.proposed_content, &proposal.title).await?;
     let (tests_passed, test_output) = git::run_tests(&root, &proposal.file_path).await?;
+
+    // Sprint 4: bookkeep the outcome through the shared
+    // PromotionController. Best-effort by design - a workspace without an
+    // open DB still gets the exact same git branch/commit/test behavior
+    // and result payload as before this sprint.
+    {
+        let guard = db.conn.lock().unwrap();
+        if let Some(conn) = guard.as_ref() {
+            let _ = record_promotion_bookkeeping(conn, &proposal, tests_passed, &test_output);
+        }
+    }
 
     let pr_summary = format_pr_summary(&proposal, &branch_name, tests_passed, &test_output);
 
@@ -218,6 +270,60 @@ mod tests {
         assert!(pr_summary.contains(&branch_name));
         assert!(pr_summary.contains("does not push branches"));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Sprint 4 test 4: the Phase 7 bootstrap flow, now routed through the
+    /// shared PromotionController (write via write_promoted_content inside
+    /// git::write_and_commit, plus promotion bookkeeping), produces the
+    /// exact same observable behavior the pre-refactor gate test asserts:
+    /// same branch name shape, same commit, same file content, same test
+    /// outcome, no remote. On top of that, the outcome is now a queryable
+    /// promotion row judged from real evidence.
+    #[tokio::test]
+    async fn gate_test_bootstrap_flow_via_promotion_controller_matches_pre_refactor_behavior() {
+        let dir = temp_throwaway_repo();
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+
+        let original_content = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
+        let proposed_content = original_content.replace("a + b\n", "a + b // sum of the two operands\n");
+        let title = "Document the add() return value".to_string();
+        let proposal = SelfImprovementProposal {
+            slug: suggest::slugify(&title),
+            title,
+            file_path: "src/lib.rs".to_string(),
+            rationale: "Clarifies what the addition computes".to_string(),
+            diff: diff::unified_diff("src/lib.rs", &original_content, &proposed_content),
+            original_content,
+            proposed_content,
+            risk_summary: "low risk: +1/-1 lines".to_string(),
+        };
+
+        // Identical sequence to apply_self_improvement's body.
+        let branch_name = git::create_branch(&dir, &proposal.slug).await.unwrap();
+        git::write_and_commit(&dir, &proposal.file_path, &proposal.proposed_content, &proposal.title).await.unwrap();
+        let (tests_passed, test_output) = git::run_tests(&dir, &proposal.file_path).await.unwrap();
+        let promotion = record_promotion_bookkeeping(&conn, &proposal, tests_passed, &test_output).unwrap();
+
+        // Pre-refactor observable behavior, unchanged:
+        assert!(branch_name.starts_with("neuralforge/suggest-"));
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap(), proposal.proposed_content);
+        assert!(tests_passed, "real cargo test must pass: {test_output}");
+        assert!(test_output.contains("test result: ok"));
+        let log = std::process::Command::new("git").args(["log", "-1", "--pretty=%s"]).current_dir(&dir).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "neuralforge: Document the add() return value");
+        let remotes = std::process::Command::new("git").arg("remote").current_dir(&dir).output().unwrap();
+        assert!(String::from_utf8_lossy(&remotes.stdout).trim().is_empty(), "never pushed anywhere");
+
+        // New Sprint 4 guarantees on top:
+        assert_eq!(promotion.status, crate::governance::promotion::status::PROMOTED);
+        assert!(promotion.promoted_at.is_some());
+        let evidence = crate::governance::evidence::for_task(&conn, &promotion.task_id).unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].success);
+        assert!(evidence[0].content.contains("test result: ok"), "evidence carries the real test output");
+
+        drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -7,6 +7,8 @@ mod database;
 mod extensions;
 mod filesystem;
 mod hardware;
+mod intelligence;
+mod planning;
 mod terminal;
 
 use ai::benchmarks::BenchmarkDbState;
@@ -72,6 +74,22 @@ pub fn run() {
       agent::approve_task,
       agent::reject_task,
       agent::list_agent_tasks,
+      governance::get_ledger,
+      governance::get_ledger_for_correlation,
+      governance::verify_ledger,
+      governance::get_evidence_for_task,
+      governance::get_promotions_for_task,
+      planning::plan_requirement_dag,
+      planning::get_dag,
+      planning::get_dag_runnable_tasks,
+      intelligence::list_worker_profiles,
+      intelligence::upsert_worker_profile,
+      intelligence::delete_worker_profile,
+      intelligence::refresh_worker_reliability,
+      intelligence::match_workers,
+      intelligence::retry_failed_task,
+      intelligence::get_task_confidence,
+      intelligence::get_task_report,
       extensions::list_extensions,
       extensions::set_extension_enabled,
       extensions::uninstall_extension,

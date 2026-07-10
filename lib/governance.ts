@@ -46,3 +46,56 @@ export function listRequirements(): Promise<RequirementContract[]> {
 export function getRequirementHistory(id: string): Promise<RequirementHistoryEntry[]> {
   return invoke("get_requirement_history", { id });
 }
+
+// Ledger types and functions
+
+export interface LedgerEntry {
+  seq: number;
+  event_type: string;
+  correlation_id: string | null;
+  requirement_id: string | null;
+  task_id: string | null;
+  payload: string;
+  created_at: number;
+  prev_hash: string;
+  entry_hash: string;
+}
+
+export interface ChainVerification {
+  valid: boolean;
+  entries: number;
+  problem: string | null;
+}
+
+export interface EvidenceRecord {
+  id: string;
+  task_id: string;
+  correlation_id: string | null;
+  kind: string;
+  content: string;
+  success: boolean;
+  created_at: number;
+}
+
+export function getLedger(limit: number = 50): Promise<LedgerEntry[]> {
+  return invoke("get_ledger", { limit });
+}
+
+export function getLedgerForCorrelation(correlationId: string): Promise<LedgerEntry[]> {
+  return invoke("get_ledger_for_correlation", { correlationId });
+}
+
+export function verifyLedger(): Promise<ChainVerification> {
+  return invoke("verify_ledger");
+}
+
+export function getEvidenceForTask(taskId: string): Promise<EvidenceRecord[]> {
+  return invoke("get_evidence_for_task", { taskId });
+}
+
+// Evidence kind constants
+export const EvidenceKind = {
+  VERIFICATION: "verification",
+  ROLLBACK: "rollback", 
+  EXECUTION_OUTPUT: "execution_output"
+};
