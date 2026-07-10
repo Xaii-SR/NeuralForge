@@ -10,6 +10,8 @@ import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
 import ExtensionsPanel from "@/components/ExtensionsPanel";
 import BootstrapPanel from "@/components/BootstrapPanel";
+import GovernancePanel from "@/components/GovernancePanel";
+import WorkersPanel from "@/components/WorkersPanel";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
@@ -28,7 +30,7 @@ export default function Home() {
   const workspace = useWorkspace();
   const { theme, toggleTheme } = useTheme();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions" | "bootstrap">("terminal");
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions" | "bootstrap" | "governance" | "workers">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => {
@@ -116,6 +118,18 @@ export default function Home() {
               >
                 Bootstrap
               </button>
+              <button
+                onClick={() => setBottomTab("governance")}
+                className={`${TAB_BUTTON} ${bottomTab === "governance" ? TAB_ACTIVE : TAB_INACTIVE}`}
+              >
+                Governance
+              </button>
+              <button
+                onClick={() => setBottomTab("workers")}
+                className={`${TAB_BUTTON} ${bottomTab === "workers" ? TAB_ACTIVE : TAB_INACTIVE}`}
+              >
+                Workers
+              </button>
             </div>
             <div className="min-h-0 flex-1">
               <div className={bottomTab === "terminal" ? "h-full" : "hidden"}>
@@ -132,6 +146,12 @@ export default function Home() {
               </div>
               <div className={bottomTab === "bootstrap" ? "h-full" : "hidden"}>
                 <BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} />
+              </div>
+              <div className={bottomTab === "governance" ? "h-full" : "hidden"}>
+                <GovernancePanel workspaceOpen={!!workspace.workspaceRoot} />
+              </div>
+              <div className={bottomTab === "workers" ? "h-full" : "hidden"}>
+                <WorkersPanel workspaceOpen={!!workspace.workspaceRoot} />
               </div>
             </div>
           </div>

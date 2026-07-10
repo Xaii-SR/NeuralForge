@@ -14,6 +14,11 @@ export interface AgentTask {
   error: string | null;
   requirement_id: string | null;
   correlation_id: string | null;
+  /** Sprint 3: DAG membership; null for the single-task flow. */
+  dag_id: string | null;
+  depends_on: string[];
+  /** Sprint 8: the task this row is a retry of; null for first attempts. */
+  retry_of: string | null;
 }
 
 /** Sprint 1: edit_file tasks are gated behind a validated requirement -

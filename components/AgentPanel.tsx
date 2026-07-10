@@ -8,6 +8,7 @@ import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
+import TaskReportView from "@/components/TaskReportView";
 
 export interface AgentPanelProps {
   workspaceOpen: boolean;
@@ -21,6 +22,7 @@ const STATUS_BADGE: Record<string, string> = {
   rolled_back: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
   failed: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400",
   rejected: "bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500",
+  blocked: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400",
 };
 
 function riskLevel(summary: string): "low" | "medium" | "high" | null {
@@ -390,6 +392,22 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
                   {selected.proposed_content}
                 </pre>
               </div>
+            )}
+            {selected.retry_of && (
+              <div className="text-[10px] text-yellow-600 dark:text-yellow-400">
+                ↻ Retry of task <span className="font-mono">{selected.retry_of}</span>
+              </div>
+            )}
+            {/* Sprint 9: the Sprint 8 report layer - confidence, failure
+                class, evidence, promotions, retry - for finished tasks. */}
+            {["completed", "failed", "rolled_back", "blocked"].includes(selected.status) && (
+              <TaskReportView
+                taskId={selected.id}
+                onRetryCreated={(retryId) => {
+                  setSelectedId(retryId);
+                  refresh();
+                }}
+              />
             )}
             {selected.status === "awaiting_approval" && (
               <div className="flex gap-2 pt-1">
