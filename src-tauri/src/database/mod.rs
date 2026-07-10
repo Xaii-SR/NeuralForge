@@ -18,7 +18,11 @@ CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
     content_hash TEXT NOT NULL,
-    indexed_at INTEGER NOT NULL
+    indexed_at INTEGER NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    modified_at INTEGER NOT NULL DEFAULT 0,
+    language TEXT NOT NULL DEFAULT '',
+    line_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -208,6 +212,11 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // task row pointing at the attempt it replaces; attempt counting walks
     // this chain, so there is no counter column to drift.
     let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN retry_of TEXT", []);
+    // Sprint 12 (Context Engine): file metadata columns for existing databases
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN language TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE files ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0", []);
 
     Ok(conn)
 }
