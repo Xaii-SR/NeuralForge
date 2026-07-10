@@ -5,7 +5,6 @@ pub const FILE_CHANGED: &str = "FILE_CHANGED";
 pub const TERMINAL_OUTPUT: &str = "TERMINAL_OUTPUT";
 pub const AI_RESPONSE_TOKEN: &str = "AI_RESPONSE_TOKEN";
 pub const MODEL_LOADED: &str = "MODEL_LOADED";
-pub const MODEL_FAILED: &str = "MODEL_FAILED";
 pub const TASK_STARTED: &str = "TASK_STARTED";
 
 #[derive(Clone, Serialize)]
