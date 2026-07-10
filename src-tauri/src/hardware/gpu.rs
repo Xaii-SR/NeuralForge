@@ -1,6 +1,7 @@
 use serde::Serialize;
+use specta::Type;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct GpuInfo {
     pub name: String,
     pub vendor: String,

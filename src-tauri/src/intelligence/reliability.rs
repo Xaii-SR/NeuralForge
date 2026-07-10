@@ -5,6 +5,7 @@ use crate::governance::ledger::{self, LedgerEvent};
 use crate::governance::promotion::{self, PromotionRequest};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// Sprint 8: the Autonomous Reliability Layer. Everything here is DERIVED
 /// from rows the Sprint 1-7 systems already write - classification reads
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Closed set of failure causes, derived on read from the status, error,
 /// and verification text the pipeline already records.
-#[derive(Serialize, Clone, Copy, PartialEq, Debug)]
+#[derive(Serialize, Type, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureClass {
     /// cargo check rejected the change (compiler diagnostics present).
@@ -227,7 +228,7 @@ pub fn request_retry(conn: &Connection, task_id: &str, policy: &RetryPolicy) -> 
 // Evidence completeness
 // ---------------------------------------------------------------------
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Type, Serialize, Clone, Debug)]
 pub struct CompletenessReport {
     pub complete: bool,
     pub missing: Vec<String>,
@@ -271,7 +272,7 @@ pub fn evidence_completeness(conn: &Connection, task_id: &str) -> AppResult<Comp
 // Confidence
 // ---------------------------------------------------------------------
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Type, Serialize, Clone, Debug)]
 pub struct ConfidenceReport {
     /// [0.0, 1.0]; only meaningful for COMPLETED tasks (others score 0).
     pub score: f64,
@@ -353,7 +354,7 @@ pub fn confidence_for_task(conn: &Connection, task_id: &str) -> AppResult<Confid
 // Structured task report
 // ---------------------------------------------------------------------
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct TaskReport {
     pub task: AgentTask,
     pub failure_class: FailureClass,

@@ -1,7 +1,8 @@
 use serde::Serialize;
+use specta::Type;
 use sysinfo::System;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct CpuInfo {
     pub brand: String,
     pub physical_cores: usize,

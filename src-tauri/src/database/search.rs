@@ -1,8 +1,9 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use specta::Type;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct SearchResult {
     pub path: String,
     pub start_line: i64,

@@ -1,11 +1,12 @@
 use crate::core::errors::{AppError, AppResult};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use tauri::{AppHandle, Emitter};
 
 const BASE_URL: &str = "http://localhost:11434";
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct OllamaModel {
     pub name: String,
     pub size_bytes: u64,

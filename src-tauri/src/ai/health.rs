@@ -1,4 +1,5 @@
 use serde::Serialize;
+use specta::Type;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -23,7 +24,7 @@ impl Default for ProviderStats {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct ProviderHealthInfo {
     pub provider: String,
     pub healthy: bool,

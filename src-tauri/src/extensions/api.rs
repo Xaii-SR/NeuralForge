@@ -1,12 +1,13 @@
 use super::manifest::{interpreter_for, InstalledExtension};
 use crate::core::errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct ExtensionResult {
     pub success: bool,
     pub output: serde_json::Value,

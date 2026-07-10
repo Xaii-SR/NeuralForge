@@ -5,6 +5,7 @@ use crate::ai::providers::ProviderId;
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -72,7 +73,7 @@ fn estimate_tokens(text: &str) -> u64 {
     (text.len() as u64 / 4).max(1)
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct CostEstimate {
     pub estimated_tokens: u64,
     pub estimated_cost_usd: f64,
@@ -169,7 +170,7 @@ pub fn score_models_with_capabilities(
     scored
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct AutoSelection {
     pub provider: String,
     pub model: String,

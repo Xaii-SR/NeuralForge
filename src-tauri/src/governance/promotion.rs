@@ -3,6 +3,7 @@ use super::ledger::{self, LedgerEvent};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use specta::Type;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// passing evidence exists for the task. Promotion is the separate,
 /// explicit step that consumes that evidence, and it is recorded as a
 /// first-class row plus ledger events under the task's correlation chain.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Type, Serialize, Clone, Debug)]
 pub struct PromotionRequest {
     pub id: String,
     /// The evidence row this promotion was judged against. Empty string

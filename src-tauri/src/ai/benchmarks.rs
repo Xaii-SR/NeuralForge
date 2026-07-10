@@ -2,6 +2,7 @@ use crate::ai::providers::ollama::{self, ChatMessage};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use specta::Type;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -30,7 +31,7 @@ pub fn open(db_path: &Path) -> AppResult<Connection> {
     Ok(conn)
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct BenchmarkResult {
     pub model: String,
     pub tokens_per_second: Option<f64>,

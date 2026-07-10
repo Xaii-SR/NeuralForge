@@ -6,8 +6,9 @@ use cpu::CpuInfo;
 use gpu::GpuInfo;
 use memory::MemoryInfo;
 use serde::Serialize;
+use specta::Type;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct HardwareInfo {
     pub cpu: CpuInfo,
     pub memory: MemoryInfo,

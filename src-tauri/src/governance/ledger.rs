@@ -1,6 +1,7 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use specta::Type;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,7 +69,7 @@ impl std::fmt::Display for LedgerEvent {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct LedgerEntry {
     pub seq: i64,
     pub event_type: String,
@@ -81,7 +82,7 @@ pub struct LedgerEntry {
     pub entry_hash: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct ChainVerification {
     pub valid: bool,
     pub entries: i64,

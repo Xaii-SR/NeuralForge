@@ -1,16 +1,17 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::Connection;
 use serde::Serialize;
+use specta::Type;
 use std::collections::HashMap;
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Type, Serialize, Clone, Debug, PartialEq)]
 pub struct FileCandidate {
     pub path: String,
     pub score: f64,
     pub match_kind: String,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Type, Clone, Debug)]
 pub struct ResolutionResult {
     /// Some(path) only when one candidate clearly beats the runner-up - a
     /// confident, transparent auto-resolution, not a silent guess among

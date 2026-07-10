@@ -1,6 +1,7 @@
 use serde::Serialize;
+use specta::Type;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct VramCheckResult {
     pub sufficient: bool,
     pub required_mb: u64,

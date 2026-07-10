@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// Extension manifest schema (extension.json). "runtime" determines how the
 /// entry point is invoked: "python" -> `python <entry_point>`, "node" ->
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// extension is an interpreted script, which keeps the process-isolation
 /// story simple (no arbitrary native code ever gets loaded into or run
 /// alongside the host).
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Type, Deserialize, Serialize, Clone)]
 pub struct ExtensionManifest {
     pub name: String,
     pub version: String,
@@ -19,7 +20,7 @@ pub struct ExtensionManifest {
     pub permissions: Vec<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct InstalledExtension {
     pub manifest: ExtensionManifest,
     pub dir: String,

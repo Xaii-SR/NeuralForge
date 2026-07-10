@@ -1,7 +1,8 @@
 use serde::Serialize;
+use specta::Type;
 use sysinfo::System;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct MemoryInfo {
     pub total_mb: u64,
     pub available_mb: u64,

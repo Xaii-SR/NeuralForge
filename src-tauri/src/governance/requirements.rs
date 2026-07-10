@@ -3,13 +3,14 @@ use super::validator::{validate, RequirementInput};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The validated contract that must exist before the agent planner will
 /// accept a task. Everything the planner consumes (intent + acceptance
 /// criteria) lives here instead of in a raw prompt string, and every
 /// version of it is preserved in requirement_history.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Type, Clone)]
 pub struct RequirementContract {
     pub id: String,
     pub version: i64,
@@ -29,7 +30,7 @@ pub struct RequirementContract {
 /// One row per version, written on create and on every update - the
 /// requirement's append-only history, queryable by requirement or by
 /// correlation ID.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct RequirementHistoryEntry {
     pub requirement_id: String,
     pub version: i64,

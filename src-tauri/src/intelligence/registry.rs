@@ -1,6 +1,7 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// Sprint 5: a worker the router can assign tasks to. Today only the Coder
 /// agent type actually executes anything, so this registry is machinery -
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// parallel tracking mechanism to drift out of sync - the governance
 /// tables are the single source of truth and this table is a cache of
 /// them.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 pub struct WorkerProfile {
     pub id: String,
     pub name: String,

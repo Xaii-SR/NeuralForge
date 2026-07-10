@@ -1,8 +1,9 @@
 pub mod ollama;
 
 use serde::Serialize;
+use specta::Type;
 
-#[derive(Serialize, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Type, Clone, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
     Ollama,
@@ -18,7 +19,7 @@ pub enum ProviderId {
     HuggingFace,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct ProviderMetadata {
     pub id: ProviderId,
     pub name: String,

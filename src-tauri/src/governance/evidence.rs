@@ -1,6 +1,7 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
+use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Structured, queryable execution evidence - what agent_history.md's
@@ -25,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// - This preserves the NeuralForge traceability contract: historical timeline reconstruction must be exact
 /// 
 /// Future NeuralForge development MUST preserve this contract. Evidence ordering is not optional - it's a core requirement for complete traceability.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct EvidenceRecord {
     pub id: String,
     pub insertion_sequence: i64,

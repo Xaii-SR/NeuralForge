@@ -3,11 +3,12 @@ use crate::core::errors::{AppError, AppResult};
 use crate::core::events::emit_file_changed;
 use crate::core::state::AppState;
 use serde::Serialize;
+use specta::Type;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Type, Clone)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,

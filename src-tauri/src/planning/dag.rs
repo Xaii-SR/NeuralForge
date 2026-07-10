@@ -1,11 +1,12 @@
 use crate::core::errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 /// One node of a task DAG before it becomes an agent_tasks row: what to do,
 /// where, and which sibling tasks must complete first. The existing
 /// single-task executor consumes each node unchanged - the DAG layer only
 /// decides ordering and gating, never how a node is applied or verified.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 pub struct PlannedTask {
     pub id: String,
     pub objective: String,
@@ -16,7 +17,7 @@ pub struct PlannedTask {
 /// Dependency graph for one requirement's decomposition. `edges` holds
 /// (task_id, depends_on_id) pairs - derived from the nodes' depends_on
 /// lists so the two can never disagree.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Type, Clone, Debug)]
 pub struct TaskDAG {
     pub nodes: Vec<PlannedTask>,
     pub edges: Vec<(String, String)>,

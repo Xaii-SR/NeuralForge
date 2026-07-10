@@ -1,5 +1,6 @@
 use super::registry::WorkerProfile;
 use serde::Serialize;
+use specta::Type;
 
 /// Sprint 5 capability matcher. Pure - no I/O - so the ranking rule is
 /// fully testable: capability coverage dominates, reliability breaks ties.
@@ -10,7 +11,7 @@ use serde::Serialize;
 /// reliability range: a less reliable worker that CAN do the job beats a
 /// perfectly reliable one that can't. With no requirements, everyone has
 /// coverage 1.0 and pure reliability ordering falls out.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Type, Clone, Debug)]
 pub struct WorkerMatch {
     pub profile: WorkerProfile,
     pub score: f64,

@@ -5,6 +5,7 @@ pub mod planner;
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::governance::ledger::{self, LedgerEvent};
@@ -14,7 +15,7 @@ use crate::governance::ledger::{self, LedgerEvent};
 /// "files" is a single-element list for now (Phase 5 foundation scope is
 /// one file per task); the schema/struct shape already supports a real list
 /// so multi-file tasks are an additive change later, not a rework.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Type, Clone)]
 pub struct AgentTask {
     pub id: String,
     pub objective: String,
