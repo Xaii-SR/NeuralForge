@@ -104,7 +104,8 @@ mod tests {
     fn temp_workspace() -> PathBuf {
         let mut dir = std::env::temp_dir();
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        dir.push(format!("neuralforge_executor_test_{nanos}"));
+        let tid = std::thread::current().id();
+        dir.push(format!("neuralforge_executor_test_{nanos}_{tid:?}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
