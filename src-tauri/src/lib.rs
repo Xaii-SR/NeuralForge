@@ -75,6 +75,7 @@ pub fn run() {
       ai::composer::remove_composer_file,
       ai::composer::send_composer_message,
       ai::composer::get_composer_session,
+      ai::composer::execute_composer_command,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,

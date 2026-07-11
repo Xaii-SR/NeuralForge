@@ -11,6 +11,15 @@ pub struct CodeBlock {
     pub file_path: String,
     pub language: String,
     pub code: String,
+    #[serde(rename = "blockType")]
+    pub block_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,13 +92,24 @@ fn parse_code_blocks(response: &str) -> (String, Vec<CodeBlock>) {
         let file_path = cap.get(2).map(|c| c.as_str().trim()).unwrap_or("").to_string();
         let code = cap.get(3).map(|c| c.as_str().trim_end()).unwrap_or("").to_string();
 
-        blocks.push(CodeBlock { file_path, language, code });
+        let block_type = if file_path.starts_with("exec") { "terminal_command".to_string() } else { "file_edit".to_string() };
+        blocks.push(CodeBlock { file_path, language, code, block_type });
         last_end = end;
     }
     // Remaining text
     clean.push_str(&response[last_end..]);
 
     (clean.trim().to_string(), blocks)
+}
+
+// ── Execute Command ───────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn execute_composer_command(command: String, workspace_root: String) -> Result<CommandResult, String> {
+    let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
+    let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+    let output = std::process::Command::new(shell).arg(flag).arg(&command).current_dir(&workspace_root).output().map_err(|e| format!("Failed to execute: {e}"))?;
+    Ok(CommandResult { stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(), stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(), success: output.status.success() })
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────
