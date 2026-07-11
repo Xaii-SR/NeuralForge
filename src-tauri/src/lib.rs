@@ -116,6 +116,7 @@ pub fn run() {
       extensions::run_extension,
       bootstrap::propose_self_improvement,
       workspace::search::search_workspace_files,
+      workspace::embeddings::build_local_index,
       bootstrap::apply_self_improvement,
     ])
     .setup(|app| {
