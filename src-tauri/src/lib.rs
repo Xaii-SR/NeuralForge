@@ -12,6 +12,7 @@ mod intelligence;
 mod release_validation;
 mod planning;
 mod terminal;
+mod workspace;
 
 use ai::benchmarks::BenchmarkDbState;
 use ai::composer::ComposerSessionState;
@@ -114,6 +115,7 @@ pub fn run() {
       extensions::uninstall_extension,
       extensions::run_extension,
       bootstrap::propose_self_improvement,
+      workspace::search::search_workspace_files,
       bootstrap::apply_self_improvement,
     ])
     .setup(|app| {

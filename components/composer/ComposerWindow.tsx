@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComposerSession } from "@/hooks/useComposer";
 import { useMentionMenu } from "@/hooks/useMentionMenu";
+import { useDebounce } from "@/hooks/useDebounce";
 import MentionMenu from "@/components/composer/MentionMenu";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface ComposerWindowProps {
   session: ComposerSession;
@@ -14,12 +16,6 @@ export interface ComposerWindowProps {
   onClose: () => void;
 }
 
-const MOCK_FILES = [
-  "src/main.rs", "src/lib.rs", "src/ai/mod.rs", "src/ai/composer.rs",
-  "src/ai/completion.rs", "src/database/search.rs", "src/database/indexer.rs",
-  "components/Editor.tsx", "components/EditorPane.tsx", "hooks/useComposer.ts",
-  "hooks/useGhostText.ts", "app/page.tsx", "app/layout.tsx",
-];
 
 export default function ComposerWindow({
   session,
@@ -35,6 +31,16 @@ export default function ComposerWindow({
   const inputRef = useRef<HTMLInputElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const { state: mention, open: openMention, close: closeMention, setQuery: setMentionQuery, setActiveIndex: setMentionIndex } = useMentionMenu();
+  const [suggestedFiles, setSuggestedFiles] = useState<string[]>([]);
+  const debouncedQuery = useDebounce(mention.query, 150);
+
+  // Debounced workspace file search
+  useEffect(() => {
+    if (!mention.isOpen || !debouncedQuery) { setSuggestedFiles([]); return; }
+    invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10, workspaceRoot: "" })
+      .then(setSuggestedFiles)
+      .catch(() => setSuggestedFiles([]));
+  }, [debouncedQuery, mention.isOpen]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -86,9 +92,9 @@ export default function ComposerWindow({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        const filtered = mention.query
-          ? MOCK_FILES.filter((f) => f.toLowerCase().includes(mention.query.toLowerCase()))
-          : MOCK_FILES;
+        const filtered = suggestedFiles.length > 0
+          ? suggestedFiles
+          : (mention.query ? [] : []);
         const selected = filtered[mention.activeIndex];
         if (selected) {
           // Remove @query from input, add file
@@ -209,12 +215,12 @@ export default function ComposerWindow({
       </div>
 
       {/* Mention menu */}
-      {mention.isOpen && (
+          {mention.isOpen && (
         <MentionMenu
           x={mention.coords.x}
           y={mention.coords.y}
           query={mention.query}
-          items={MOCK_FILES}
+          items={suggestedFiles}
           activeIndex={mention.activeIndex}
           onSelect={(file) => {
             const atIndex = inputValue.lastIndexOf("@");
