@@ -15,6 +15,7 @@ mod terminal;
 
 use ai::benchmarks::BenchmarkDbState;
 use ai::composer::ComposerSessionState;
+use ai::composer::ProcessTracker;
 use ai::health::HealthRegistry;
 use core::state::AppState;
 use database::DbState;
@@ -30,6 +31,7 @@ pub fn run() {
     .manage(DbState::default())
     .manage(BenchmarkDbState::default())
     .manage(ComposerSessionState::default())
+    .manage(ProcessTracker::new())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -75,7 +77,8 @@ pub fn run() {
       ai::composer::remove_composer_file,
       ai::composer::send_composer_message,
       ai::composer::get_composer_session,
-      ai::composer::execute_composer_command,
+      ai::composer::execute_composer_command_stream,
+      ai::composer::kill_composer_command,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,

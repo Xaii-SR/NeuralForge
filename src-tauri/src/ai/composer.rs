@@ -102,14 +102,96 @@ fn parse_code_blocks(response: &str) -> (String, Vec<CodeBlock>) {
     (clean.trim().to_string(), blocks)
 }
 
-// ── Execute Command ───────────────────────────────────────────────────────
+use std::collections::HashMap;
+use tauri::Emitter;
+
+// ── Process Tracker ───────────────────────────────────────────────────────
+
+pub struct ProcessTracker {
+    pub children: Mutex<HashMap<String, std::process::Child>>,
+}
+
+impl ProcessTracker {
+    pub fn new() -> Self { ProcessTracker { children: Mutex::new(HashMap::new()) } }
+}
+
+#[derive(Clone, Serialize)]
+pub struct TerminalStreamPayload {
+    pub block_id: String,
+    pub line: String,
+    pub done: bool,
+}
 
 #[tauri::command]
-pub fn execute_composer_command(command: String, workspace_root: String) -> Result<CommandResult, String> {
+pub async fn execute_composer_command_stream(
+    app: tauri::AppHandle,
+    state: State<'_, ProcessTracker>,
+    block_id: String,
+    command: String,
+    workspace_root: String,
+) -> Result<(), String> {
     let shell = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
     let flag = if cfg!(target_os = "windows") { "/C" } else { "-c" };
-    let output = std::process::Command::new(shell).arg(flag).arg(&command).current_dir(&workspace_root).output().map_err(|e| format!("Failed to execute: {e}"))?;
-    Ok(CommandResult { stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(), stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(), success: output.status.success() })
+
+    let mut child = std::process::Command::new(shell)
+        .arg(flag)
+        .arg(&command)
+        .current_dir(&workspace_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn: {e}"))?;
+
+    // Take stdout and stderr pipes before inserting child into tracker
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
+
+    // Store the child for kill capability
+    {
+        let mut children = state.children.lock().map_err(|e| e.to_string())?;
+        children.insert(block_id.clone(), child);
+    }
+
+    // Stream stdout
+    if let Some(stdout) = child_stdout {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = app.emit("terminal-stream", TerminalStreamPayload { block_id: block_id.clone(), line: l, done: false });
+            }
+        }
+    }
+
+    // Stream stderr
+    if let Some(stderr) = child_stderr {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = app.emit("terminal-stream", TerminalStreamPayload { block_id: block_id.clone(), line: format!("[stderr] {l}"), done: false });
+            }
+        }
+    }
+
+    let _ = app.emit("terminal-stream", TerminalStreamPayload { block_id: block_id.clone(), line: String::new(), done: true });
+
+    // Retrieve and wait for the child
+    let mut children = state.children.lock().map_err(|e| e.to_string())?;
+    if let Some(mut c) = children.remove(&block_id) {
+        let _ = c.wait();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn kill_composer_command(state: State<'_, ProcessTracker>, block_id: String) -> Result<(), String> {
+    let mut children = state.children.lock().map_err(|e| e.to_string())?;
+    if let Some(mut child) = children.remove(&block_id) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    Ok(())
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────

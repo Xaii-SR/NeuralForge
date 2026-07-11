@@ -1,7 +1,8 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 let _blockIdCounter = 0;
 function nextBlockId(): string {
@@ -38,90 +39,83 @@ export function useComposer() {
 
   const initialize = useCallback(async (files: string[]) => {
     const sessionId = `composer-${Date.now()}`;
-    const result = await invoke<ComposerSession>("initialize_composer_session", {
-      sessionId,
-      initialFiles: files,
-    });
-    setSession(result);
-    setIsOpen(true);
-    return result;
+    const result = await invoke<ComposerSession>("initialize_composer_session", { sessionId, initialFiles: files });
+    setSession(result); setIsOpen(true); return result;
   }, []);
 
   const addFile = useCallback(async (filePath: string) => {
     if (!session) return;
-    const result = await invoke<ComposerSession>("add_composer_file", {
-      sessionId: session.session_id,
-      filePath,
-    });
-    setSession(result);
+    const r = await invoke<ComposerSession>("add_composer_file", { sessionId: session.session_id, filePath });
+    setSession(r);
   }, [session]);
 
   const removeFile = useCallback(async (filePath: string) => {
     if (!session) return;
-    const result = await invoke<ComposerSession>("remove_composer_file", {
-      sessionId: session.session_id,
-      filePath,
-    });
-    setSession(result);
+    const r = await invoke<ComposerSession>("remove_composer_file", { sessionId: session.session_id, filePath });
+    setSession(r);
   }, [session]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!session) return;
-    const history = await invoke<ComposerMessage[]>("send_composer_message", {
-      sessionId: session.session_id,
-      content,
-    });
-    const historyWithIds = history.map((msg) => ({
+    const history = await invoke<ComposerMessage[]>("send_composer_message", { sessionId: session.session_id, content });
+    const h = history.map((msg) => ({
       ...msg,
-      code_blocks: msg.code_blocks.map((block) => ({
-        ...block,
-        id: block.id || nextBlockId(),
-        status: (block.status || "idle") as any,
-        blockType: block.blockType || (block.file_path?.startsWith("exec") ? "terminal_command" as const : "file_edit" as const),
+      code_blocks: msg.code_blocks.map((b) => ({
+        ...b, id: b.id || nextBlockId(), status: (b.status || "idle") as any,
+        blockType: b.blockType || (b.file_path?.startsWith("exec") ? "terminal_command" as const : "file_edit" as const),
       })),
     }));
-    setSession((prev) => prev ? { ...prev, message_history: historyWithIds } : null);
+    setSession((prev) => prev ? { ...prev, message_history: h } : null);
   }, [session]);
 
-  const updateBlockStatus = useCallback((blockId: string, status: "idle" | "applied" | "accepted" | "rejected" | "running" | "completed") => {
+  const updateBlockStatus = useCallback((blockId: string, status: any) => {
     if (!session) return;
-    const updated = session.message_history.map((msg) => ({
-      ...msg,
-      code_blocks: msg.code_blocks.map((block) =>
-        block.id === blockId ? { ...block, status } : block
-      ),
-    }));
-    setSession({ ...session, message_history: updated });
+    setSession({
+      ...session,
+      message_history: session.message_history.map((msg) => ({
+        ...msg,
+        code_blocks: msg.code_blocks.map((b) => b.id === blockId ? { ...b, status } : b),
+      })),
+    });
   }, [session]);
 
   const executeTerminalBlock = useCallback(async (blockId: string, command: string) => {
     if (!session) return;
-    // Set status to running
     updateBlockStatus(blockId, "running");
     try {
-      const result = await invoke<{ stdout: string; stderr: string; success: boolean }>("execute_composer_command", {
-        command,
-        workspaceRoot: "", // Will use default cwd
-      });
-      const output = `Command Output:\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nSuccess: ${result.success}`;
-      // Update block with output
-      const updated = session.message_history.map((msg) => ({
-        ...msg,
-        code_blocks: msg.code_blocks.map((block) =>
-          block.id === blockId ? { ...block, status: "completed" as const, output } : block
-        ),
-      }));
-      setSession({ ...session, message_history: updated });
-      // Auto-feedback: send output back to AI
-      await sendMessage(output);
-    } catch (e) {
-      updateBlockStatus(blockId, "completed");
-    }
-  }, [session, updateBlockStatus, sendMessage]);
+      await invoke("execute_composer_command_stream", { blockId, command, workspaceRoot: "" });
+    } catch { updateBlockStatus(blockId, "completed"); }
+  }, [session, updateBlockStatus]);
 
-  const close = useCallback(() => {
-    setIsOpen(false);
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    listen<{ block_id: string; line: string; done: boolean }>("terminal-stream", (event) => {
+      if (disposed) return;
+      const { block_id, line, done } = event.payload;
+      setSession((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          message_history: prev.message_history.map((msg) => ({
+            ...msg,
+            code_blocks: msg.code_blocks.map((b) => {
+              if (b.id !== block_id) return b;
+              return { ...b, output: done ? b.output || "" : (b.output || "") + line + "\n", status: done ? "completed" as const : "running" as const };
+            }),
+          })),
+        };
+      });
+    }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
-  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, close, setIsOpen };
+  const killCommand = useCallback(async (blockId: string) => {
+    await invoke("kill_composer_command", { blockId });
+    updateBlockStatus(blockId, "completed");
+  }, [updateBlockStatus]);
+
+  const close = useCallback(() => setIsOpen(false), []);
+
+  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
 }
