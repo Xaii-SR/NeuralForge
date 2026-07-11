@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Editor from "./Editor";
 import DiffEditor from "@/components/editor/DiffEditor";
+import DiffActionBar from "@/components/editor/DiffActionBar";
 import TabBar from "./TabBar";
 import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
@@ -27,7 +28,7 @@ export default function EditorPane({
   onSave,
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
-  const { setSnapshot, getSnapshot } = useVersionCache();
+  const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
   if (!activeFile) {
@@ -43,6 +44,24 @@ export default function EditorPane({
   return (
     <div className="flex h-full w-full flex-col">
       <TabBar tabs={openFiles} activePath={activePath} onSelect={onSelect} onClose={onClose} />
+      {/* Diff action bar */}
+      <DiffActionBar
+        isDiffMode={isDiffMode}
+        onAccept={() => {
+          if (!activeFile) return;
+          clearSnapshot(activeFile.path);
+          setIsDiffMode(false);
+        }}
+        onReject={() => {
+          if (!activeFile) return;
+          const original = getSnapshot(activeFile.path);
+          if (original !== null) {
+            onChange(activeFile.path, original);
+          }
+          clearSnapshot(activeFile.path);
+          setIsDiffMode(false);
+        }}
+      />
       {/* Diff mode toggle bar */}
       <div className="flex items-center gap-2 border-b border-[#333] bg-[#252526] px-3 py-1">
         <button
