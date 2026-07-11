@@ -63,6 +63,7 @@ pub fn run() {
       ai::get_benchmark_for_model,
       ai::clear_response_cache,
       ai::auto_select_model,
+      ai::dispatch_inline_refactor,
       ai::completion::get_ghost_text_prediction,
       ai::completion::get_prediction_with_fim,
       ai::completion::store_prediction_result,

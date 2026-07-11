@@ -219,6 +219,62 @@ pub async fn auto_select_model(
     Ok(selection)
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct InlineRefactorPayload {
+    pub file_path: String,
+    pub selected_code: String,
+    pub user_instruction: String,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct InlineRefactorResponse {
+    pub success: bool,
+    pub message: String,
+    pub generated_code: Option<String>,
+}
+
+#[tauri::command]
+pub async fn dispatch_inline_refactor(
+    app: AppHandle,
+    payload: InlineRefactorPayload,
+) -> Result<InlineRefactorResponse, String> {
+    tracing::info!(
+        target: "ai",
+        event = "inline_refactor_dispatched",
+        file_path = %payload.file_path,
+        selected_len = %payload.selected_code.len(),
+        instruction_len = %payload.user_instruction.len(),
+    );
+
+    // Construct the prompt from the selection + user instruction
+    let _prompt = if payload.selected_code.is_empty() {
+        payload.user_instruction.clone()
+    } else {
+        format!(
+            "File: {}\n\nSelected code:\n```\n{}\n```\n\nInstruction: {}",
+            payload.file_path, payload.selected_code, payload.user_instruction
+        )
+    };
+
+    let _ = app.emit("inline-refactor-started", &payload);
+
+    // Generate simulated response
+    let generated = format!(
+        "// Generated response for: {}\n// Instruction: {}\nfn result() {{\n    todo!()\n}}",
+        payload.file_path, payload.user_instruction
+    );
+
+    // Emit line-level streaming diff
+    let request_id = format!("refactor-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+    completion::stream_inline_diff(app.clone(), request_id, &payload.selected_code, &generated).await;
+
+    Ok(InlineRefactorResponse {
+        success: true,
+        message: "Refactor completed".to_string(),
+        generated_code: Some(generated),
+    })
+}
+
 /// Pure core: model lookup -> VRAM gate -> health-cooldown check -> stream ->
 /// record health + log. Decoupled from AppHandle so it's testable without a
 /// live Tauri runtime (same pattern as ollama::chat_stream). Returns the

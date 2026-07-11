@@ -194,3 +194,21 @@ export function clearResponseCache(): Promise<number> {
 export function autoSelectModel(prompt: string): Promise<AutoSelection> {
   return invoke("auto_select_model", { prompt });
 }
+
+export interface InlineRefactorPayload {
+  file_path: string;
+  selected_code: string;
+  user_instruction: string;
+}
+
+export interface InlineRefactorResponse {
+  success: boolean;
+  message: string;
+  generated_code: string | null;
+}
+
+export function dispatchInlineRefactor(
+  payload: InlineRefactorPayload
+): Promise<InlineRefactorResponse> {
+  return invoke("dispatch_inline_refactor", { payload });
+}

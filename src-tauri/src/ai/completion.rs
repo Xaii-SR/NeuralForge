@@ -80,6 +80,55 @@ pub fn run_prediction_pipeline(file_path: String, content: String, cursor_line: 
     PredictionResponse { fim_prompt: formatted, context: ctx, cached: false, completion: String::new(), remaining_suffix: suffix }
 }
 
+// ── Streaming Diff Engine ─────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Type)]
+pub enum DiffOp { Insert, Delete, Equal }
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct DiffLinePayload {
+    pub op: DiffOp,
+    pub line: String,
+    pub line_index: usize,
+    pub request_id: String,
+}
+
+/// Compares original code and generated text line-by-line, emitting structured
+/// `DiffLinePayload` records via the `"inline-diff-stream"` Tauri event.
+pub async fn stream_inline_diff(
+    app: AppHandle,
+    request_id: String,
+    original_code: &str,
+    generated_text: &str,
+) {
+    let orig_lines: Vec<&str> = original_code.lines().collect();
+    let gen_lines: Vec<&str> = generated_text.lines().collect();
+    let mut gen_used: Vec<bool> = vec![false; gen_lines.len()];
+    let mut diff_ops: Vec<DiffLinePayload> = Vec::new();
+
+    for (i, orig_line) in orig_lines.iter().enumerate() {
+        let matched = gen_lines.iter().enumerate().skip(i).find(|(_, gl)| *gl == orig_line);
+        if let Some((j, _)) = matched {
+            gen_used[j] = true;
+            diff_ops.push(DiffLinePayload { op: DiffOp::Equal, line: orig_line.to_string(), line_index: i, request_id: request_id.clone() });
+        } else {
+            diff_ops.push(DiffLinePayload { op: DiffOp::Delete, line: orig_line.to_string(), line_index: i, request_id: request_id.clone() });
+        }
+    }
+    for (j, gen_line) in gen_lines.iter().enumerate() {
+        if !gen_used[j] {
+            diff_ops.push(DiffLinePayload { op: DiffOp::Insert, line: gen_line.to_string(), line_index: orig_lines.len() + j, request_id: request_id.clone() });
+        }
+    }
+    for op in &diff_ops {
+        let _ = app.emit("inline-diff-stream", op);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let _ = app.emit("inline-diff-stream", &DiffLinePayload { op: DiffOp::Equal, line: String::new(), line_index: usize::MAX, request_id });
+}
+
+// ── Core Prediction Pipeline ──────────────────────────────────────────────
+
 pub async fn async_stream_completion(app: AppHandle, request_id: String, file_path: String, content: String, cursor_line: usize, cursor_column: usize, _template: FimTemplate) {
     if should_debounce() { return; }
     let ctx = extract_prediction_window(file_path, content, cursor_line, cursor_column);
