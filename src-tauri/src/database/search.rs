@@ -173,6 +173,41 @@ pub fn get_cached_context() -> Option<String> {
     CONTEXT_CACHE.lock().ok().and_then(|g| g.clone())
 }
 
+/// Looks up a function symbol by name in the symbols table.
+fn get_function_symbol(conn: &Connection, name: &str) -> Option<(String, i64, i64)> {
+    conn.query_row(
+        "SELECT file_path, start_line, end_line FROM symbols WHERE kind = 'function' AND name = ?1 LIMIT 1",
+        params![name],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+    ).ok()
+}
+
+/// Finds files whose content references a given function name (callers).
+fn get_callers(conn: &Connection, name: &str, exclude_path: &str) -> Vec<String> {
+    let mut stmt = match conn.prepare(
+        "SELECT DISTINCT path FROM chunks WHERE content LIKE ?1 AND path != ?2 LIMIT 10"
+    ) {
+        Ok(s) => s, Err(_) => return vec![],
+    };
+    let pattern = format!("%{}%", name);
+    let rows = match stmt.query_map(params![pattern, exclude_path], |row| {
+        row.get::<_, String>(0)
+    }) { Ok(r) => r.filter_map(|r| r.ok()).collect(), Err(_) => return vec![] };
+    rows
+}
+
+/// Determines if a query contains a likely function name (capitalized or followed by parentheses).
+fn extract_target_function(query: &str) -> Option<String> {
+    let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
+    for w in &words {
+        if w.ends_with("()") || w.chars().any(|c| c.is_uppercase()) {
+            let clean = w.trim_end_matches("()").trim_end_matches('s');
+            if clean.len() >= 2 { return Some(clean.to_string()); }
+        }
+    }
+    None
+}
+
 pub fn enriched_context(
     conn: &Connection, _workspace_root: &Path, query: &str, memory: &str,
     resolved_file: Option<&str>, max_tokens: usize,
@@ -202,6 +237,28 @@ pub fn enriched_context(
         if global_visited.contains(file_path) { continue; }
         let deps = get_dependency_info(conn, file_path, 0, &mut global_visited);
         if !deps.is_empty() { items.push(EnrichedItem { priority: 3, label: format!("Dependencies of {}", file_path), content: deps.join("\n") }); }
+    }
+
+    // Phase 5: Call-graph priority scoring
+    let target_fn = extract_target_function(query);
+    let callers = target_fn.as_ref().and_then(|name| {
+        let (def_path, _, _) = get_function_symbol(conn, name)?;
+        Some(get_callers(conn, name, &def_path))
+    }).unwrap_or_default();
+
+    if let Some(name) = &target_fn {
+        if let Some((def_path, _, _)) = get_function_symbol(conn, name) {
+            for item in &mut items {
+                if callers.contains(&item.label.split(' ').nth(1).unwrap_or("").to_string()) {
+                    // Direct caller: 1.35x boost (lower effective priority number = higher rank)
+                    item.priority = (item.priority as f64 / 1.35) as u8;
+                }
+                if item.label.contains(&def_path) {
+                    // Definition file: 1.2x boost
+                    item.priority = (item.priority as f64 / 1.2) as u8;
+                }
+            }
+        }
     }
 
     items.sort_by_key(|i| i.priority);
