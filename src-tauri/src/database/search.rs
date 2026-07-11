@@ -120,6 +120,36 @@ fn prune_blocks(content: &str, max_chars: usize, symbols: &[(i64, i64, String, S
     result
 }
 
+/// Applies variable-level def-use extraction within function bodies. Scans
+/// lines and identifies the definition-use span of a target variable,
+/// replacing unrelated interior lines with a placeholder.
+fn prune_to_def_use(content: &str, var_name: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut first_def: Option<usize> = None;
+    let mut last_use: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim().contains(var_name) && !line.trim().starts_with("//") {
+            if first_def.is_none() { first_def = Some(i); }
+            last_use = Some(i);
+        }
+    }
+    let (start, end) = match (first_def, last_use) {
+        (Some(s), Some(e)) if s < e && (e - s) < lines.len() / 2 => (s, e),
+        _ => return content.to_string(),
+    };
+    let mut result: Vec<String> = Vec::new();
+    for i in 0..start { result.push(lines[i].to_string()); }
+    for i in start..=end { result.push(lines[i].to_string()); }
+    for i in (end + 1)..lines.len() {
+        if lines[i].trim().starts_with('}') || lines[i].trim().contains("[body pruned") {
+            result.push(lines[i].to_string());
+        } else {
+            result.push("    // [unrelated block scope omitted]".to_string());
+        }
+    }
+    result.join("\n")
+}
+
 fn stitch_chunks(results: &[SearchResult]) -> Vec<SearchResult> {
     let mut by_file: HashMap<String, Vec<&SearchResult>> = HashMap::new();
     for r in results { by_file.entry(r.path.clone()).or_default().push(r); }
@@ -196,6 +226,18 @@ fn get_callers(conn: &Connection, name: &str, exclude_path: &str) -> Vec<String>
     rows
 }
 
+/// Extracts a target variable name from the query (lowercase, 2+ chars, not noise words).
+fn extract_target_variable(query: &str) -> Option<String> {
+    let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
+    let skip = ["the","how","what","when","this","that","from","with","does","work"];
+    for w in &words {
+        if w.len() >= 2 && w.chars().all(|c| c.is_lowercase() || c == '_') && !skip.contains(w) {
+            return Some(w.to_string());
+        }
+    }
+    None
+}
+
 /// Determines if a query contains a likely function name (capitalized or followed by parentheses).
 fn extract_target_function(query: &str) -> Option<String> {
     let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
@@ -213,6 +255,7 @@ pub fn enriched_context(
     resolved_file: Option<&str>, max_tokens: usize,
 ) -> AppResult<String> {
     let _intent = classify_intent(query);
+    let target_var = extract_target_variable(query);
     let mut items: Vec<EnrichedItem> = Vec::new();
 
     let search_results = keyword_search(conn, query, 5).unwrap_or_default();
@@ -220,7 +263,8 @@ pub fn enriched_context(
     let mut matched_paths: Vec<String> = Vec::new();
     for result in &stitched {
         let symbols = get_symbol_boundaries(conn, &result.path);
-        let content = prune_blocks(&result.content, 800, &symbols);
+        let mut content = prune_blocks(&result.content, 800, &symbols);
+        if let Some(ref var) = target_var { content = prune_to_def_use(&content, var); }
         items.push(EnrichedItem { priority: 0, label: format!("Code: {} (lines {}-{})", result.path, result.start_line, result.end_line), content });
         if !matched_paths.contains(&result.path) { matched_paths.push(result.path.clone()); }
     }
@@ -340,5 +384,21 @@ mod tests {
         let delta = compute_context_diff(old, new);
         assert!(!delta.is_delta);
         assert_eq!(delta.full_text, "bbbb");
+    }
+    #[test] fn def_use_isolates_var_span() {
+        let content = "pub fn process() {\n    let x = 1;\n    let y = x + 2;\n    let z = y * 3;\n    println!(\"{}\", z);\n}\n";
+        let pruned = prune_to_def_use(content, "y");
+        assert!(pruned.contains("let y = x + 2"), "def line should be kept");
+        assert!(pruned.contains("let z = y * 3"), "use line should be kept");
+        assert!(pruned.contains("[unrelated block scope omitted]"), "unrelated lines should be marked");
+    }
+    #[test] fn def_use_no_var_unchanged() {
+        let content = "pub fn run() {\n    let a = 1;\n    let b = 2;\n}\n";
+        assert_eq!(prune_to_def_use(content, "nonexistent"), content, "no match should return unchanged");
+    }
+    #[test] fn def_use_var_single_occurrence() {
+        let content = "pub fn calc() {\n    let result = 42;\n    return result;\n}\n";
+        let pruned = prune_to_def_use(content, "result");
+        assert!(pruned.contains("let result = 42"), "single occurrence def should be kept");
     }
 }
