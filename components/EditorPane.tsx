@@ -17,6 +17,8 @@ export interface EditorPaneProps {
   onClose: (path: string) => void;
   onChange: (path: string, value: string) => void;
   onSave: (path: string) => void;
+  activeComposerBlockId?: string | null;
+  onDiffResolved?: (blockId: string, status: "accepted" | "rejected") => void;
 }
 
 export default function EditorPane({
@@ -26,6 +28,8 @@ export default function EditorPane({
   onClose,
   onChange,
   onSave,
+  activeComposerBlockId = null,
+  onDiffResolved,
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
@@ -49,11 +53,17 @@ export default function EditorPane({
         isDiffMode={isDiffMode}
         onAccept={() => {
           if (!activeFile) return;
+          if (activeComposerBlockId && onDiffResolved) {
+            onDiffResolved(activeComposerBlockId, "accepted");
+          }
           clearSnapshot(activeFile.path);
           setIsDiffMode(false);
         }}
         onReject={() => {
           if (!activeFile) return;
+          if (activeComposerBlockId && onDiffResolved) {
+            onDiffResolved(activeComposerBlockId, "rejected");
+          }
           const original = getSnapshot(activeFile.path);
           if (original !== null) {
             onChange(activeFile.path, original);
