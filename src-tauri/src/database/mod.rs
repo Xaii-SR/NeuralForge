@@ -188,6 +188,23 @@ CREATE INDEX IF NOT EXISTS idx_symbols_qualified ON symbols(qualified_name);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
 CREATE INDEX IF NOT EXISTS idx_symbols_module ON symbols(module_path);
 
+
+
+CREATE TABLE IF NOT EXISTS dependencies (
+    id INTEGER PRIMARY KEY,
+    source_file TEXT NOT NULL,
+    target_file TEXT,
+    source_symbol TEXT,
+    target_symbol TEXT,
+    dependency_type TEXT NOT NULL,
+    import_source TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deps_source ON dependencies(source_file);
+CREATE INDEX IF NOT EXISTS idx_deps_target ON dependencies(target_file);
+CREATE INDEX IF NOT EXISTS idx_deps_type ON dependencies(dependency_type);
+
 CREATE TABLE IF NOT EXISTS worker_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
