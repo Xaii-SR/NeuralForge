@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComposerSession } from "@/hooks/useComposer";
+import { useMentionMenu } from "@/hooks/useMentionMenu";
+import MentionMenu from "@/components/composer/MentionMenu";
 
 export interface ComposerWindowProps {
   session: ComposerSession;
@@ -12,9 +14,17 @@ export interface ComposerWindowProps {
   onClose: () => void;
 }
 
+const MOCK_FILES = [
+  "src/main.rs", "src/lib.rs", "src/ai/mod.rs", "src/ai/composer.rs",
+  "src/ai/completion.rs", "src/database/search.rs", "src/database/indexer.rs",
+  "components/Editor.tsx", "components/EditorPane.tsx", "hooks/useComposer.ts",
+  "hooks/useGhostText.ts", "app/page.tsx", "app/layout.tsx",
+];
+
 export default function ComposerWindow({
   session,
   onSendMessage,
+  onAddFile,
   onApplyBlock,
   onClose,
 }: ComposerWindowProps) {
@@ -23,6 +33,8 @@ export default function ComposerWindow({
   const [position, setPosition] = useState({ x: 200, y: 100 });
   const dragOffset = useRef({ x: 0, y: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
+  const { state: mention, open: openMention, close: closeMention, setQuery: setMentionQuery, setActiveIndex: setMentionIndex } = useMentionMenu();
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -39,6 +51,67 @@ export default function ComposerWindow({
     window.addEventListener("mouseup", handleMouseUp);
     return () => { window.removeEventListener("mousemove", handleMouseMove); window.removeEventListener("mouseup", handleMouseUp); };
   }, [isDragging]);
+
+  // @ mention detection and keyboard navigation
+  const handleInputChange = useCallback((value: string) => {
+    setInputValue(value);
+    const atIndex = value.lastIndexOf("@");
+    if (atIndex >= 0 && (atIndex === 0 || value[atIndex - 1] === " ")) {
+      const query = value.slice(atIndex + 1);
+      if (!query.includes(" ")) {
+        // Calculate input position for the mention menu
+        const inputEl = inputRef.current;
+        if (inputEl) {
+          const rect = inputEl.getBoundingClientRect();
+          openMention({ x: rect.left, y: rect.top - 200 }, query);
+        }
+        setMentionQuery(query);
+        return;
+      }
+    }
+    closeMention(null);
+  }, [openMention, closeMention, setMentionQuery]);
+
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (mention.isOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex(mention.activeIndex + 1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex(Math.max(0, mention.activeIndex - 1));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const filtered = mention.query
+          ? MOCK_FILES.filter((f) => f.toLowerCase().includes(mention.query.toLowerCase()))
+          : MOCK_FILES;
+        const selected = filtered[mention.activeIndex];
+        if (selected) {
+          // Remove @query from input, add file
+          const atIndex = inputValue.lastIndexOf("@");
+          const newValue = inputValue.slice(0, atIndex) + selected + " ";
+          setInputValue(newValue);
+          onAddFile(selected);
+          closeMention(selected);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMention(null);
+        return;
+      }
+    }
+
+    if (e.key === "Enter" && !e.shiftKey && inputValue.trim() && !mention.isOpen) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  }, [mention, inputValue, onAddFile, setMentionIndex, closeMention]);
 
   const handleSubmit = async () => {
     if (!inputValue.trim()) return;
@@ -122,10 +195,37 @@ export default function ComposerWindow({
         ))}
       </div>
 
-      <div className="flex items-center gap-2 border-t border-[#333] px-3 py-2">
-        <input ref={inputRef} type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSubmit(); } }} placeholder="Describe the changes you want..." className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-[#555]" />
-        <button onClick={handleSubmit} disabled={!inputValue.trim()} className="rounded bg-blue-700 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-30">Send</button>
+      <div ref={inputContainerRef} className="relative flex items-center gap-2 border-t border-[#333] px-3 py-2">
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputValue}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={handleInputKeyDown}
+          placeholder="Describe changes... (use @ to add files)"
+          className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-[#555]"
+        />
+        <button onClick={handleSubmit} disabled={!inputValue.trim() || mention.isOpen} className="rounded bg-blue-700 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-30">Send</button>
       </div>
+
+      {/* Mention menu */}
+      {mention.isOpen && (
+        <MentionMenu
+          x={mention.coords.x}
+          y={mention.coords.y}
+          query={mention.query}
+          items={MOCK_FILES}
+          activeIndex={mention.activeIndex}
+          onSelect={(file) => {
+            const atIndex = inputValue.lastIndexOf("@");
+            const newValue = inputValue.slice(0, atIndex) + file + " ";
+            setInputValue(newValue);
+            onAddFile(file);
+            closeMention(file);
+          }}
+          onClose={() => closeMention(null)}
+        />
+      )}
     </div>
   );
 }
