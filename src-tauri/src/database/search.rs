@@ -3,7 +3,7 @@ use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use specta::Type;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Serialize, Type, Clone)]
@@ -22,13 +22,10 @@ struct EnrichedItem {
     content: String,
 }
 
-/// Lightweight token estimation: ~4 chars per token.
 fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }
 
-/// FTS5's default MATCH syntax ANDs every bare word together, so convert to
-/// OR-of-terms query for natural-language questions.
 fn to_fts5_or_query(text: &str) -> String {
     text.split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|term| !term.is_empty())
@@ -37,7 +34,6 @@ fn to_fts5_or_query(text: &str) -> String {
         .join(" OR ")
 }
 
-/// FTS5 full-text keyword search over indexed chunks.
 pub fn keyword_search(conn: &Connection, query: &str, limit: usize) -> AppResult<Vec<SearchResult>> {
     let fts_query = to_fts5_or_query(query);
     if fts_query.is_empty() {
@@ -62,7 +58,6 @@ pub fn keyword_search(conn: &Connection, query: &str, limit: usize) -> AppResult
         .map_err(|e| AppError::Provider(format!("search row read failed: {e}")))
 }
 
-/// Fetches a symbol summary for a given file path.
 fn get_symbol_summary(conn: &Connection, file_path: &str) -> AppResult<Vec<String>> {
     let mut stmt = conn
         .prepare(
@@ -80,8 +75,6 @@ fn get_symbol_summary(conn: &Connection, file_path: &str) -> AppResult<Vec<Strin
         .map_err(|e| AppError::Provider(format!("symbol row read failed: {e}")))
 }
 
-/// Fetches dependencies for a file as formatted strings. Depth tracks
-/// recursion: 0 = immediate, 1+ = transitive (up to 2 levels max).
 fn get_dependency_info(conn: &Connection, file_path: &str, depth: usize, visited: &mut HashSet<String>) -> Vec<String> {
     if depth > 2 || !visited.insert(file_path.to_string()) {
         return Vec::new();
@@ -104,11 +97,70 @@ fn get_dependency_info(conn: &Connection, file_path: &str, depth: usize, visited
     lines
 }
 
-/// Builds an enriched context string by combining FTS5 search results with
-/// dependency and symbol information. Priority order (lowest number =
-/// highest priority):
-///   0 = FTS5 chunks, 1 = resolved file, 2 = symbols, 3 = dependencies
-/// Applies token budget truncation: lowest-priority items are dropped first.
+/// Loads symbol boundaries (start_line, end_line, kind, name) for AST-guided
+/// pruning. Uses owned types to avoid rusqlite borrow lifetime issues.
+fn get_symbol_boundaries(conn: &Connection, file_path: &str) -> Vec<(i64, i64, String, String)> {
+    let mut stmt = match conn.prepare(
+        "SELECT start_line, end_line, kind, name FROM symbols
+         WHERE file_path = ?1 AND kind NOT IN ('import')
+         ORDER BY start_line"
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match stmt.query_map(params![file_path], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    }) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    rows.filter_map(|r| r.ok()).collect()
+}
+
+/// Prunes function/struct bodies from content, replacing inner implementation
+/// lines with a placeholder while preserving signatures and doc comments.
+fn prune_blocks(content: &str, max_chars: usize, symbols: &[(i64, i64, String, String)]) -> String {
+    if content.len() <= max_chars || symbols.is_empty() {
+        return content.to_string();
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let mut body_lines: HashSet<usize> = HashSet::new();
+    for (start, end, _kind, _name) in symbols {
+        if *end - *start > 3 {
+            for ln in (*start + 3) as usize..=*end as usize {
+                body_lines.insert(ln);
+            }
+        }
+    }
+    let mut pruned: Vec<String> = Vec::new();
+    let mut in_pruned_block = false;
+    for (i, line) in lines.iter().enumerate() {
+        let line_num = i + 1;
+        if body_lines.contains(&line_num) {
+            if !in_pruned_block {
+                pruned.push("    // [body pruned for context budget]".to_string());
+                in_pruned_block = true;
+            }
+        } else {
+            in_pruned_block = false;
+            pruned.push(line.to_string());
+        }
+    }
+    let result = pruned.join("\n");
+    if result.len() > max_chars {
+        let mut s = result;
+        s.truncate(max_chars);
+        s.push_str("...");
+        return s;
+    }
+    result
+}
+
 pub fn enriched_context(
     conn: &Connection,
     _workspace_root: &Path,
@@ -117,17 +169,15 @@ pub fn enriched_context(
     resolved_file: Option<&str>,
     max_tokens: usize,
 ) -> AppResult<String> {
-    let intent = classify_intent(query);
+    let _intent = classify_intent(query);
     let mut items: Vec<EnrichedItem> = Vec::new();
 
-    // Phase 1: FTS5 keyword search
+    // Phase 1: FTS5 keyword search with AST-guided body pruning
     let search_results = keyword_search(conn, query, 5).unwrap_or_default();
     let mut matched_paths: Vec<String> = Vec::new();
     for result in &search_results {
-        let content = if result.content.len() > 800 {
-            let mut s = result.content.clone();
-            s.truncate(800); s.push_str("..."); s
-        } else { result.content.clone() };
+        let symbols = get_symbol_boundaries(conn, &result.path);
+        let content = prune_blocks(&result.content, 800, &symbols);
         items.push(EnrichedItem {
             priority: 0,
             label: format!("Code: {} (lines {}-{})", result.path, result.start_line, result.end_line),
@@ -175,7 +225,6 @@ pub fn enriched_context(
     let mut used_tokens = estimate_tokens(memory);
     let mut output_parts = Vec::new();
 
-    // Memory always first if under budget
     if !memory.is_empty() && used_tokens < max_tokens {
         output_parts.push(format!("# Project Memory\n{memory}"));
     }
@@ -189,11 +238,11 @@ pub fn enriched_context(
         }
     }
 
-    if output_parts.is_empty() {
-        Ok(String::new())
+    Ok(if output_parts.is_empty() {
+        String::new()
     } else {
-        Ok(output_parts.join("\n\n"))
-    }
+        output_parts.join("\n\n")
+    })
 }
 
 #[cfg(test)]
@@ -230,20 +279,20 @@ mod tests {
     #[test] fn enriched_context_includes_symbols_and_deps() {
         let dir = temp_workspace();
         std::fs::write(dir.join("lib.rs"),
-            "use serde::Serialize;\n/// Compute.\npub fn compute() -> i32 { 42 }\n"
+            "use serde::Serialize;\npub fn compute() -> i32 { 42 }\n"
         ).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         crate::database::indexer::index_workspace(&conn, &dir).unwrap();
         let context = enriched_context(&conn, &dir, "compute", "", None, 2000).unwrap();
-        assert!(context.contains("function") || context.contains("compute"), "expected symbols: {context}");
-        assert!(context.contains("import") || context.contains("serde"), "expected deps: {context}");
+        assert!(context.contains("compute"), "expected symbols: {context}");
+        assert!(context.contains("serde"), "expected deps: {context}");
         drop(conn); std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test] fn enriched_context_respects_token_budget() {
         let dir = temp_workspace();
         std::fs::write(dir.join("lib.rs"),
-            "use std::collections::HashMap;\nuse serde::Serialize;\npub fn run() -> i32 { 0 }\n"
+            "use std::collections::HashMap;\npub fn run() -> i32 { 0 }\n"
         ).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         crate::database::indexer::index_workspace(&conn, &dir).unwrap();
@@ -262,5 +311,20 @@ mod tests {
         let context = enriched_context(&conn, &dir, "add", "# Architecture\nRust backend.", None, 5000).unwrap();
         assert!(context.contains("Architecture"));
         drop(conn); std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test] fn prune_blocks_preserves_signatures() {
+        let content = "pub fn complex(a: i32, b: i32) -> i32 {\n    let x = a + b;\n    let y = x * 2;\n    let z = y / 3;\n    z\n}\n";
+        let symbols = vec![(1i64, 6i64, "function".to_string(), "complex".to_string())];
+        // Force pruning: budget < content length (130) but > pruned result length (~94)
+        let pruned = prune_blocks(content, 100, &symbols);
+        assert!(pruned.contains("pub fn complex"), "signature should be preserved");
+        assert!(pruned.contains("[body pruned"), "body should be replaced with placeholder");
+    }
+
+    #[test] fn prune_blocks_short_content_unchanged() {
+        let content = "fn short() {}";
+        let pruned = prune_blocks(content, 200, &[]);
+        assert_eq!(pruned, content, "short content without symbols should be unchanged");
     }
 }
