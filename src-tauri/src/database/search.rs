@@ -1,3 +1,4 @@
+use crate::ai::context::{classify_intent, RetrievalIntent};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -116,6 +117,7 @@ pub fn enriched_context(
     resolved_file: Option<&str>,
     max_tokens: usize,
 ) -> AppResult<String> {
+    let intent = classify_intent(query);
     let mut items: Vec<EnrichedItem> = Vec::new();
 
     // Phase 1: FTS5 keyword search
