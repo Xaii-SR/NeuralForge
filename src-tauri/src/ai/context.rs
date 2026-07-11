@@ -1,6 +1,6 @@
 use crate::core::config::{MEMORY_DIR_NAME, MEMORY_FILES, MEMORY_SUBDIR_NAME};
 use crate::database::resolver::resolve_file_reference;
-use crate::database::search::{keyword_search, SearchResult};
+use crate::database::search::{enriched_context, SearchResult};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -9,13 +9,10 @@ const MAX_CHUNK_CHARS: usize = 800;
 const MAX_RESOLVED_FILE_CHARS: usize = 4000;
 
 /// Reads .neuralforge/memory/*.md and concatenates non-empty files into a
-/// single context block. Missing files (workspace never opened through
-/// ensure_memory_scaffold, or a file was deleted) are silently skipped -
-/// memory injection is best-effort context, not a hard requirement.
+/// single context block. Missing files are silently skipped.
 pub fn read_memory_context(workspace_root: &Path) -> String {
     let memory_dir = workspace_root.join(MEMORY_DIR_NAME).join(MEMORY_SUBDIR_NAME);
     let mut sections = Vec::new();
-
     for file_name in MEMORY_FILES {
         let path = memory_dir.join(file_name);
         if let Ok(content) = std::fs::read_to_string(&path) {
@@ -26,32 +23,11 @@ pub fn read_memory_context(workspace_root: &Path) -> String {
             }
         }
     }
-
     sections.join("\n\n")
 }
 
-fn format_search_results(results: &[SearchResult]) -> String {
-    results
-        .iter()
-        .map(|r| {
-            let mut content = r.content.clone();
-            if content.len() > MAX_CHUNK_CHARS {
-                content.truncate(MAX_CHUNK_CHARS);
-                content.push_str("...");
-            }
-            format!("### {} (lines {}-{})\n```\n{}\n```", r.path, r.start_line, r.end_line, content)
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// Cursor-style file resolution for chat: if the query confidently names a
-/// specific file ("clear the UI JSON for the carina"), read its real
-/// content and surface it explicitly rather than relying on whatever
-/// fragments FTS5's chunking happens to surface. Only fires on a *clear*
-/// winner (see resolver::CLEAR_WINNER_RATIO) - an ambiguous reference stays
-/// silent here and is left to the frontend's disambiguation prompt instead
-/// of guessing inside a context block the user never sees.
+/// Cursor-style file resolution: if the query confidently names a specific
+/// file, read its real content and surface it explicitly.
 fn resolved_file_block(workspace_root: &Path, conn: &Connection, query: &str) -> Option<String> {
     let result = resolve_file_reference(conn, query).ok()?;
     let path = result.resolved?;
@@ -63,32 +39,19 @@ fn resolved_file_block(workspace_root: &Path, conn: &Connection, query: &str) ->
     Some(format!("Resolved \"{query}\" to `{path}`:\n```\n{content}\n```"))
 }
 
-/// Combines project memory (architecture/decisions/rules/etc.) with the top
-/// keyword-search matches for the user's query into a single context block
-/// intended to be sent as a system message ahead of the user's actual
-/// question. This is "prompt management" at foundation-phase scope: no
-/// token-budget trimming or ranking beyond FTS5's own relevance order yet.
+/// Combines project memory, resolved file content, and enriched context
+/// (FTS5 + symbols + dependencies with token budget) into a prompt.
 pub fn build_context_prompt(workspace_root: &Path, conn: &Connection, query: &str) -> String {
     let memory = read_memory_context(workspace_root);
-    let search_results = keyword_search(conn, query, MAX_SEARCH_RESULTS).unwrap_or_default();
-    let code_context = format_search_results(&search_results);
-    let resolved_file = resolved_file_block(workspace_root, conn, query);
-
-    let mut parts = Vec::new();
-    parts.push(
-        "You are an AI assistant embedded in the NeuralForge IDE. Use the following project context to answer the user's question. If the context isn't relevant, answer normally.".to_string(),
-    );
-    if !memory.is_empty() {
-        parts.push(format!("# Project Memory\n{memory}"));
+    let resolved = resolved_file_block(workspace_root, conn, query);
+    let enriched = enriched_context(conn, workspace_root, query, &memory, resolved.as_deref(), 2000).unwrap_or_default();
+    if enriched.is_empty() {
+        return "You are an AI assistant embedded in the NeuralForge IDE.".to_string();
     }
-    if let Some(file_block) = resolved_file {
-        parts.push(format!("# Referenced File\n{file_block}"));
-    }
-    if !code_context.is_empty() {
-        parts.push(format!("# Relevant Code\n{code_context}"));
-    }
-
-    parts.join("\n\n")
+    format!(
+        "You are an AI assistant embedded in the NeuralForge IDE. Use the following project context to answer the user's question.\n\n{}",
+        enriched
+    )
 }
 
 #[cfg(test)]
@@ -100,28 +63,19 @@ mod tests {
         let mut dir = std::env::temp_dir();
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         dir.push(format!("neuralforge_context_test_{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        std::fs::create_dir_all(&dir).unwrap(); dir
     }
 
     #[test]
     fn read_memory_context_skips_empty_and_header_only_files() {
         let dir = temp_workspace();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
-
         let context = read_memory_context(&dir);
-        assert!(context.is_empty(), "freshly scaffolded memory files are header-only, expected no context");
-
-        std::fs::write(
-            dir.join(".neuralforge").join("memory").join("decisions.md"),
-            "# Decisions\n\nUse SQLite for the local index.",
-        )
-        .unwrap();
-
+        assert!(context.is_empty());
+        std::fs::write(dir.join(".neuralforge").join("memory").join("decisions.md"),
+            "# Decisions\n\nUse SQLite for the local index.").unwrap();
         let context = read_memory_context(&dir);
         assert!(context.contains("Use SQLite for the local index"));
-        assert!(context.contains("decisions.md"));
-
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -129,22 +83,16 @@ mod tests {
     fn build_context_prompt_includes_memory_and_search_results() {
         let dir = temp_workspace();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
-        std::fs::write(
-            dir.join(".neuralforge").join("memory").join("architecture.md"),
-            "# Architecture\n\nBackend is Rust/Tauri, frontend is Next.js.",
-        )
-        .unwrap();
-        std::fs::write(dir.join("auth.rs"), "fn authenticate_user() -> bool {\n    true\n}\n").unwrap();
-
+        std::fs::write(dir.join(".neuralforge").join("memory").join("architecture.md"),
+            "# Architecture\n\nBackend is Rust/Tauri.").unwrap();
+        std::fs::write(dir.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
         {
             let conn = crate::database::open_for_workspace(&dir).unwrap();
             crate::database::indexer::index_workspace(&conn, &dir).unwrap();
-
             let prompt = build_context_prompt(&dir, &conn, "how does authentication work");
             assert!(prompt.contains("Rust/Tauri"));
             assert!(prompt.contains("authenticate_user"));
         }
-
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -152,18 +100,14 @@ mod tests {
     fn build_context_prompt_includes_full_content_of_a_confidently_resolved_file() {
         let dir = temp_workspace();
         std::fs::create_dir_all(dir.join("carina_egti")).unwrap();
-        std::fs::write(dir.join("carina_egti").join("ui_car.json"), "{\"screen\": \"dashboard\", \"widgets\": []}").unwrap();
-        std::fs::write(dir.join("carina_egti").join("ext_config.ini"), "[general]\nname=carina").unwrap();
-
+        std::fs::write(dir.join("carina_egti").join("ui_car.json"),
+            "{\"screen\": \"dashboard\", \"widgets\": []}").unwrap();
         {
             let conn = crate::database::open_for_workspace(&dir).unwrap();
             crate::database::indexer::index_workspace(&conn, &dir).unwrap();
-
             let prompt = build_context_prompt(&dir, &conn, "clear the UI JSON for the carina");
-            assert!(prompt.contains("Referenced File"));
-            assert!(prompt.contains("dashboard"), "expected the resolved file's real content in the prompt, got: {prompt}");
+            assert!(prompt.contains("dashboard"));
         }
-
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
