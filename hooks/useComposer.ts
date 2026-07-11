@@ -14,7 +14,9 @@ export interface CodeBlock {
   file_path: string;
   language: string;
   code: string;
-  status: "idle" | "applied" | "accepted" | "rejected";
+  status: "idle" | "applied" | "accepted" | "rejected" | "running" | "completed";
+  blockType?: "file_edit" | "terminal_command";
+  output?: string;
 }
 
 export interface ComposerMessage {
@@ -69,19 +71,19 @@ export function useComposer() {
       sessionId: session.session_id,
       content,
     });
-    // Assign unique IDs to any new code blocks
     const historyWithIds = history.map((msg) => ({
       ...msg,
       code_blocks: msg.code_blocks.map((block) => ({
         ...block,
         id: block.id || nextBlockId(),
-        status: (block.status || "idle") as "idle" | "applied" | "accepted" | "rejected",
+        status: (block.status || "idle") as any,
+        blockType: block.blockType || (block.file_path?.startsWith("exec") ? "terminal_command" as const : "file_edit" as const),
       })),
     }));
     setSession((prev) => prev ? { ...prev, message_history: historyWithIds } : null);
   }, [session]);
 
-  const updateBlockStatus = useCallback((blockId: string, status: "idle" | "applied" | "accepted" | "rejected") => {
+  const updateBlockStatus = useCallback((blockId: string, status: "idle" | "applied" | "accepted" | "rejected" | "running" | "completed") => {
     if (!session) return;
     const updated = session.message_history.map((msg) => ({
       ...msg,
@@ -92,9 +94,34 @@ export function useComposer() {
     setSession({ ...session, message_history: updated });
   }, [session]);
 
+  const executeTerminalBlock = useCallback(async (blockId: string, command: string) => {
+    if (!session) return;
+    // Set status to running
+    updateBlockStatus(blockId, "running");
+    try {
+      const result = await invoke<{ stdout: string; stderr: string; success: boolean }>("execute_composer_command", {
+        command,
+        workspaceRoot: "", // Will use default cwd
+      });
+      const output = `Command Output:\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}\nSuccess: ${result.success}`;
+      // Update block with output
+      const updated = session.message_history.map((msg) => ({
+        ...msg,
+        code_blocks: msg.code_blocks.map((block) =>
+          block.id === blockId ? { ...block, status: "completed" as const, output } : block
+        ),
+      }));
+      setSession({ ...session, message_history: updated });
+      // Auto-feedback: send output back to AI
+      await sendMessage(output);
+    } catch (e) {
+      updateBlockStatus(blockId, "completed");
+    }
+  }, [session, updateBlockStatus, sendMessage]);
+
   const close = useCallback(() => {
     setIsOpen(false);
   }, []);
 
-  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, close, setIsOpen };
+  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, close, setIsOpen };
 }
