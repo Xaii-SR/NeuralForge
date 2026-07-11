@@ -98,7 +98,21 @@ export default function ComposerWindow({
             <span className={`mb-1 block text-[10px] font-semibold uppercase ${msg.role === "user" ? "text-blue-400" : "text-green-400"}`}>
               {msg.role}
             </span>
-            <p className="text-[13px] text-[#d4d4d4]">{msg.content}</p>
+            <p className="text-[13px] text-[#d4d4d4] whitespace-pre-wrap">{msg.content}</p>
+            {/* Code block cards */}
+            {(msg as any).code_blocks?.length > 0 && (
+              <div className="mt-2 space-y-2">
+                {(msg as any).code_blocks.map((block: any, bi: number) => (
+                  <div key={bi} className="overflow-hidden rounded border border-[#444] bg-[#0d1117]">
+                    <div className="flex items-center justify-between border-b border-[#333] bg-[#161b22] px-3 py-1.5">
+                      <span className="text-[11px] font-medium text-blue-400">{block.file_path || "unknown"}</span>
+                      <span className="text-[10px] uppercase text-[#666]">{block.language || "code"}</span>
+                    </div>
+                    <pre className="overflow-x-auto p-3 text-[12px] leading-relaxed text-[#d4d4d4]">{block.code}</pre>
+                  </div>
+                ))}
+              </div>
+            )}
             {msg.file_paths.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
                 {msg.file_paths.map((fp) => (

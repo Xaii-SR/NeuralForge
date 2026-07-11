@@ -3,10 +3,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
+export interface CodeBlock {
+  file_path: string;
+  language: string;
+  code: string;
+}
+
 export interface ComposerMessage {
   role: string;
   content: string;
   file_paths: string[];
+  code_blocks: CodeBlock[];
 }
 
 export interface ComposerSession {
