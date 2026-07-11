@@ -6,6 +6,7 @@ import DiffEditor from "@/components/editor/DiffEditor";
 import TabBar from "./TabBar";
 import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
+import { useVersionCache } from "@/hooks/useVersionCache";
 import type { OpenFile } from "@/hooks/useWorkspace";
 
 export interface EditorPaneProps {
@@ -26,6 +27,7 @@ export default function EditorPane({
   onSave,
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
+  const { setSnapshot, getSnapshot } = useVersionCache();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
   if (!activeFile) {
@@ -44,7 +46,12 @@ export default function EditorPane({
       {/* Diff mode toggle bar */}
       <div className="flex items-center gap-2 border-b border-[#333] bg-[#252526] px-3 py-1">
         <button
-          onClick={() => setIsDiffMode(!isDiffMode)}
+          onClick={() => {
+            if (!isDiffMode && activeFile) {
+              setSnapshot(activeFile.path, activeFile.content);
+            }
+            setIsDiffMode(!isDiffMode);
+          }}
           className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-[#333] text-[#aaa] hover:bg-[#444]"}`}
         >
           {isDiffMode ? "Diff Mode ON" : "Diff Mode OFF"}
@@ -53,7 +60,7 @@ export default function EditorPane({
       <div className="min-h-0 flex-1">
         {isDiffMode ? (
           <DiffEditor
-            original={activeFile.content}
+            original={getSnapshot(activeFile.path) ?? activeFile.content}
             modified={activeFile.content}
             language={languageFromPath(activeFile.path)}
             originalPath={`original:${activeFile.path}`}
