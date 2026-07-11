@@ -8,12 +8,14 @@ export interface ComposerWindowProps {
   onSendMessage: (content: string) => Promise<void>;
   onAddFile: (filePath: string) => Promise<void>;
   onRemoveFile: (filePath: string) => Promise<void>;
+  onApplyBlock: (blockId: string, filePath: string, code: string) => void;
   onClose: () => void;
 }
 
 export default function ComposerWindow({
   session,
   onSendMessage,
+  onApplyBlock,
   onClose,
 }: ComposerWindowProps) {
   const [inputValue, setInputValue] = useState("");
@@ -109,6 +111,28 @@ export default function ComposerWindow({
                       <span className="text-[10px] uppercase text-[#666]">{block.language || "code"}</span>
                     </div>
                     <pre className="overflow-x-auto p-3 text-[12px] leading-relaxed text-[#d4d4d4]">{block.code}</pre>
+                    {/* Action bar */}
+                    <div className="flex items-center gap-2 border-t border-[#333] bg-[#161b22] px-3 py-2">
+                      {block.status === "idle" && (
+                        <button
+                          onClick={() => onApplyBlock(block.id, block.file_path, block.code)}
+                          className="rounded bg-blue-700 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600"
+                        >
+                          Apply
+                        </button>
+                      )}
+                      {block.status === "applied" && (
+                        <span className="flex items-center gap-1 text-[11px] text-yellow-400">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400" />
+                          Reviewing in Diff...
+                        </span>
+                      )}
+                      {(block.status === "accepted" || block.status === "rejected") && (
+                        <span className="text-[11px] text-[#666]">
+                          {block.status === "accepted" ? "Accepted" : "Rejected"}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

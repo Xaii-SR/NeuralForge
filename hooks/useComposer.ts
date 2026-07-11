@@ -3,10 +3,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
 
+let _blockIdCounter = 0;
+function nextBlockId(): string {
+  _blockIdCounter += 1;
+  return `block-${_blockIdCounter}`;
+}
+
 export interface CodeBlock {
+  id: string;
   file_path: string;
   language: string;
   code: string;
+  status: "idle" | "applied" | "accepted" | "rejected";
 }
 
 export interface ComposerMessage {
@@ -61,12 +69,32 @@ export function useComposer() {
       sessionId: session.session_id,
       content,
     });
-    setSession((prev) => prev ? { ...prev, message_history: history } : null);
+    // Assign unique IDs to any new code blocks
+    const historyWithIds = history.map((msg) => ({
+      ...msg,
+      code_blocks: msg.code_blocks.map((block) => ({
+        ...block,
+        id: block.id || nextBlockId(),
+        status: (block.status || "idle") as "idle" | "applied" | "accepted" | "rejected",
+      })),
+    }));
+    setSession((prev) => prev ? { ...prev, message_history: historyWithIds } : null);
+  }, [session]);
+
+  const updateBlockStatus = useCallback((blockId: string, status: "idle" | "applied" | "accepted" | "rejected") => {
+    if (!session) return;
+    const updated = session.message_history.map((msg) => ({
+      ...msg,
+      code_blocks: msg.code_blocks.map((block) =>
+        block.id === blockId ? { ...block, status } : block
+      ),
+    }));
+    setSession({ ...session, message_history: updated });
   }, [session]);
 
   const close = useCallback(() => {
     setIsOpen(false);
   }, []);
 
-  return { session, isOpen, initialize, addFile, removeFile, sendMessage, close, setIsOpen };
+  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, close, setIsOpen };
 }
