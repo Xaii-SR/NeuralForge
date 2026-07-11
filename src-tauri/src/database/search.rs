@@ -310,7 +310,9 @@ pub fn enriched_context(
         if !matched_paths.contains(&result.path) { matched_paths.push(result.path.clone()); }
     }
 
-    // Type declaration resolution: scan content for custom types, inject definitions
+    // Type declaration resolution with 20% token budget ceiling
+    let type_budget = max_tokens / 5;
+    let mut type_tokens_used: usize = 0;
     let mut all_content = String::new();
     for item in &items { all_content.push_str(&item.content); all_content.push('\n'); }
     let type_refs = extract_type_references(conn, &all_content);
@@ -318,7 +320,16 @@ pub fn enriched_context(
         let mut type_defs = Vec::new();
         for (name, kind) in &type_refs {
             let def = get_type_declaration_content(conn, name, kind);
-            if !def.is_empty() { type_defs.push(def); }
+            if !def.is_empty() {
+                let tokens = estimate_tokens(&def);
+                if type_tokens_used + tokens <= type_budget {
+                    type_defs.push(def);
+                    type_tokens_used += tokens;
+                } else {
+                    type_defs.push("// [remaining nested type extensions truncated to preserve token window]".to_string());
+                    break;
+                }
+            }
         }
         if !type_defs.is_empty() {
             items.push(EnrichedItem { priority: 1, label: "Resolved Type Definitions".to_string(), content: type_defs.join("\n\n") });
