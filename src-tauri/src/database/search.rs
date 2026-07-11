@@ -150,6 +150,35 @@ fn prune_to_def_use(content: &str, var_name: &str) -> String {
     result.join("\n")
 }
 
+const HIGH_SCORE_THRESHOLD: f64 = 2.0;
+const SMOOTH_FACTOR: f64 = 1.4;
+
+/// Applies spatial fragment score smoothing within each file's chunk group.
+/// If a low-scoring chunk sits between two high-scoring chunks, its score
+/// is boosted by SMOOTH_FACTOR to preserve continuous context flow.
+fn smooth_scores(results: &mut Vec<SearchResult>) {
+    let mut by_file: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, r) in results.iter().enumerate() {
+        by_file.entry(r.path.clone()).or_default().push(i);
+    }
+    for (_path, indices) in by_file {
+        if indices.len() < 3 { continue; }
+        let mut sorted: Vec<usize> = indices.clone();
+        sorted.sort_by_key(|&i| results[i].start_line);
+        for w in 1..sorted.len() - 1 {
+            let prev = sorted[w - 1];
+            let curr = sorted[w];
+            let next = sorted[w + 1];
+            if results[curr].score < HIGH_SCORE_THRESHOLD
+                && results[prev].score >= HIGH_SCORE_THRESHOLD
+                && results[next].score >= HIGH_SCORE_THRESHOLD
+            {
+                results[curr].score *= SMOOTH_FACTOR;
+            }
+        }
+    }
+}
+
 fn stitch_chunks(results: &[SearchResult]) -> Vec<SearchResult> {
     let mut by_file: HashMap<String, Vec<&SearchResult>> = HashMap::new();
     for r in results { by_file.entry(r.path.clone()).or_default().push(r); }
@@ -299,7 +328,8 @@ pub fn enriched_context(
     let target_var = extract_target_variable(query);
     let mut items: Vec<EnrichedItem> = Vec::new();
 
-    let search_results = keyword_search(conn, query, 5).unwrap_or_default();
+    let mut search_results = keyword_search(conn, query, 5).unwrap_or_default();
+    smooth_scores(&mut search_results);
     let stitched = stitch_chunks(&search_results);
     let mut matched_paths: Vec<String> = Vec::new();
     for result in &stitched {
