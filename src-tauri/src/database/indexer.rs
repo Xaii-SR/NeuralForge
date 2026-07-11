@@ -756,6 +756,90 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
     Ok(stats)
 }
 
+/// Re-indexes a single file by path. Strips stale `chunks`, `symbols`, and
+/// `dependencies` entries for the given relative file path, then re-extracts
+/// and re-stores everything. Returns the stats for this single-file operation.
+/// If the file doesn't exist or can't be read, the stale entries are still
+/// removed (file was deleted) but no new data is written.
+pub fn reindex_single_file(
+    conn: &Connection,
+    workspace_root: &Path,
+    rel_path: &str,
+) -> AppResult<IndexStats> {
+    let mut stats = IndexStats::default();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+
+    // Always strip stale entries for this file path
+    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![rel_path]).ok();
+    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![rel_path]).ok();
+    let stale_file_id: Option<i64> = conn.query_row(
+        "SELECT id FROM files WHERE path = ?1", params![rel_path],
+        |row| row.get(0),
+    ).ok();
+    if let Some(file_id) = stale_file_id {
+        conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id]).ok();
+    }
+
+    let full_path = workspace_root.join(rel_path);
+    let Ok(bytes) = std::fs::read(&full_path) else {
+        // File was deleted — clean up file record and return
+        conn.execute("DELETE FROM files WHERE path = ?1", params![rel_path]).ok();
+        stats.files_failed += 1;
+        return Ok(stats);
+    };
+    if !is_probably_text(&bytes) {
+        stats.files_skipped_binary += 1;
+        return Ok(stats);
+    }
+    let Ok(content) = String::from_utf8(bytes) else {
+        stats.files_failed += 1;
+        return Ok(stats);
+    };
+    let hash = hash_content(&content);
+    let language = classify_language(&full_path);
+    let line_count = content.lines().count() as i64;
+    let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
+    let modified_at = std::fs::metadata(&full_path).ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    stats.languages_detected.insert(language.to_string(), 1);
+
+    // Extract symbols and dependencies
+    let symbols = extract_symbols(&content, rel_path, language);
+    let deps = extract_dependencies(&content, rel_path, language, now);
+    stats.symbols_extracted = symbols.len() as u64;
+    stats.dependencies_extracted = deps.len() as u64;
+
+    // Upsert file record
+    let file_id: i64 = if let Some(id) = conn.query_row(
+        "SELECT id FROM files WHERE path = ?1", params![rel_path],
+        |row| row.get::<_, i64>(0),
+    ).ok() {
+        conn.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE id = ?7",
+            params![hash, now, file_size as i64, modified_at, language, line_count, id]).ok();
+        id
+    } else {
+        conn.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![rel_path, hash, now, file_size as i64, modified_at, language, line_count]).ok();
+        conn.last_insert_rowid()
+    };
+
+    // Store chunks
+    for (start_line, end_line, text) in chunk_lines(&content) {
+        conn.execute("INSERT INTO chunks (file_id, path, start_line, end_line, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![file_id, rel_path, start_line as i64, end_line as i64, text]).ok();
+        stats.chunks_created += 1;
+    }
+
+    store_symbols(conn, &symbols, rel_path);
+    store_dependencies(conn, &deps, rel_path);
+    stats.files_indexed = 1;
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
