@@ -14,6 +14,7 @@ mod planning;
 mod terminal;
 
 use ai::benchmarks::BenchmarkDbState;
+use ai::composer::ComposerSessionState;
 use ai::health::HealthRegistry;
 use core::state::AppState;
 use database::DbState;
@@ -28,6 +29,7 @@ pub fn run() {
     .manage(HealthRegistry::default())
     .manage(DbState::default())
     .manage(BenchmarkDbState::default())
+    .manage(ComposerSessionState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -68,6 +70,11 @@ pub fn run() {
       ai::completion::get_prediction_with_fim,
       ai::completion::store_prediction_result,
       ai::completion::request_async_completion,
+      ai::composer::initialize_composer_session,
+      ai::composer::add_composer_file,
+      ai::composer::remove_composer_file,
+      ai::composer::send_composer_message,
+      ai::composer::get_composer_session,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,
