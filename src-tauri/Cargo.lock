@@ -71,6 +71,7 @@ version = "1.0.0"
 dependencies = [
  "futures-util",
  "lazy_static",
+ "once_cell",
  "portable-pty",
  "regex",
  "reqwest 0.12.28",

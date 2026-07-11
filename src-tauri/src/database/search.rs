@@ -1,10 +1,12 @@
 use crate::ai::context::{classify_intent, RetrievalIntent};
 use crate::core::errors::{AppError, AppResult};
+use once_cell::sync::Lazy;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use specta::Type;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 
 #[derive(Serialize, Type, Clone)]
 pub struct SearchResult {
@@ -21,6 +23,20 @@ struct EnrichedItem {
     label: String,
     content: String,
 }
+
+#[derive(Serialize, Type, Clone, Debug)]
+pub struct ContextDelta {
+    pub is_delta: bool,
+    pub full_text: String,
+    pub added_lines: Vec<String>,
+    pub removed_lines: Vec<String>,
+    pub similarity: f64,
+}
+
+static CONTEXT_CACHE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+const MIN_SIMILARITY_FOR_DELTA: f64 = 0.8;
+const STITCH_THRESHOLD: i64 = 15;
 
 fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
@@ -77,8 +93,7 @@ fn get_symbol_boundaries(conn: &Connection, file_path: &str) -> Vec<(i64, i64, S
     let mut stmt = match conn.prepare(
         "SELECT start_line, end_line, kind, name FROM symbols WHERE file_path = ?1 AND kind NOT IN ('import') ORDER BY start_line"
     ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
+        Ok(s) => s, Err(_) => return Vec::new(),
     };
     let rows = match stmt.query_map(params![file_path], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
@@ -105,8 +120,6 @@ fn prune_blocks(content: &str, max_chars: usize, symbols: &[(i64, i64, String, S
     result
 }
 
-const STITCH_THRESHOLD: i64 = 15;
-
 fn stitch_chunks(results: &[SearchResult]) -> Vec<SearchResult> {
     let mut by_file: HashMap<String, Vec<&SearchResult>> = HashMap::new();
     for r in results { by_file.entry(r.path.clone()).or_default().push(r); }
@@ -117,18 +130,47 @@ fn stitch_chunks(results: &[SearchResult]) -> Vec<SearchResult> {
         for chunk in chunks.iter().skip(1) {
             if chunk.start_line <= merged.end_line + STITCH_THRESHOLD {
                 let gap = "\n".repeat((chunk.start_line - merged.end_line - 1).max(0) as usize);
-                merged.content.push_str(&gap);
-                merged.content.push_str("\n");
+                merged.content.push_str(&gap); merged.content.push_str("\n");
                 merged.content.push_str(&chunk.content);
                 merged.end_line = merged.end_line.max(chunk.end_line);
-            } else {
-                stitched.push(merged);
-                merged = (*chunk).clone();
-            }
+            } else { stitched.push(merged); merged = (*chunk).clone(); }
         }
         stitched.push(merged);
     }
     stitched
+}
+
+/// Computes a line-by-line diff between old and new context strings. Returns a
+/// ContextDelta: if similarity >= 80%, returns only changed lines (is_delta=true);
+/// otherwise returns the full text (is_delta=false).
+pub fn compute_context_diff(old: &str, new: &str) -> ContextDelta {
+    if old.is_empty() {
+        return ContextDelta { is_delta: false, full_text: new.to_string(), added_lines: vec![], removed_lines: vec![], similarity: 0.0 };
+    }
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let old_set: HashSet<&str> = old_lines.iter().copied().collect();
+    let new_set: HashSet<&str> = new_lines.iter().copied().collect();
+    let added: Vec<String> = new_lines.iter().filter(|l| !old_set.contains(*l)).map(|l| l.to_string()).collect();
+    let removed: Vec<String> = old_lines.iter().filter(|l| !new_set.contains(*l)).map(|l| l.to_string()).collect();
+    let total = old_lines.len().max(new_lines.len());
+    let common = old_lines.iter().filter(|l| new_set.contains(*l)).count();
+    let similarity = if total == 0 { 0.0 } else { common as f64 / total as f64 };
+    if similarity >= MIN_SIMILARITY_FOR_DELTA {
+        ContextDelta { is_delta: true, full_text: String::new(), added_lines: added, removed_lines: removed, similarity }
+    } else {
+        ContextDelta { is_delta: false, full_text: new.to_string(), added_lines: vec![], removed_lines: vec![], similarity }
+    }
+}
+
+/// Stores the last context response for delta comparison on subsequent calls.
+pub fn cache_context_response(response: &str) {
+    if let Ok(mut guard) = CONTEXT_CACHE.lock() { *guard = Some(response.to_string()); }
+}
+
+/// Retrieves the previously cached context, if any.
+pub fn get_cached_context() -> Option<String> {
+    CONTEXT_CACHE.lock().ok().and_then(|g| g.clone())
 }
 
 pub fn enriched_context(
@@ -149,7 +191,6 @@ pub fn enriched_context(
     }
 
     if let Some(resolved) = resolved_file { items.push(EnrichedItem { priority: 1, label: "Referenced File".to_string(), content: resolved.to_string() }); }
-
     for file_path in &matched_paths {
         if let Ok(symbols) = get_symbol_summary(conn, file_path) {
             if !symbols.is_empty() { items.push(EnrichedItem { priority: 2, label: format!("Symbols in {}", file_path), content: symbols.join("\n") }); }
@@ -222,5 +263,25 @@ mod tests {
             SearchResult { path: "lib.rs".to_string(), start_line: 50, end_line: 60, content: "bbb".to_string(), score: 0.8 },
         ];
         assert_eq!(stitch_chunks(&r).len(), 2);
+    }
+    #[test] fn diff_full_when_empty_cache() {
+        let delta = compute_context_diff("", "hello world");
+        assert!(!delta.is_delta);
+        assert_eq!(delta.full_text, "hello world");
+    }
+    #[test] fn diff_delta_when_mostly_same() {
+        let old = "line1\nline2\nline3\nline4";
+        let new = "line1\nline2\nline3\nline4\nline5";
+        let delta = compute_context_diff(old, new);
+        assert!(delta.is_delta);
+        assert_eq!(delta.added_lines, vec!["line5"]);
+        assert!(delta.removed_lines.is_empty());
+    }
+    #[test] fn diff_full_when_very_different() {
+        let old = "aaaa";
+        let new = "bbbb";
+        let delta = compute_context_diff(old, new);
+        assert!(!delta.is_delta);
+        assert_eq!(delta.full_text, "bbbb");
     }
 }

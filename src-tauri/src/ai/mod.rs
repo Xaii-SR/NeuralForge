@@ -96,8 +96,19 @@ pub fn get_enriched_context(
         .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
 
     let memory = context::read_memory_context(&root);
-    crate::database::search::enriched_context(conn, &root, &query, &memory, None, max_tokens)
-        .map_err(|e| AppError::Provider(e.to_string()))
+    let new_context = crate::database::search::enriched_context(conn, &root, &query, &memory, None, max_tokens)
+        .map_err(|e| AppError::Provider(e.to_string()))?;
+
+    // Diff against cached context for delta compression
+    let cached = crate::database::search::get_cached_context();
+    let delta = crate::database::search::compute_context_diff(&cached.unwrap_or_default(), &new_context);
+    crate::database::search::cache_context_response(&new_context);
+
+    if delta.is_delta {
+        Ok(serde_json::to_string(&delta).unwrap_or(new_context))
+    } else {
+        Ok(new_context)
+    }
 }
 
 #[tauri::command]
