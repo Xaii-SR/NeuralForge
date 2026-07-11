@@ -238,7 +238,48 @@ fn extract_target_variable(query: &str) -> Option<String> {
     None
 }
 
-/// Determines if a query contains a likely function name (capitalized or followed by parentheses).
+const PRIMITIVE_TYPES: &[&str] = &[
+    "i32","i64","u32","u64","f32","f64","bool","char","String","str",
+    "usize","isize","Vec","Option","Result","HashMap","HashSet","Box","Arc","Rc",
+];
+
+fn extract_type_references(conn: &Connection, content: &str) -> Vec<(String, String)> {
+    let mut candidates: HashSet<String> = HashSet::new();
+    for line in content.lines() {
+        for word in line.split(|c: char| !c.is_alphanumeric() && c != '_') {
+            let w = word.trim();
+            if w.len() >= 2 && !PRIMITIVE_TYPES.contains(&w) && w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                candidates.insert(w.to_string());
+            }
+        }
+    }
+    let mut results = Vec::new();
+    for name in &candidates {
+        if let Ok(kind) = conn.query_row(
+            "SELECT kind FROM symbols WHERE kind IN ('struct','enum','trait','interface','type_alias','class') AND name = ?1 LIMIT 1",
+            params![name],
+            |row| row.get::<_, String>(0),
+        ) { results.push((name.clone(), kind)); }
+    }
+    results
+}
+
+fn get_type_declaration_content(conn: &Connection, type_name: &str, kind: &str) -> String {
+    if let Ok(path) = conn.query_row(
+        "SELECT file_path FROM symbols WHERE name = ?1 AND kind = ?2 LIMIT 1",
+        params![type_name, kind],
+        |row| row.get::<_, String>(0),
+    ) {
+        if let Ok(content) = conn.query_row(
+            "SELECT content FROM chunks WHERE path = ?1 AND content LIKE ?2 LIMIT 1",
+            params![path, format!("%{}%", type_name)],
+            |row| row.get::<_, String>(0),
+        ) { return format!("// {kind} {type_name} (from {path})\n{content}"); }
+    }
+    String::new()
+}
+
+/// Determines if a query contains a likely function name.
 fn extract_target_function(query: &str) -> Option<String> {
     let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
     for w in &words {
@@ -269,7 +310,22 @@ pub fn enriched_context(
         if !matched_paths.contains(&result.path) { matched_paths.push(result.path.clone()); }
     }
 
-    if let Some(resolved) = resolved_file { items.push(EnrichedItem { priority: 1, label: "Referenced File".to_string(), content: resolved.to_string() }); }
+    // Type declaration resolution: scan content for custom types, inject definitions
+    let mut all_content = String::new();
+    for item in &items { all_content.push_str(&item.content); all_content.push('\n'); }
+    let type_refs = extract_type_references(conn, &all_content);
+    if !type_refs.is_empty() {
+        let mut type_defs = Vec::new();
+        for (name, kind) in &type_refs {
+            let def = get_type_declaration_content(conn, name, kind);
+            if !def.is_empty() { type_defs.push(def); }
+        }
+        if !type_defs.is_empty() {
+            items.push(EnrichedItem { priority: 1, label: "Resolved Type Definitions".to_string(), content: type_defs.join("\n\n") });
+        }
+    }
+
+    if let Some(resolved) = resolved_file { items.push(EnrichedItem { priority: 2, label: "Referenced File".to_string(), content: resolved.to_string() }); }
     for file_path in &matched_paths {
         if let Ok(symbols) = get_symbol_summary(conn, file_path) {
             if !symbols.is_empty() { items.push(EnrichedItem { priority: 2, label: format!("Symbols in {}", file_path), content: symbols.join("\n") }); }
@@ -395,6 +451,21 @@ mod tests {
     #[test] fn def_use_no_var_unchanged() {
         let content = "pub fn run() {\n    let a = 1;\n    let b = 2;\n}\n";
         assert_eq!(prune_to_def_use(content, "nonexistent"), content, "no match should return unchanged");
+    }
+    #[test] fn type_ref_detects_struct() {
+        let d = tw(); std::fs::write(d.join("models.rs"), "pub struct User {\n    pub name: String,\n}\n").unwrap();
+        std::fs::write(d.join("main.rs"), "fn process(u: User) {}\n").unwrap();
+        { let c = crate::database::open_for_workspace(&d).unwrap(); crate::database::indexer::index_workspace(&c, &d).unwrap();
+          let refs = extract_type_references(&c, "fn process(u: User) {}");
+          assert!(refs.iter().any(|(n,_)| n == "User"), "should detect User as a type"); }
+        std::fs::remove_dir_all(&d).ok();
+    }
+    #[test] fn type_ref_ignores_primitives() {
+        let d = tw();
+        { let c = crate::database::open_for_workspace(&d).unwrap();
+          let refs = extract_type_references(&c, "let x: i32 = 5;");
+          assert!(refs.is_empty(), "primitives should be ignored"); }
+        std::fs::remove_dir_all(&d).ok();
     }
     #[test] fn def_use_var_single_occurrence() {
         let content = "pub fn calc() {\n    let result = 42;\n    return result;\n}\n";
