@@ -77,6 +77,30 @@ pub fn get_context_for_query(
 }
 
 #[tauri::command]
+pub fn get_enriched_context(
+    state: State<AppState>,
+    db: State<DbState>,
+    query: String,
+    max_tokens: usize,
+) -> AppResult<String> {
+    let root = state
+        .workspace_root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+
+    let db_guard = db.conn.lock().unwrap();
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+
+    let memory = context::read_memory_context(&root);
+    crate::database::search::enriched_context(conn, &root, &query, &memory, None, max_tokens)
+        .map_err(|e| AppError::Provider(e.to_string()))
+}
+
+#[tauri::command]
 pub fn save_preferences(db: State<DbState>, goal: String, cost_preference: String) -> AppResult<()> {
     let guard = db.conn.lock().unwrap();
     let conn = guard

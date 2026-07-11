@@ -116,6 +116,10 @@ export function getContextForQuery(query: string): Promise<string> {
   return invoke("get_context_for_query", { query });
 }
 
+export function getEnrichedContext(query: string, maxTokens: number): Promise<string> {
+  return invoke("get_enriched_context", { query, maxTokens });
+}
+
 export interface FileCandidate {
   path: string;
   score: number;

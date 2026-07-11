@@ -54,6 +54,7 @@ pub fn run() {
       ai::check_vram_for_model,
       ai::chat_with_model,
       ai::get_context_for_query,
+      ai::get_enriched_context,
       ai::save_preferences,
       ai::get_preferences,
       ai::estimate_cost_for_prompt,
