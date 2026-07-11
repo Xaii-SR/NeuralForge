@@ -63,6 +63,7 @@ pub fn run() {
       ai::get_benchmark_for_model,
       ai::clear_response_cache,
       ai::auto_select_model,
+      ai::completion::get_ghost_text_prediction,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,

@@ -1,5 +1,6 @@
 pub mod benchmarks;
 pub mod cache;
+pub mod completion;
 pub mod context;
 pub mod health;
 pub mod model_manager;
