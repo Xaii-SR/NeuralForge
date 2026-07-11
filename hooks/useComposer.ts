@@ -1,8 +1,9 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { truncateTerminalOutput } from "@/lib/utils/tokenManagement";
 
 let _blockIdCounter = 0;
 function nextBlockId(): string {
@@ -55,6 +56,7 @@ export function useComposer() {
     setSession(r);
   }, [session]);
 
+  const sendMessageRef = useRef<(content: string) => Promise<void> | undefined>(undefined);
   const sendMessage = useCallback(async (content: string) => {
     if (!session) return;
     const history = await invoke<ComposerMessage[]>("send_composer_message", { sessionId: session.session_id, content });
@@ -67,6 +69,7 @@ export function useComposer() {
     }));
     setSession((prev) => prev ? { ...prev, message_history: h } : null);
   }, [session]);
+  sendMessageRef.current = sendMessage;
 
   const updateBlockStatus = useCallback((blockId: string, status: any) => {
     if (!session) return;
@@ -95,16 +98,26 @@ export function useComposer() {
       const { block_id, line, done } = event.payload;
       setSession((prev) => {
         if (!prev) return prev;
-        return {
+        const updated = {
           ...prev,
           message_history: prev.message_history.map((msg) => ({
             ...msg,
             code_blocks: msg.code_blocks.map((b) => {
               if (b.id !== block_id) return b;
-              return { ...b, output: done ? b.output || "" : (b.output || "") + line + "\n", status: done ? "completed" as const : "running" as const };
+              const output = done ? b.output || "" : (b.output || "") + line + "\n";
+              return { ...b, output, status: (done ? "completed" as const : "running" as const) };
             }),
           })),
         };
+        // When command completes, send truncated output to AI for feedback
+        if (done) {
+          const block = updated.message_history.flatMap((m) => m.code_blocks).find((b) => b.id === block_id);
+          if (block?.output) {
+            const truncated = truncateTerminalOutput(block.output);
+            sendMessage(truncated);
+          }
+        }
+        return updated;
       });
     }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
     return () => { disposed = true; unlisten?.(); };
