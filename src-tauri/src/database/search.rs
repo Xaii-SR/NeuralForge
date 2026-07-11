@@ -406,10 +406,37 @@ pub fn enriched_context(
     let mut used_tokens = estimate_tokens(memory);
     let mut output_parts = Vec::new();
     if !memory.is_empty() && used_tokens < max_tokens { output_parts.push(format!("# Project Memory\n{memory}")); }
-    for item in &items {
+    // First pass: fill items up to budget
+    let mut deferred: Vec<usize> = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
         let t = format!("# {}\n{}", item.label, item.content);
         let tk = estimate_tokens(&t);
         if used_tokens + tk <= max_tokens { output_parts.push(t); used_tokens += tk; }
+        else { deferred.push(idx); }
+    }
+
+    // Reclamation pass: if >15% headroom remains, backfill from extended search
+    const BACKFILL_THRESHOLD: f64 = 0.15;
+    let remaining_budget = max_tokens.saturating_sub(used_tokens);
+    if remaining_budget as f64 > max_tokens as f64 * BACKFILL_THRESHOLD && !deferred.is_empty() {
+        // Fetch additional chunks with extended limit
+        if let Ok(extra_results) = keyword_search(conn, query, 20) {
+            let existing_paths: HashSet<&str> = matched_paths.iter().map(|s| s.as_str()).collect();
+            for result in &extra_results {
+                if used_tokens >= max_tokens { break; }
+                if existing_paths.contains(result.path.as_str()) { continue; }
+                let symbols = get_symbol_boundaries(conn, &result.path);
+                let mut content = prune_blocks(&result.content, 800, &symbols);
+                if let Some(ref var) = target_var { content = prune_to_def_use(&content, var); }
+                let label = format!("Code: {} (lines {}-{})", result.path, result.start_line, result.end_line);
+                let t = format!("# {}\n{}", label, content);
+                let tk = estimate_tokens(&t);
+                if used_tokens + tk <= max_tokens {
+                    output_parts.push(t);
+                    used_tokens += tk;
+                }
+            }
+        }
     }
     Ok(if output_parts.is_empty() { String::new() } else { output_parts.join("\n\n") })
 }
