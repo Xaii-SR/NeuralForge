@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Editor from "./Editor";
+import DiffEditor from "@/components/editor/DiffEditor";
 import TabBar from "./TabBar";
 import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
@@ -23,6 +25,7 @@ export default function EditorPane({
   onChange,
   onSave,
 }: EditorPaneProps) {
+  const [isDiffMode, setIsDiffMode] = useState(false);
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
   if (!activeFile) {
@@ -38,14 +41,33 @@ export default function EditorPane({
   return (
     <div className="flex h-full w-full flex-col">
       <TabBar tabs={openFiles} activePath={activePath} onSelect={onSelect} onClose={onClose} />
+      {/* Diff mode toggle bar */}
+      <div className="flex items-center gap-2 border-b border-[#333] bg-[#252526] px-3 py-1">
+        <button
+          onClick={() => setIsDiffMode(!isDiffMode)}
+          className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-[#333] text-[#aaa] hover:bg-[#444]"}`}
+        >
+          {isDiffMode ? "Diff Mode ON" : "Diff Mode OFF"}
+        </button>
+      </div>
       <div className="min-h-0 flex-1">
-        <Editor
-          path={activeFile.path}
-          language={languageFromPath(activeFile.path)}
-          value={activeFile.content}
-          onChange={(v) => onChange(activeFile.path, v)}
-          onSave={() => onSave(activeFile.path)}
-        />
+        {isDiffMode ? (
+          <DiffEditor
+            original={activeFile.content}
+            modified={activeFile.content}
+            language={languageFromPath(activeFile.path)}
+            originalPath={`original:${activeFile.path}`}
+            modifiedPath={`modified:${activeFile.path}`}
+          />
+        ) : (
+          <Editor
+            path={activeFile.path}
+            language={languageFromPath(activeFile.path)}
+            value={activeFile.content}
+            onChange={(v) => onChange(activeFile.path, v)}
+            onSave={() => onSave(activeFile.path)}
+          />
+        )}
       </div>
     </div>
   );
