@@ -154,9 +154,13 @@ pub fn enriched_context(
         }
     }
 
-    // Phase 4: Dependency info for matched files
+    // Phase 4: Dependency info for matched files with cycle-safe global visited set
+    let mut global_visited: HashSet<String> = HashSet::new();
     for file_path in &matched_paths {
-        let deps = get_dependency_info(conn, file_path, 0, &mut HashSet::new());
+        if global_visited.contains(file_path) {
+            continue;
+        }
+        let deps = get_dependency_info(conn, file_path, 0, &mut global_visited);
         if !deps.is_empty() {
             items.push(EnrichedItem {
                 priority: 3, label: format!("Dependencies of {}", file_path), content: deps.join("\n"),
