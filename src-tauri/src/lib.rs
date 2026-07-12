@@ -117,6 +117,8 @@ pub fn run() {
       bootstrap::propose_self_improvement,
       workspace::search::search_workspace_files,
       workspace::embeddings::build_local_index,
+      workspace::embeddings::generate_local_embeddings,
+      workspace::embeddings::query_codebase_semantic,
       bootstrap::apply_self_improvement,
     ])
     .setup(|app| {

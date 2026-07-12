@@ -2,9 +2,6 @@ use crate::workspace::chunker::CodeChunk;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const EMBEDDING_DIM: usize = 384;
-const SEED: u64 = 42;
-
 /// A code chunk with its vector embedding.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VectorizedChunk {
@@ -14,31 +11,6 @@ pub struct VectorizedChunk {
     pub end_line: usize,
     pub text: String,
     pub vector: Vec<f32>,
-}
-
-/// Generates a deterministic mock embedding vector for a chunk based on its
-/// text content. This produces a consistent 384-d vector for the same text,
-/// enabling basic similarity comparison. In production this would use a real
-/// ONNX embedding model (e.g., all-MiniLM-L6-v2 via `fastembed`).
-fn mock_embed(text: &str) -> Vec<f32> {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    let seed = hasher.finish();
-
-    let mut vec = Vec::with_capacity(EMBEDDING_DIM);
-    let mut rng = seed;
-    for _ in 0..EMBEDDING_DIM {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        let val = (rng >> 33) as f32 / u32::MAX as f32;
-        vec.push(val * 2.0 - 1.0); // Normalize to [-1, 1]
-    }
-    // L2 normalize
-    let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for v in &mut vec { *v /= norm; }
-    }
-    vec
 }
 
 /// Builds a local chunk index for the workspace by scanning all source files,
@@ -90,38 +62,85 @@ pub fn build_local_index(workspace_root: String) -> Result<usize, String> {
     Ok(count)
 }
 
-/// Reads the pre-built chunk index and generates deterministic vector embeddings
-/// for each chunk using a hash-based mock embedding. Saves the result to
-/// `.neuralforge/embeddings.json`.
+/// Computes the cosine similarity between two equal-length vectors.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct QueryResult {
+    pub file_path: String, pub start_line: usize, pub end_line: usize,
+    pub text: String, pub score: f32,
+}
+
+#[tauri::command]
+pub fn query_codebase_semantic(query: String, max_results: usize, workspace_root: String) -> Result<Vec<QueryResult>, String> {
+    let root = std::path::Path::new(&workspace_root);
+    let raw = std::fs::read_to_string(root.join(".neuralforge/embeddings.json")).map_err(|e| format!("read: {e}"))?;
+    let chunks: Vec<VectorizedChunk> = serde_json::from_str(&raw).map_err(|e| format!("parse: {e}"))?;
+    if chunks.is_empty() { return Ok(vec![]); }
+
+    use fastembed::{InitOptionsWithLength, EmbeddingModel};
+    let mut model = fastembed::TextEmbedding::try_new(InitOptionsWithLength::new(EmbeddingModel::AllMiniLML6V2))
+        .map_err(|e| format!("model: {e}"))?;
+    let qv = model.embed(vec![query.as_str()], None).map_err(|e| format!("embed: {e}"))?;
+    let qv = &qv[0];
+
+    let mut scored: Vec<(f32, &VectorizedChunk)> = chunks.iter().map(|c| (cosine_similarity(qv, &c.vector), c)).collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(max_results);
+
+    Ok(scored.into_iter().map(|(s, c)| QueryResult {
+        file_path: c.file_path.clone(), start_line: c.start_line, end_line: c.end_line,
+        text: c.text.clone(), score: s,
+    }).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] fn cosine_identical() { let v = vec![1.0, 0.0, 0.0]; assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-6); }
+    #[test] fn cosine_orthogonal() { assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]) - 0.0).abs() < 1e-6); }
+    #[test] fn cosine_opposite() { assert!((cosine_similarity(&[1.0, 0.0], &[-1.0, 0.0]) + 1.0).abs() < 1e-6); }
+    #[test] fn cosine_mismatch() { assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0); }
+    #[test] fn cosine_empty() { assert_eq!(cosine_similarity(&[], &[]), 0.0); }
+    #[test] fn cosine_partial() {
+        let a = vec![1.0, 2.0, 3.0]; let c = vec![1.0, 0.0, 0.0];
+        let sim = cosine_similarity(&a, &c);
+        assert!((sim - (1.0_f32 / (14.0_f32.sqrt()))).abs() < 1e-6);
+    }
+}
+
+/// Reads the pre-built chunk index and generates 384-d vector embeddings using
+/// the local ONNX all-MiniLM-L6-v2 model via fastembed. Saves to embeddings.json.
 #[tauri::command]
 pub fn generate_local_embeddings(workspace_root: String) -> Result<usize, String> {
     let root = Path::new(&workspace_root);
     let chunks_path = root.join(".neuralforge/chunks.json");
+    let raw = std::fs::read_to_string(&chunks_path).map_err(|e| format!("read: {e}"))?;
+    let chunks: Vec<CodeChunk> = serde_json::from_str(&raw).map_err(|e| format!("parse: {e}"))?;
+    if chunks.is_empty() { return Ok(0); }
 
-    let json = std::fs::read_to_string(&chunks_path)
-        .map_err(|e| format!("Failed to read chunks.json: {e}"))?;
-    let chunks: Vec<CodeChunk> = serde_json::from_str(&json)
-        .map_err(|e| format!("Failed to parse chunks.json: {e}"))?;
+    use fastembed::{InitOptionsWithLength, EmbeddingModel};
+    let mut model = fastembed::TextEmbedding::try_new(InitOptionsWithLength::new(EmbeddingModel::AllMiniLML6V2))
+        .map_err(|e| format!("model: {e}"))?;
+    let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+    let vectors = model.embed(texts, None).map_err(|e| format!("embed: {e}"))?;
 
-    let vectorized: Vec<VectorizedChunk> = chunks.into_iter().map(|chunk| {
-        let vector = mock_embed(&chunk.text);
-        VectorizedChunk {
-            file_path: chunk.file_path,
-            chunk_index: chunk.chunk_index,
-            start_line: chunk.start_line,
-            end_line: chunk.end_line,
-            text: chunk.text,
-            vector,
-        }
+    let vectorized: Vec<VectorizedChunk> = chunks.into_iter().zip(vectors).map(|(c, v)| VectorizedChunk {
+        file_path: c.file_path, chunk_index: c.chunk_index, start_line: c.start_line,
+        end_line: c.end_line, text: c.text, vector: v,
     }).collect();
 
-    let output_dir = root.join(".neuralforge");
-    let out_json = serde_json::to_string_pretty(&vectorized)
-        .map_err(|e| format!("Serialization failed: {e}"))?;
-    std::fs::write(output_dir.join("embeddings.json"), &out_json)
-        .map_err(|e| format!("Write failed: {e}"))?;
-
-    let count = vectorized.len();
-    tracing::info!(target: "workspace", event = "embeddings_generated", chunk_count = count);
-    Ok(count)
+    let out_dir = root.join(".neuralforge");
+    let out_json = serde_json::to_string_pretty(&vectorized).map_err(|e| format!("json: {e}"))?;
+    std::fs::write(out_dir.join("embeddings.json"), &out_json).map_err(|e| format!("write: {e}"))?;
+    tracing::info!(target: "workspace", event = "embeddings_generated", chunk_count = vectorized.len());
+    Ok(vectorized.len())
 }
