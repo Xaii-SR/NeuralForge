@@ -3,6 +3,7 @@ pub mod autocomplete;
 pub mod cache;
 pub mod completion;
 pub mod composer;
+pub mod docs;
 pub mod context;
 pub mod health;
 pub mod inline;
