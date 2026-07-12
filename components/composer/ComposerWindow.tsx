@@ -5,6 +5,8 @@ import type { ComposerSession } from "@/hooks/useComposer";
 import { useMentionMenu } from "@/hooks/useMentionMenu";
 import { useDebounce } from "@/hooks/useDebounce";
 import MentionMenu from "@/components/composer/MentionMenu";
+import ContextPill from "@/components/composer/ContextPill";
+import ContextAccordion from "@/components/composer/ContextAccordion";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface ComposerWindowProps {
@@ -191,6 +193,9 @@ export default function ComposerWindow({
                   );
                 })}
               </div>
+            )}
+            {(msg as any).contextSources?.length > 0 && (
+              <ContextAccordion sources={(msg as any).contextSources} />
             )}
             {msg.file_paths.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">

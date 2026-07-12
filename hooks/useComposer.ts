@@ -26,6 +26,7 @@ export interface ComposerMessage {
   content: string;
   file_paths: string[];
   code_blocks: CodeBlock[];
+  contextSources?: { file_path: string; start_line: number; end_line: number; text: string; score: number }[];
 }
 
 export interface ComposerSession {
@@ -60,16 +61,24 @@ export function useComposer() {
   const sendMessage = useCallback(async (content: string) => {
     if (!session) return;
     // Detect @Codebase queries and fetch semantic context
+    let contextSources: ComposerMessage["contextSources"] | null = null;
     let semanticContext: string | null = null;
     const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
     if (codebaseMatch) {
       const query = codebaseMatch[1].trim();
       try {
-        const results = await invoke<{ file_path: string; text: string }[]>("query_codebase_semantic", {
+        const results = await invoke<any[]>("query_codebase_semantic", {
           query,
           maxResults: 5,
           workspaceRoot: "",
         });
+        contextSources = results.map((r) => ({
+          file_path: r.file_path,
+          start_line: r.start_line,
+          end_line: r.end_line,
+          text: r.text,
+          score: r.score,
+        }));
         semanticContext = results.map((r) => `File: ${r.file_path}\n${r.text}`).join("\n\n");
       } catch { /* ignore search failures */ }
     }
@@ -79,8 +88,10 @@ export function useComposer() {
       content,
       semanticContext,
     });
-    const h = history.map((msg) => ({
+    const h = history.map((msg, idx) => ({
       ...msg,
+      // Attach context sources to the first (user) message if applicable
+      contextSources: idx === 0 && contextSources ? contextSources : msg.contextSources,
       code_blocks: msg.code_blocks.map((b) => ({
         ...b, id: b.id || nextBlockId(), status: (b.status || "idle") as any,
         blockType: b.blockType || (b.file_path?.startsWith("exec") ? "terminal_command" as const : "file_edit" as const),
