@@ -4,6 +4,7 @@ pub mod completion;
 pub mod composer;
 pub mod context;
 pub mod health;
+pub mod inline;
 pub mod model_manager;
 pub mod providers;
 pub mod router;

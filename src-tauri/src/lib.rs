@@ -80,6 +80,7 @@ pub fn run() {
       ai::composer::get_composer_session,
       ai::composer::execute_composer_command_stream,
       ai::composer::kill_composer_command,
+      ai::inline::stream_inline_edit,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,
