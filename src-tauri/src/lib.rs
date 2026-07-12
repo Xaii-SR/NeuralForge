@@ -82,6 +82,7 @@ pub fn run() {
       ai::composer::execute_composer_command_stream,
       ai::composer::kill_composer_command,
       ai::docs::fetch_and_cache_doc,
+      ai::docs::list_cached_docs,
       ai::inline::stream_inline_edit,
       database::index_workspace,
       database::search_workspace,

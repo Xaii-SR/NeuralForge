@@ -44,3 +44,25 @@ pub async fn fetch_and_cache_doc(name: String, url: String) -> Result<String, St
 
     Ok(path_str)
 }
+
+/// Returns a list of all cached documentation names (without .md extension).
+#[tauri::command]
+pub fn list_cached_docs() -> Result<Vec<String>, String> {
+    let docs_dir = Path::new(".neuralforge").join("docs");
+    if !docs_dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(&docs_dir)
+        .map_err(|e| format!("Failed to read docs dir: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Dir entry error: {e}"))?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Some(stem) = path.file_stem() {
+                names.push(stem.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(names)
+}

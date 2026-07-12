@@ -7,6 +7,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import MentionMenu from "@/components/composer/MentionMenu";
 import ContextPill from "@/components/composer/ContextPill";
 import ContextAccordion from "@/components/composer/ContextAccordion";
+import type { MentionItem } from "@/components/composer/MentionMenu";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { PendingDiff } from "@/hooks/useComposer";
@@ -40,15 +41,20 @@ export default function ComposerWindow({
   const inputRef = useRef<HTMLInputElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const { state: mention, open: openMention, close: closeMention, setQuery: setMentionQuery, setActiveIndex: setMentionIndex } = useMentionMenu();
-  const [suggestedFiles, setSuggestedFiles] = useState<string[]>([]);
+  const [suggestedItems, setSuggestedItems] = useState<MentionItem[]>([]);
   const debouncedQuery = useDebounce(mention.query, 150);
 
-  // Debounced workspace file search
+  // Debounced workspace file + doc search
   useEffect(() => {
-    if (!mention.isOpen || !debouncedQuery) { setSuggestedFiles([]); return; }
-    invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10, workspaceRoot: "" })
-      .then(setSuggestedFiles)
-      .catch(() => setSuggestedFiles([]));
+    if (!mention.isOpen || !debouncedQuery) { setSuggestedItems([]); return; }
+    Promise.all([
+      invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10, workspaceRoot: "" }),
+      invoke<string[]>("list_cached_docs"),
+    ]).then(([files, docs]) => {
+      const fileItems: MentionItem[] = files.map((f) => ({ label: f, type: "file" }));
+      const docItems: MentionItem[] = docs.map((d) => ({ label: d, type: "doc" }));
+      setSuggestedItems([...fileItems, ...docItems]);
+    }).catch(() => setSuggestedItems([]));
   }, [debouncedQuery, mention.isOpen]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -101,17 +107,16 @@ export default function ComposerWindow({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        const filtered = suggestedFiles.length > 0
-          ? suggestedFiles
-          : (mention.query ? [] : []);
+        const filtered = suggestedItems.length > 0
+          ? suggestedItems
+          : [];
         const selected = filtered[mention.activeIndex];
         if (selected) {
-          // Remove @query from input, add file
           const atIndex = inputValue.lastIndexOf("@");
-          const newValue = inputValue.slice(0, atIndex) + selected + " ";
+          const newValue = inputValue.slice(0, atIndex) + selected.label + " ";
           setInputValue(newValue);
-          onAddFile(selected);
-          closeMention(selected);
+          if (selected.type === "file") onAddFile(selected.label);
+          closeMention(selected.label);
         }
         return;
       }
@@ -252,14 +257,14 @@ export default function ComposerWindow({
           x={mention.coords.x}
           y={mention.coords.y}
           query={mention.query}
-          items={suggestedFiles}
+          items={suggestedItems}
           activeIndex={mention.activeIndex}
-          onSelect={(file) => {
+          onSelect={(item) => {
             const atIndex = inputValue.lastIndexOf("@");
-            const newValue = inputValue.slice(0, atIndex) + file + " ";
+            const newValue = inputValue.slice(0, atIndex) + item.label + " ";
             setInputValue(newValue);
-            onAddFile(file);
-            closeMention(file);
+            if (item.type === "file") onAddFile(item.label);
+          closeMention(item.label);
           }}
           onClose={() => closeMention(null)}
         />
