@@ -18,8 +18,8 @@ export interface ComposerWindowProps {
   onRemoveFile: (filePath: string) => Promise<void>;
   onApplyBlock: (blockId: string, filePath: string, code: string) => void;
   onClose: () => void;
-  pendingDiff?: PendingDiff | null;
-  setPendingDiff?: (diff: PendingDiff | null) => void;
+  pendingDiffs?: PendingDiff[];
+  setPendingDiffs?: (diffs: PendingDiff[]) => void;
 }
 
 
@@ -29,8 +29,8 @@ export default function ComposerWindow({
   onAddFile,
   onApplyBlock,
   onClose,
-  pendingDiff,
-  setPendingDiff,
+  pendingDiffs,
+  setPendingDiffs,
 }: ComposerWindowProps) {
   const [inputValue, setInputValue] = useState("");
   const [applyingBlockId, setApplyingBlockId] = useState<string | null>(null);
@@ -202,7 +202,7 @@ export default function ComposerWindow({
                             {block.status === "idle" && block.file_path && block.file_path !== "unknown" && !block.file_path?.startsWith("exec") && (
                               <button
                                 onClick={() => {
-                                  if (setPendingDiff) setPendingDiff({ filePath: block.file_path, newCode: block.code });
+                                  if (setPendingDiffs) setPendingDiffs([{ filePath: block.file_path, newCode: block.code }]);
                                   setApplyingBlockId(block.id);
                                   setTimeout(() => setApplyingBlockId(null), 1000);
                                 }}

@@ -48,7 +48,8 @@ export interface PendingDiff {
 export function useComposer() {
   const [session, setSession] = useState<ComposerSession | null>(null);
   const [isOpen, setIsOpen] = useState(false);
-  const [pendingDiff, setPendingDiff] = useState<PendingDiff | null>(null);
+  const [pendingDiffs, setPendingDiffs] = useState<PendingDiff[]>([]);
+  const [activeDiffIndex, setActiveDiffIndex] = useState(0);
 
   const initialize = useCallback(async (files: string[]) => {
     const sessionId = `composer-${Date.now()}`;
@@ -172,5 +173,5 @@ export function useComposer() {
 
   const close = useCallback(() => setIsOpen(false), []);
 
-  return { session, isOpen, pendingDiff, setPendingDiff, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
+  return { session, isOpen, pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
 }

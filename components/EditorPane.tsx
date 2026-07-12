@@ -32,48 +32,57 @@ export default function EditorPane({
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
   const { state: prompt, open: openPrompt, close: closePrompt, submitInlinePrompt, acceptChanges, rejectChanges } = useInlinePrompt();
-  const { pendingDiff, setPendingDiff } = useComposer();
+  const { pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex } = useComposer();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const inlineDecorationsRef = useRef<string[]>([]);
   const [diffOriginal, setDiffOriginal] = useState<string>("");
   const [diffLanguage, setDiffLanguage] = useState("text");
 
-  // When pendingDiff is set, fetch the original file content
-  const [isDiffReview, setIsDiffReview] = useState(false);
+  const currentDiff = pendingDiffs[activeDiffIndex] ?? null;
+  const isDiffReview = currentDiff !== null;
+
+  // When currentDiff changes, fetch the original file content
   useEffect(() => {
-    if (!pendingDiff) { setIsDiffReview(false); return; }
-    const f = openFiles.find((x) => x.path === pendingDiff.filePath);
+    if (!currentDiff) return;
+    const f = openFiles.find((x) => x.path === currentDiff.filePath);
     if (f) {
       setDiffOriginal(f.content);
       setDiffLanguage(languageFromPath(f.path));
     } else {
-      // File not open: read from disk
-      invoke<string>("read_file", { path: pendingDiff.filePath })
+      invoke<string>("read_file", { path: currentDiff.filePath })
         .then(setDiffOriginal)
         .catch(() => setDiffOriginal("// Could not read file"));
-      setDiffLanguage(languageFromPath(pendingDiff.filePath));
+      setDiffLanguage(languageFromPath(currentDiff.filePath));
     }
-    setIsDiffReview(true);
-  }, [pendingDiff, openFiles]);
+  }, [currentDiff, openFiles]);
 
   const handleDiffAccept = async () => {
-    if (!pendingDiff) return;
+    if (!currentDiff) return;
     try {
-      await invoke("write_file", { path: pendingDiff.filePath, contents: pendingDiff.newCode });
-      // Update open file or reload
-      if (activeFile?.path === pendingDiff.filePath) {
-        onChange(pendingDiff.filePath, pendingDiff.newCode);
+      await invoke("write_file", { path: currentDiff.filePath, contents: currentDiff.newCode });
+      if (activeFile?.path === currentDiff.filePath) {
+        onChange(currentDiff.filePath, currentDiff.newCode);
       }
-    } catch (e) { /* handle error silently */ }
-    setPendingDiff?.(null);
+    } catch { /* ignore */ }
+    removeActiveDiff();
   };
 
   const handleDiffReject = () => {
-    setPendingDiff?.(null);
+    removeActiveDiff();
   };
 
-  // Clear Monaco decorations + refocus editor
+  const removeActiveDiff = () => {
+    setPendingDiffs((prev) => {
+      const next = [...prev];
+      next.splice(activeDiffIndex, 1);
+      if (activeDiffIndex > next.length - 1) {
+        setActiveDiffIndex(Math.max(0, next.length - 1));
+      }
+      return next;
+    });
+  };
+
   const clearDecorations = useCallback(() => {
     const editor = (window as any).__neuralforge_editor;
     if (editor && inlineDecorationsRef.current.length > 0) {
@@ -82,16 +91,13 @@ export default function EditorPane({
     editor?.focus();
   }, []);
 
-  // Accept/Reject handlers that clear decorations before resolving the promise
   const handleAccept = useCallback(() => { clearDecorations(); acceptChanges(); }, [clearDecorations, acceptChanges]);
   const handleReject = useCallback(() => { clearDecorations(); rejectChanges(); }, [clearDecorations, rejectChanges]);
 
-  // Apply inline diff decorations when entering "review" state
   useEffect(() => {
     const editor = (window as any).__neuralforge_editor;
     const monaco = (window as any).monaco;
     if (!editor || !monaco) return;
-
     if (prompt.status === "review" && prompt.originalText && prompt.streamedText) {
       const origLines = prompt.originalText.split("\n").length;
       const streamLines = prompt.streamedText.split("\n").length;
@@ -106,7 +112,6 @@ export default function EditorPane({
     }
   }, [prompt.status, prompt.originalText, prompt.streamedText]);
 
-  // Cmd+K / Ctrl+K
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -139,13 +144,17 @@ export default function EditorPane({
               isDiffMode={true}
               onAccept={handleDiffAccept}
               onReject={handleDiffReject}
+              totalDiffs={pendingDiffs.length}
+              activeDiffIndex={activeDiffIndex}
+              onPrevDiff={() => setActiveDiffIndex((i: number) => Math.max(0, i - 1))}
+              onNextDiff={() => setActiveDiffIndex((i: number) => Math.min(pendingDiffs.length - 1, i + 1))}
             />
             <DiffEditor
               original={diffOriginal}
-              modified={pendingDiff?.newCode ?? ""}
+              modified={currentDiff?.newCode ?? ""}
               language={diffLanguage}
-              originalPath={pendingDiff?.filePath ?? "original"}
-              modifiedPath={`modified:${pendingDiff?.filePath ?? ""}`}
+              originalPath={currentDiff?.filePath ?? "original"}
+              modifiedPath={`modified:${currentDiff?.filePath ?? ""}`}
             />
           </>
         ) : isDiffMode ? (
