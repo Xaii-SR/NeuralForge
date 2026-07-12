@@ -8,6 +8,7 @@ import MentionMenu from "@/components/composer/MentionMenu";
 import ContextPill from "@/components/composer/ContextPill";
 import ContextAccordion from "@/components/composer/ContextAccordion";
 import type { MentionItem } from "@/components/composer/MentionMenu";
+import { useComposer } from "@/hooks/useComposer";
 import { invoke } from "@tauri-apps/api/core";
 
 import type { PendingDiff } from "@/hooks/useComposer";
@@ -21,6 +22,7 @@ export interface ComposerWindowProps {
   onClose: () => void;
   pendingDiffs?: PendingDiff[];
   setPendingDiffs?: (diffs: PendingDiff[]) => void;
+  setAttachedDocs?: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
 
@@ -32,6 +34,7 @@ export default function ComposerWindow({
   onClose,
   pendingDiffs,
   setPendingDiffs,
+  setAttachedDocs,
 }: ComposerWindowProps) {
   const [inputValue, setInputValue] = useState("");
   const [applyingBlockId, setApplyingBlockId] = useState<string | null>(null);
@@ -41,6 +44,7 @@ export default function ComposerWindow({
   const inputRef = useRef<HTMLInputElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const { state: mention, open: openMention, close: closeMention, setQuery: setMentionQuery, setActiveIndex: setMentionIndex } = useMentionMenu();
+  const { hasCustomRules } = useComposer();
   const [suggestedItems, setSuggestedItems] = useState<MentionItem[]>([]);
   const debouncedQuery = useDebounce(mention.query, 150);
 
@@ -142,7 +146,15 @@ export default function ComposerWindow({
   return (
     <div className="fixed z-50 flex flex-col rounded-lg border border-[#444] bg-[#1e1e1e] shadow-2xl" style={{ left: position.x, top: position.y, width: 520 }}>
       <div className="flex cursor-grab items-center justify-between rounded-t-lg border-b border-[#333] bg-[#252526] px-3 py-2" onMouseDown={handleMouseDown}>
-        <span className="text-xs font-semibold uppercase tracking-wide text-[#888]">Composer</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-[#888]">Composer</span>
+          {hasCustomRules && (
+            <span className="inline-flex items-center gap-1 rounded border border-zinc-800 bg-zinc-900/50 px-2 py-0.5 text-[10px] text-zinc-400 transition-opacity select-none"
+              title="Project-specific instructions are active for this prompt session.">
+              📜 .neuralforgerules
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {session.active_files.length > 0 && (
             <div className="flex -space-x-1">
@@ -264,7 +276,8 @@ export default function ComposerWindow({
             const newValue = inputValue.slice(0, atIndex) + item.label + " ";
             setInputValue(newValue);
             if (item.type === "file") onAddFile(item.label);
-          closeMention(item.label);
+            else if (item.type === "doc" && setAttachedDocs) setAttachedDocs((prev: string[]) => [...prev, item.label]);
+            closeMention(item.label);
           }}
           onClose={() => closeMention(null)}
         />

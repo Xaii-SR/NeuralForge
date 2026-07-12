@@ -51,6 +51,7 @@ export function useComposer() {
   const [pendingDiffs, setPendingDiffs] = useState<PendingDiff[]>([]);
   const [activeDiffIndex, setActiveDiffIndex] = useState(0);
   const [attachedDocs, setAttachedDocs] = useState<string[]>([]);
+  const [hasCustomRules, setHasCustomRules] = useState(false);
 
   const initialize = useCallback(async (files: string[]) => {
     const sessionId = `composer-${Date.now()}`;
@@ -81,6 +82,9 @@ export function useComposer() {
       const rules = await invoke<string>("read_file", { path: ".neuralforgerules" });
       if (rules && rules.trim()) {
         semanticContext = `<neuralforge_rules>\n${rules.trim()}\n</neuralforge_rules>`;
+        setHasCustomRules(true);
+      } else {
+        setHasCustomRules(false);
       }
     } catch { /* file not found or unreadable */ }
 
@@ -221,5 +225,5 @@ export function useComposer() {
 
   const close = useCallback(() => setIsOpen(false), []);
 
-  return { session, isOpen, pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex, attachedDocs, setAttachedDocs, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
+  return { session, isOpen, pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex, attachedDocs, setAttachedDocs, hasCustomRules, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
 }
