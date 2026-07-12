@@ -62,36 +62,27 @@ export function useComposer() {
     if (!session) return;
     // Detect @Codebase queries and fetch semantic context
     let contextSources: ComposerMessage["contextSources"] | null = null;
+    let contextSources: ComposerMessage["contextSources"] | null = null;
     let semanticContext: string | null = null;
     const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
     if (codebaseMatch) {
       const query = codebaseMatch[1].trim();
       try {
-        const results = await invoke<any[]>("query_codebase_semantic", {
-          query,
-          maxResults: 5,
-          workspaceRoot: "",
-        });
-        contextSources = results.map((r) => ({
-          file_path: r.file_path,
-          start_line: r.start_line,
-          end_line: r.end_line,
-          text: r.text,
-          score: r.score,
-        }));
-        semanticContext = results.map((r) => `File: ${r.file_path}\n${r.text}`).join("\n\n");
-      } catch { /* ignore search failures */ }
+        const results = await invoke<any[]>("query_codebase_semantic", { query, maxResults: 5, workspaceRoot: "" });
+        contextSources = results.map((r: any) => ({ file_path: r.file_path, start_line: r.start_line, end_line: r.end_line, text: r.text, score: r.score }));
+        semanticContext = results.map((r: any) => `File: ${r.file_path}\n${r.text}`).join("\n\n");
+      } catch { /* ignore */ }
     }
 
-    const history = await invoke<ComposerMessage[]>("send_composer_message", {
+    const response = await invoke<{ text: ComposerMessage[]; autonomous_sources: any[] }>("send_composer_message", {
       sessionId: session.session_id,
       content,
       semanticContext,
     });
-    const h = history.map((msg, idx) => ({
+    const allSources = [...(contextSources || []), ...response.autonomous_sources];
+    const h = response.text.map((msg, idx) => ({
       ...msg,
-      // Attach context sources to the first (user) message if applicable
-      contextSources: idx === 0 && contextSources ? contextSources : msg.contextSources,
+      contextSources: idx === 0 && allSources.length > 0 ? allSources : msg.contextSources,
       code_blocks: msg.code_blocks.map((b) => ({
         ...b, id: b.id || nextBlockId(), status: (b.status || "idle") as any,
         blockType: b.blockType || (b.file_path?.startsWith("exec") ? "terminal_command" as const : "file_edit" as const),
