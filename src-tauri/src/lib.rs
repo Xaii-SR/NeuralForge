@@ -84,6 +84,8 @@ pub fn run() {
       ai::docs::fetch_and_cache_doc,
       ai::docs::list_cached_docs,
       ai::docs::read_cached_doc,
+      ai::git::get_git_status,
+      ai::git::get_git_diff,
       ai::web::search_web,
       ai::inline::stream_inline_edit,
       database::index_workspace,
