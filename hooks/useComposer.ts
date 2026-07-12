@@ -97,6 +97,17 @@ export function useComposer() {
       }
     }
 
+    // Attach @Git context
+    if (content.toLowerCase().includes("@git")) {
+      try {
+        const diff = await invoke<string>("get_git_diff", { path: "." });
+        if (diff) {
+          const gitBlock = `--- GIT DIFF CONTEXT ---\n${diff}\n--- END GIT ---`;
+          semanticContext = semanticContext ? semanticContext + "\n\n" + gitBlock : gitBlock;
+        }
+      } catch { /* ignore */ }
+    }
+
     // Attach @Web context
     const webMatch = content.match(/@Web\s+(.+)/i);
     if (webMatch) {
