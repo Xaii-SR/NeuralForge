@@ -172,5 +172,5 @@ export function useComposer() {
 
   const close = useCallback(() => setIsOpen(false), []);
 
-  return { session, isOpen, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
+  return { session, isOpen, pendingDiff, setPendingDiff, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
 }

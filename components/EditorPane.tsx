@@ -6,9 +6,11 @@ import DiffEditor from "@/components/editor/DiffEditor";
 import DiffActionBar from "@/components/editor/DiffActionBar";
 import InlinePromptWidget from "@/components/editor/InlinePromptWidget";
 import TabBar from "./TabBar";
+import { invoke } from "@tauri-apps/api/core";
 import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
 import { useVersionCache } from "@/hooks/useVersionCache";
+import { useComposer } from "@/hooks/useComposer";
 import { useInlinePrompt } from "@/hooks/useInlinePrompt";
 import type { OpenFile } from "@/hooks/useWorkspace";
 
@@ -30,9 +32,46 @@ export default function EditorPane({
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
   const { state: prompt, open: openPrompt, close: closePrompt, submitInlinePrompt, acceptChanges, rejectChanges } = useInlinePrompt();
+  const { pendingDiff, setPendingDiff } = useComposer();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const inlineDecorationsRef = useRef<string[]>([]);
+  const [diffOriginal, setDiffOriginal] = useState<string>("");
+  const [diffLanguage, setDiffLanguage] = useState("text");
+
+  // When pendingDiff is set, fetch the original file content
+  const [isDiffReview, setIsDiffReview] = useState(false);
+  useEffect(() => {
+    if (!pendingDiff) { setIsDiffReview(false); return; }
+    const f = openFiles.find((x) => x.path === pendingDiff.filePath);
+    if (f) {
+      setDiffOriginal(f.content);
+      setDiffLanguage(languageFromPath(f.path));
+    } else {
+      // File not open: read from disk
+      invoke<string>("read_file", { path: pendingDiff.filePath })
+        .then(setDiffOriginal)
+        .catch(() => setDiffOriginal("// Could not read file"));
+      setDiffLanguage(languageFromPath(pendingDiff.filePath));
+    }
+    setIsDiffReview(true);
+  }, [pendingDiff, openFiles]);
+
+  const handleDiffAccept = async () => {
+    if (!pendingDiff) return;
+    try {
+      await invoke("write_file", { path: pendingDiff.filePath, contents: pendingDiff.newCode });
+      // Update open file or reload
+      if (activeFile?.path === pendingDiff.filePath) {
+        onChange(pendingDiff.filePath, pendingDiff.newCode);
+      }
+    } catch (e) { /* handle error silently */ }
+    setPendingDiff?.(null);
+  };
+
+  const handleDiffReject = () => {
+    setPendingDiff?.(null);
+  };
 
   // Clear Monaco decorations + refocus editor
   const clearDecorations = useCallback(() => {
@@ -94,7 +133,22 @@ export default function EditorPane({
           className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-[#333] text-[#aaa] hover:bg-[#444]"}`}>{isDiffMode ? "Diff Mode ON" : "Diff Mode OFF"}</button>
       </div>
       <div className="min-h-0 flex-1">
-        {isDiffMode ? (
+        {isDiffReview ? (
+          <>
+            <DiffActionBar
+              isDiffMode={true}
+              onAccept={handleDiffAccept}
+              onReject={handleDiffReject}
+            />
+            <DiffEditor
+              original={diffOriginal}
+              modified={pendingDiff?.newCode ?? ""}
+              language={diffLanguage}
+              originalPath={pendingDiff?.filePath ?? "original"}
+              modifiedPath={`modified:${pendingDiff?.filePath ?? ""}`}
+            />
+          </>
+        ) : isDiffMode ? (
           <DiffEditor original={getSnapshot(activeFile.path) ?? activeFile.content} modified={activeFile.content} language={languageFromPath(activeFile.path)}
             originalPath={`original:${activeFile.path}`} modifiedPath={`modified:${activeFile.path}`} />
         ) : (
