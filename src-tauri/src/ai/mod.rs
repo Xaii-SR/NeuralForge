@@ -1,4 +1,5 @@
 pub mod benchmarks;
+pub mod autocomplete;
 pub mod cache;
 pub mod completion;
 pub mod composer;
