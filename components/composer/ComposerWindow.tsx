@@ -9,6 +9,8 @@ import ContextPill from "@/components/composer/ContextPill";
 import ContextAccordion from "@/components/composer/ContextAccordion";
 import { invoke } from "@tauri-apps/api/core";
 
+import type { PendingDiff } from "@/hooks/useComposer";
+
 export interface ComposerWindowProps {
   session: ComposerSession;
   onSendMessage: (content: string) => Promise<void>;
@@ -16,6 +18,8 @@ export interface ComposerWindowProps {
   onRemoveFile: (filePath: string) => Promise<void>;
   onApplyBlock: (blockId: string, filePath: string, code: string) => void;
   onClose: () => void;
+  pendingDiff?: PendingDiff | null;
+  setPendingDiff?: (diff: PendingDiff | null) => void;
 }
 
 
@@ -25,8 +29,11 @@ export default function ComposerWindow({
   onAddFile,
   onApplyBlock,
   onClose,
+  pendingDiff,
+  setPendingDiff,
 }: ComposerWindowProps) {
   const [inputValue, setInputValue] = useState("");
+  const [applyingBlockId, setApplyingBlockId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [position, setPosition] = useState({ x: 200, y: 100 });
   const dragOffset = useRef({ x: 0, y: 0 });
@@ -192,7 +199,18 @@ export default function ComposerWindow({
                           )
                         ) : (
                           <>
-                            {block.status === "idle" && <button onClick={() => onApplyBlock(block.id, block.file_path, block.code)} className="rounded bg-blue-700 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600">Apply</button>}
+                            {block.status === "idle" && block.file_path && block.file_path !== "unknown" && !block.file_path?.startsWith("exec") && (
+                              <button
+                                onClick={() => {
+                                  if (setPendingDiff) setPendingDiff({ filePath: block.file_path, newCode: block.code });
+                                  setApplyingBlockId(block.id);
+                                  setTimeout(() => setApplyingBlockId(null), 1000);
+                                }}
+                                className="rounded bg-blue-700 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-600"
+                              >
+                                {applyingBlockId === block.id ? "Applying..." : "✓ Apply"}
+                              </button>
+                            )}
                             {block.status === "applied" && <span className="flex items-center gap-1 text-[11px] text-yellow-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400" />Reviewing in Diff...</span>}
                             {["accepted", "rejected", "completed"].includes(block.status) && <span className="text-[11px] text-[#666]">{block.status === "accepted" ? "Accepted" : block.status === "rejected" ? "Rejected" : block.status === "completed" ? "Completed" : ""}</span>}
                           </>

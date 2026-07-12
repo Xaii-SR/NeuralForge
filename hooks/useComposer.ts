@@ -40,9 +40,15 @@ let _terminalBufferFn: (() => string) | null = null;
 export function setTerminalBufferGetter(fn: () => string) { _terminalBufferFn = fn; }
 export function getTerminalBuffer(): string { return _terminalBufferFn?.() ?? ""; }
 
+export interface PendingDiff {
+  filePath: string;
+  newCode: string;
+}
+
 export function useComposer() {
   const [session, setSession] = useState<ComposerSession | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [pendingDiff, setPendingDiff] = useState<PendingDiff | null>(null);
 
   const initialize = useCallback(async (files: string[]) => {
     const sessionId = `composer-${Date.now()}`;
