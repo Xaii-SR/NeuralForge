@@ -66,3 +66,11 @@ pub fn list_cached_docs() -> Result<Vec<String>, String> {
     }
     Ok(names)
 }
+
+/// Reads the full Markdown content of a cached documentation file.
+#[tauri::command]
+pub fn read_cached_doc(name: String) -> Result<String, String> {
+    let file_path = Path::new(".neuralforge").join("docs").join(format!("{name}.md"));
+    std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read doc '{}': {}", name, e))
+}

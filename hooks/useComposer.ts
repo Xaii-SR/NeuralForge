@@ -50,6 +50,7 @@ export function useComposer() {
   const [isOpen, setIsOpen] = useState(false);
   const [pendingDiffs, setPendingDiffs] = useState<PendingDiff[]>([]);
   const [activeDiffIndex, setActiveDiffIndex] = useState(0);
+  const [attachedDocs, setAttachedDocs] = useState<string[]>([]);
 
   const initialize = useCallback(async (files: string[]) => {
     const sessionId = `composer-${Date.now()}`;
@@ -94,6 +95,22 @@ export function useComposer() {
         const termBlock = `--- RECENT TERMINAL OUTPUT ---\n${buf}\n--- END TERMINAL ---`;
         semanticContext = semanticContext ? semanticContext + "\n\n" + termBlock : termBlock;
       }
+    }
+
+    // Attach @Docs context
+    if (attachedDocs.length > 0) {
+      const docContents = await Promise.allSettled(
+        attachedDocs.map((name) => invoke<string>("read_cached_doc", { name }))
+      );
+      const docBlock = docContents
+        .map((r, i) => {
+          const name = attachedDocs[i];
+          const content = r.status === "fulfilled" ? r.value : `[Error reading doc: ${name}]`;
+          return `--- DOCUMENTATION: ${name} ---\n${content}\n--- END DOCUMENTATION ---`;
+        })
+        .join("\n\n");
+      semanticContext = semanticContext ? semanticContext + "\n\n" + docBlock : docBlock;
+      setAttachedDocs([]);
     }
 
     const response = await invoke<{ text: ComposerMessage[]; autonomous_sources: any[] }>("send_composer_message", {
@@ -173,5 +190,5 @@ export function useComposer() {
 
   const close = useCallback(() => setIsOpen(false), []);
 
-  return { session, isOpen, pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
+  return { session, isOpen, pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex, attachedDocs, setAttachedDocs, initialize, addFile, removeFile, sendMessage, updateBlockStatus, executeTerminalBlock, killCommand, close, setIsOpen };
 }
