@@ -59,7 +59,26 @@ export function useComposer() {
   const sendMessageRef = useRef<(content: string) => Promise<void> | undefined>(undefined);
   const sendMessage = useCallback(async (content: string) => {
     if (!session) return;
-    const history = await invoke<ComposerMessage[]>("send_composer_message", { sessionId: session.session_id, content });
+    // Detect @Codebase queries and fetch semantic context
+    let semanticContext: string | null = null;
+    const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
+    if (codebaseMatch) {
+      const query = codebaseMatch[1].trim();
+      try {
+        const results = await invoke<{ file_path: string; text: string }[]>("query_codebase_semantic", {
+          query,
+          maxResults: 5,
+          workspaceRoot: "",
+        });
+        semanticContext = results.map((r) => `File: ${r.file_path}\n${r.text}`).join("\n\n");
+      } catch { /* ignore search failures */ }
+    }
+
+    const history = await invoke<ComposerMessage[]>("send_composer_message", {
+      sessionId: session.session_id,
+      content,
+      semanticContext,
+    });
     const h = history.map((msg) => ({
       ...msg,
       code_blocks: msg.code_blocks.map((b) => ({

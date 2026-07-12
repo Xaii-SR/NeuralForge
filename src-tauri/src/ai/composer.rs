@@ -250,6 +250,7 @@ pub fn send_composer_message(
     state: State<ComposerSessionState>,
     session_id: String,
     content: String,
+    semantic_context: Option<String>,
 ) -> Result<Vec<ComposerMessage>, String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     let session = sessions
@@ -258,12 +259,26 @@ pub fn send_composer_message(
         .ok_or_else(|| format!("Session {} not found", session_id))?;
 
     // Build the system prompt from active files
-    let system_prompt = build_system_prompt(&session.active_files);
+    let _system_prompt = build_system_prompt(&session.active_files);
+
+    // Inject semantic context if provided
+    let enriched_content = if let Some(ctx) = &semantic_context {
+        if !ctx.is_empty() {
+            format!(
+                "{}\n\n--- RELEVANT CODEBASE CONTEXT ---\n{}--- END CONTEXT ---",
+                content, ctx
+            )
+        } else {
+            content.clone()
+        }
+    } else {
+        content.clone()
+    };
 
     // Add user message
     let user_msg = ComposerMessage {
         role: "user".to_string(),
-        content,
+        content: enriched_content,
         file_paths: session.active_files.clone(),
         code_blocks: Vec::new(),
     };
