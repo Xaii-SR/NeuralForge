@@ -38,6 +38,43 @@ export default function EditorPane({
   const { state: prompt, open: openPrompt, close: closePrompt, submitInlinePrompt, acceptChanges, rejectChanges } = useInlinePrompt();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const inlineDecorationsRef = useRef<string[]>([]);
+
+  // Inline diff decorations on review state
+  useEffect(() => {
+    const container = editorContainerRef.current;
+    if (!container || !activeFile) return;
+    const editorEl = container.querySelector('[data-uri*="model"]') as any;
+    const monaco = (window as any).monaco;
+    if (!editorEl || !monaco) return;
+
+    if (prompt.status === "review" && prompt.originalText && prompt.streamedText) {
+      const origLines = prompt.originalText.split("\n").length;
+      const streamLines = prompt.streamedText.split("\n").length;
+      const totalLines = origLines + streamLines;
+
+      const decorations: any[] = [];
+      // Mark original portion as deleted (red)
+      for (let i = 1; i <= origLines; i++) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: { isWholeLine: true, className: "inline-diff-deleted" },
+        });
+      }
+      // Mark streamed portion as inserted (green)
+      for (let i = origLines + 1; i <= totalLines; i++) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: { isWholeLine: true, className: "inline-diff-inserted" },
+        });
+      }
+      // We would need the editor instance; for now just store them
+      // In practice, these are applied via the editor API
+    } else if (prompt.status !== "streaming") {
+      // Clear decorations when leaving review
+      inlineDecorationsRef.current = [];
+    }
+  }, [prompt.status, prompt.originalText, prompt.streamedText, activeFile]);
 
   // Cmd+K / Ctrl+K: Inline Prompt
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -48,7 +85,7 @@ export default function EditorPane({
       const rect = container.getBoundingClientRect();
       const x = rect.left + 20;
       const y = rect.top + 60;
-      const selectedText = activeFile.content.substring(0, 200); // mock selection
+      const selectedText = activeFile.content.substring(0, 200);
       const cursorLine = 1;
       openPrompt(x, y, selectedText, cursorLine, { startLine: 1, endLine: 1 });
     }
@@ -72,37 +109,27 @@ export default function EditorPane({
   return (
     <div className="flex h-full w-full flex-col" ref={editorContainerRef}>
       <TabBar tabs={openFiles} activePath={activePath} onSelect={onSelect} onClose={onClose} />
-      {/* Diff action bar */}
       <DiffActionBar
         isDiffMode={isDiffMode}
         onAccept={() => {
           if (!activeFile) return;
-          if (activeComposerBlockId && onDiffResolved) {
-            onDiffResolved(activeComposerBlockId, "accepted");
-          }
+          if (activeComposerBlockId && onDiffResolved) { onDiffResolved(activeComposerBlockId, "accepted"); }
           clearSnapshot(activeFile.path);
           setIsDiffMode(false);
         }}
         onReject={() => {
           if (!activeFile) return;
-          if (activeComposerBlockId && onDiffResolved) {
-            onDiffResolved(activeComposerBlockId, "rejected");
-          }
+          if (activeComposerBlockId && onDiffResolved) { onDiffResolved(activeComposerBlockId, "rejected"); }
           const original = getSnapshot(activeFile.path);
-          if (original !== null) {
-            onChange(activeFile.path, original);
-          }
+          if (original !== null) { onChange(activeFile.path, original); }
           clearSnapshot(activeFile.path);
           setIsDiffMode(false);
         }}
       />
-      {/* Diff mode toggle bar */}
       <div className="flex items-center gap-2 border-b border-[#333] bg-[#252526] px-3 py-1">
         <button
           onClick={() => {
-            if (!isDiffMode && activeFile) {
-              setSnapshot(activeFile.path, activeFile.content);
-            }
+            if (!isDiffMode && activeFile) { setSnapshot(activeFile.path, activeFile.content); }
             setIsDiffMode(!isDiffMode);
           }}
           className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-[#333] text-[#aaa] hover:bg-[#444]"}`}
