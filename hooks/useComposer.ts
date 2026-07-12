@@ -97,6 +97,19 @@ export function useComposer() {
       }
     }
 
+    // Attach @Web context
+    const webMatch = content.match(/@Web\s+(.+)/i);
+    if (webMatch) {
+      const query = webMatch[1].trim();
+      try {
+        const webResults = await invoke<string>("search_web", { query });
+        if (webResults) {
+          const webBlock = `--- WEB SEARCH RESULTS: ${query} ---\n${webResults}\n--- END SEARCH ---`;
+          semanticContext = semanticContext ? semanticContext + "\n\n" + webBlock : webBlock;
+        }
+      } catch { /* ignore */ }
+    }
+
     // Attach @Docs context
     if (attachedDocs.length > 0) {
       const docContents = await Promise.allSettled(

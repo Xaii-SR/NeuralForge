@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 export interface MentionItem {
   label: string;
-  type: "file" | "doc";
+  type: "file" | "doc" | "web";
 }
 
 export interface MentionMenuProps {
@@ -40,7 +40,7 @@ export default function MentionMenu({
       {filtered.map((item, i) => (
         <button key={item.label} data-index={i} onClick={() => onSelect(item)}
           className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${i === activeIndex ? "bg-blue-700 text-white" : "text-[#d4d4d4] hover:bg-[#333]"}`}>
-          <span className="mr-2 text-[#888]">{item.type === "doc" ? "📚" : "@"}</span>
+          <span className="mr-2 text-[#888]">{item.type === "doc" ? "📚" : item.type === "web" ? "🌐" : "@"}</span>
           <span>{item.label}</span>
           {item.type === "doc" && <span className="ml-2 text-[10px] text-emerald-400">Docs</span>}
         </button>
