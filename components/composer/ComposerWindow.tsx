@@ -154,6 +154,10 @@ export default function ComposerWindow({
               <div className="mt-2 space-y-2">
                 {(msg as any).code_blocks.map((block: any, bi: number) => {
                   const isTerminal = block.blockType === "terminal_command";
+                  const isExecutable = ["bash", "sh", "shell"].includes((block.language || "").toLowerCase());
+                  const handleRun = async () => {
+                    try { await invoke("write_to_pty", { sessionId: "default", data: block.code + "\r" }); } catch {}
+                  };
                   return (
                     <div key={bi} className={`overflow-hidden rounded border ${isTerminal ? "border-[#3b3b3b] bg-[#0d1117]" : "border-[#444] bg-[#0d1117]"}`}>
                       <div className={`flex items-center justify-between border-b px-3 py-1.5 ${isTerminal ? "border-[#3b3b3b] bg-[#161b22]" : "border-[#333] bg-[#161b22]"}`}>
@@ -161,7 +165,12 @@ export default function ComposerWindow({
                           {isTerminal && <span className="text-[#888]">{">"}</span>}
                           {block.file_path || "unknown"}
                         </span>
-                        <span className="text-[10px] uppercase text-[#666]">{block.language || "code"}</span>
+                        <div className="flex items-center gap-2">
+                          {isExecutable && (
+                            <button onClick={handleRun} className="rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-400 transition-colors hover:bg-emerald-500/20">▶ Run</button>
+                          )}
+                          <span className="text-[10px] uppercase text-[#666]">{block.language || "code"}</span>
+                        </div>
                       </div>
                       <pre className={`overflow-x-auto p-3 text-[12px] leading-relaxed ${isTerminal ? "text-[#e6e6e6]" : "text-[#d4d4d4]"}`}>{block.code}</pre>
                       {block.output && (
