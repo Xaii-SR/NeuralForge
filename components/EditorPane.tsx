@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Editor from "./Editor";
 import DiffEditor from "@/components/editor/DiffEditor";
 import DiffActionBar from "@/components/editor/DiffActionBar";
+import InlinePromptWidget from "@/components/editor/InlinePromptWidget";
 import TabBar from "./TabBar";
 import EmptyState from "@/components/ui/EmptyState";
 import { languageFromPath } from "@/lib/language";
 import { useVersionCache } from "@/hooks/useVersionCache";
+import { useInlinePrompt } from "@/hooks/useInlinePrompt";
 import type { OpenFile } from "@/hooks/useWorkspace";
 
 export interface EditorPaneProps {
@@ -33,7 +35,29 @@ export default function EditorPane({
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
+  const { state: prompt, open: openPrompt, close: closePrompt } = useInlinePrompt();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Cmd+K / Ctrl+K: Inline Prompt
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      const container = editorContainerRef.current;
+      if (!container || !activeFile) return;
+      const rect = container.getBoundingClientRect();
+      const x = rect.left + 20;
+      const y = rect.top + 60;
+      const selectedText = activeFile.content.substring(0, 200); // mock selection
+      const cursorLine = 1;
+      openPrompt(x, y, selectedText, cursorLine, { startLine: 1, endLine: 1 });
+    }
+  }, [activeFile, openPrompt]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
 
   if (!activeFile) {
     return (
@@ -46,7 +70,7 @@ export default function EditorPane({
   }
 
   return (
-    <div className="flex h-full w-full flex-col">
+    <div className="flex h-full w-full flex-col" ref={editorContainerRef}>
       <TabBar tabs={openFiles} activePath={activePath} onSelect={onSelect} onClose={onClose} />
       {/* Diff action bar */}
       <DiffActionBar
@@ -105,6 +129,15 @@ export default function EditorPane({
           />
         )}
       </div>
+      {prompt.isOpen && (
+        <InlinePromptWidget
+          x={prompt.x}
+          y={prompt.y}
+          initialValue={prompt.selectedText ? `refactor: ${prompt.selectedText}` : ""}
+          onSubmit={async (v) => { closePrompt(v); return null; }}
+          onClose={() => closePrompt(null)}
+        />
+      )}
     </div>
   );
 }

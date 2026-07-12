@@ -177,7 +177,7 @@ export default function Editor({ path, language, value, onChange, onSave }: Edit
         const x = containerRect.left + (visiblePos.left ?? 0);
         const y = containerRect.top + (visiblePos.top ?? 0) + 22;
 
-        open(x, y, selectedText, cursorLine).then((result) => {
+        open(x, y, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }).then((result) => {
           if (result && editor.getModel()) {
             const pos = editor.getPosition();
             if (!pos) return;

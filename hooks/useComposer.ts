@@ -62,7 +62,6 @@ export function useComposer() {
     if (!session) return;
     // Detect @Codebase queries and fetch semantic context
     let contextSources: ComposerMessage["contextSources"] | null = null;
-    let contextSources: ComposerMessage["contextSources"] | null = null;
     let semanticContext: string | null = null;
     const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
     if (codebaseMatch) {
