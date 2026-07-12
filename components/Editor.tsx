@@ -23,7 +23,8 @@ export default function Editor({ path, language, value, onChange, onSave }: Edit
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const { theme } = useTheme();
-  const { ghost, acceptGhost, dismissGhost } = useGhostText();
+  const { ghost, suggestion, acceptGhost, dismissGhost } = useGhostText();
+  const ghostTextRef = useRef<string | null>(null);
   const { state: prompt, open, close } = useInlinePrompt();
   const { diffState, clearDiff } = useInlineDiff();
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -141,11 +142,27 @@ export default function Editor({ path, language, value, onChange, onSave }: Edit
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
+  // Sync suggestion state → ref for Monaco provider
+  useEffect(() => { ghostTextRef.current = suggestion; }, [suggestion]);
+
   const handleMount: OnMount = (editor, monacoInstance) => {
     editorRef.current = editor;
     monacoRef.current = monacoInstance;
     (window as any).monaco = monacoInstance;
+    (window as any).__neuralforge_editor = editor;
     editor.focus();
+
+    // Register InlineCompletionsProvider for ghost text
+    monacoInstance.languages.registerInlineCompletionsProvider?.("*", {
+      provideInlineCompletions: (model: any, position: any) => {
+        const text = ghostTextRef.current;
+        if (!text || text.length === 0) return { items: [] };
+        return {
+          items: [{ insertText: text, range: new monacoInstance.Range(position.lineNumber, position.column, position.lineNumber, position.column) }],
+        };
+      },
+      freeInlineCompletions: (completions: any) => {},
+    });
 
     const editorDom = editor.getDomNode();
     if (editorDom?.parentElement) {
