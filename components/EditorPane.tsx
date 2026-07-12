@@ -113,6 +113,20 @@ export default function EditorPane({
   }, [prompt.status, prompt.originalText, prompt.streamedText]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // Inline prompt review state: Cmd+Enter = accept, Escape = reject
+    if (prompt.status === "review") {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleAccept();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleReject();
+        return;
+      }
+    }
+
     if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       const c = editorContainerRef.current;
@@ -120,7 +134,7 @@ export default function EditorPane({
       const r = c.getBoundingClientRect();
       openPrompt(r.left + 20, r.top + 60, activeFile.content.substring(0, 200), 1, { startLine: 1, endLine: 1 });
     }
-  }, [activeFile, openPrompt]);
+  }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);
 
   if (!activeFile) return <EmptyState icon="📝" title="No file open" hint="Select a file from the explorer, or open a folder to get started" />;
