@@ -35,7 +35,7 @@ export default function EditorPane({
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
-  const { state: prompt, open: openPrompt, close: closePrompt } = useInlinePrompt();
+  const { state: prompt, open: openPrompt, close: closePrompt, submitInlinePrompt, acceptChanges, rejectChanges } = useInlinePrompt();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -134,7 +134,10 @@ export default function EditorPane({
           x={prompt.x}
           y={prompt.y}
           initialValue={prompt.selectedText ? `refactor: ${prompt.selectedText}` : ""}
-          onSubmit={async (v) => { closePrompt(v); return null; }}
+          status={prompt.status}
+          onSubmit={async (v) => { submitInlinePrompt(v, activeFile?.path ?? ""); return null; }}
+          onAccept={() => acceptChanges()}
+          onReject={() => rejectChanges()}
           onClose={() => closePrompt(null)}
         />
       )}
