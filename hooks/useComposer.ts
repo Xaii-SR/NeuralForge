@@ -35,6 +35,11 @@ export interface ComposerSession {
   message_history: ComposerMessage[];
 }
 
+// Singleton terminal buffer accessor for cross-component sharing
+let _terminalBufferFn: (() => string) | null = null;
+export function setTerminalBufferGetter(fn: () => string) { _terminalBufferFn = fn; }
+export function getTerminalBuffer(): string { return _terminalBufferFn?.() ?? ""; }
+
 export function useComposer() {
   const [session, setSession] = useState<ComposerSession | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -63,6 +68,8 @@ export function useComposer() {
     // Detect @Codebase queries and fetch semantic context
     let contextSources: ComposerMessage["contextSources"] | null = null;
     let semanticContext: string | null = null;
+
+    // @Codebase detection
     const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
     if (codebaseMatch) {
       const query = codebaseMatch[1].trim();
@@ -71,6 +78,15 @@ export function useComposer() {
         contextSources = results.map((r: any) => ({ file_path: r.file_path, start_line: r.start_line, end_line: r.end_line, text: r.text, score: r.score }));
         semanticContext = results.map((r: any) => `File: ${r.file_path}\n${r.text}`).join("\n\n");
       } catch { /* ignore */ }
+    }
+
+    // @terminal detection: inject terminal buffer
+    if (content.toLowerCase().includes("@terminal")) {
+      const buf = getTerminalBuffer();
+      if (buf) {
+        const termBlock = `--- RECENT TERMINAL OUTPUT ---\n${buf}\n--- END TERMINAL ---`;
+        semanticContext = semanticContext ? semanticContext + "\n\n" + termBlock : termBlock;
+      }
     }
 
     const response = await invoke<{ text: ComposerMessage[]; autonomous_sources: any[] }>("send_composer_message", {
