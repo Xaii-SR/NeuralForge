@@ -73,9 +73,16 @@ export function useComposer() {
   const sendMessageRef = useRef<(content: string) => Promise<void> | undefined>(undefined);
   const sendMessage = useCallback(async (content: string) => {
     if (!session) return;
-    // Detect @Codebase queries and fetch semantic context
     let contextSources: ComposerMessage["contextSources"] | null = null;
     let semanticContext: string | null = null;
+
+    // Load .neuralforgerules if present
+    try {
+      const rules = await invoke<string>("read_file", { path: ".neuralforgerules" });
+      if (rules && rules.trim()) {
+        semanticContext = `<neuralforge_rules>\n${rules.trim()}\n</neuralforge_rules>`;
+      }
+    } catch { /* file not found or unreadable */ }
 
     // @Codebase detection
     const codebaseMatch = content.match(/@Codebase\s+(.+)/i);
