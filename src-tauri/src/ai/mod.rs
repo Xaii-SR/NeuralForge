@@ -7,6 +7,7 @@ pub mod docs;
 pub mod context;
 pub mod health;
 pub mod inline;
+pub mod web;
 pub mod model_manager;
 pub mod providers;
 pub mod router;
