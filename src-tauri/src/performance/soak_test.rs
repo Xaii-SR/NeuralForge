@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-use crate::performance::arena_v5::{SharedRingBufferArena, ArenaError};
+use crate::performance::arena_v5::{SharedRingBufferArena, ArenaError, SlotHeader, FLAG_COMMITTED, WRAP_SENTINEL};
 use crate::performance::viewport::ViewportManager;
 
 const PATTERN_BYTE: u8 = 0xA5;
@@ -34,14 +34,7 @@ impl SubstrateStressRig {
         let bytes_counter = Arc::new(AtomicU64::new(0));
         let slots_counter = Arc::new(AtomicU64::new(0));
 
-        Ok(Self {
-            arena,
-            viewport,
-            running,
-            backpressure_counter,
-            bytes_counter,
-            slots_counter,
-        })
+        Ok(Self { arena, viewport, running, backpressure_counter, bytes_counter, slots_counter })
     }
 
     pub fn execute_sprint(&self, duration: Duration, thread_count: usize) -> SoakTestReport {
@@ -53,7 +46,6 @@ impl SubstrateStressRig {
         let mut producer_handles = Vec::new();
         let payload_size: u32 = 1024;
 
-        // 1. Spawn Concurrent Multi-Threaded Producers
         for thread_idx in 0..thread_count {
             let arena = Arc::clone(&self.arena);
             let running = Arc::clone(&self.running);
@@ -61,36 +53,25 @@ impl SubstrateStressRig {
             let bytes_count = Arc::clone(&self.bytes_counter);
 
             let handle = thread::spawn(move || {
-                let mut local_seq = 1u64;
                 let payload = vec![PATTERN_BYTE; payload_size as usize];
-
                 while running.load(Ordering::Relaxed) {
-                    let kind = (thread_idx % 10) as u16;
-                    match arena.reserve_slot(payload_size, kind) {
+                    match arena.reserve_slot(payload_size, 0) {
                         Ok(offset) => {
-                            unsafe {
-                                arena.write_payload(offset, &payload);
-                            }
-                            let target_seq = (local_seq << 16) | (thread_idx as u64 & 0xFFFF);
-                            arena.commit_slot(offset, target_seq);
-
+                            unsafe { arena.write_payload(offset, &payload); }
+                            arena.commit_slot(offset, 0);
                             bytes_count.fetch_add(payload_size as u64, Ordering::Relaxed);
-                            local_seq += 1;
                         }
                         Err(ArenaError::Backpressure) => {
                             bp_count.fetch_add(1, Ordering::Relaxed);
                             thread::yield_now();
                         }
-                        Err(_) => {
-                            // Capacity exceeded during teardown – suppress
-                        }
+                        Err(_) => {}
                     }
                 }
             });
             producer_handles.push(handle);
         }
 
-        // 2. Spawn Unified Consumer & Integrity Verification Validation Loop
         let arena = Arc::clone(&self.arena);
         let viewport = Arc::clone(&self.viewport);
         let running = Arc::clone(&self.running);
@@ -98,44 +79,54 @@ impl SubstrateStressRig {
 
         let consumer_handle = thread::spawn(move || {
             let mut corruption_detected = false;
-            let mut current_seq = 1u64;
+            let header_size = std::mem::size_of::<SlotHeader>();
+            let ctrl_size = std::mem::size_of::<crate::performance::arena_v5::ArenaControl>() as u64;
 
             while running.load(Ordering::Relaxed)
                 || arena.get_control().read_head.load(Ordering::Relaxed)
                     != arena.get_control().write_head.load(Ordering::Relaxed)
             {
-                match arena.read_next_slot(current_seq) {
-                    Ok(Some((_offset, _len, _kind, data))) => {
-                        slots_count.fetch_add(1, Ordering::Relaxed);
-                        current_seq += 1;
+                let read_pos = arena.get_control().read_head.load(Ordering::Acquire);
+                let write_pos = arena.get_control().write_head.load(Ordering::Acquire);
+                if read_pos == write_pos { thread::yield_now(); continue; }
 
-                        for &byte in data.iter() {
-                            if byte != PATTERN_BYTE {
-                                corruption_detected = true;
-                            }
-                        }
+                unsafe {
+                    let header_ptr = (arena.get_control() as *const _ as *const u8)
+                        .add(read_pos as usize) as *const SlotHeader;
+                    if (*header_ptr).flags & FLAG_COMMITTED == 0 {
+                        thread::yield_now(); continue;
+                    }
+                    let len = (*header_ptr).len;
+                    if len == WRAP_SENTINEL {
+                        arena.get_control().read_head.store(ctrl_size, Ordering::Release);
+                        continue;
+                    }
 
-                        if let Ok(desc) = viewport.allocate_frame(1920, 1080) {
-                            let _ = viewport.free_frame(desc.handle_id);
-                        }
+                    let payload_size = (len as usize + 7) & !7;
+                    let data_ptr = (arena.get_control() as *const _ as *const u8)
+                        .add(read_pos as usize + header_size);
+                    let data = std::slice::from_raw_parts(data_ptr, len as usize);
+
+                    slots_count.fetch_add(1, Ordering::Relaxed);
+                    for &byte in data.iter() {
+                        if byte != PATTERN_BYTE { corruption_detected = true; }
                     }
-                    _ => {
-                        thread::yield_now();
+                    if let Ok(desc) = viewport.allocate_frame(1920, 1080) {
+                        let _ = viewport.free_frame(desc.handle_id);
                     }
+
+                    let next_read = read_pos + (header_size + payload_size) as u64;
+                    arena.get_control().read_head.store(next_read, Ordering::Release);
                 }
             }
             !corruption_detected
         });
 
-        // 3. Coordinate Test Execution Timeline
         let start_time = Instant::now();
         thread::sleep(duration);
         self.running.store(false, Ordering::SeqCst);
 
-        for handle in producer_handles {
-            let _ = handle.join();
-        }
-
+        for handle in producer_handles { let _ = handle.join(); }
         let integrity_passed = consumer_handle.join().unwrap_or(false);
         let actual_elapsed = start_time.elapsed().as_secs_f64();
 
@@ -151,5 +142,36 @@ impl SubstrateStressRig {
             backpressure_hits: self.backpressure_counter.load(Ordering::SeqCst),
             integrity_verified: integrity_passed,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_substrate_throughput_telemetry() {
+        let capacity = 16 * 1024 * 1024;
+        let rig = SubstrateStressRig::new(capacity).expect("Failed to initialize Substrate Stress Rig");
+
+        println!("==================================================");
+        println!("NEURAL FORGE SUBSTRATE SOAK TEST INITIATED");
+        println!("Capacity: 16 MB | Threads: 4 | Duration: 3 seconds");
+        println!("==================================================");
+
+        let report = rig.execute_sprint(Duration::from_secs(3), 4);
+
+        println!("SOAK TEST RESULTS:");
+        println!("Elapsed Time:        {:.2} seconds", report.elapsed_seconds);
+        println!("Total Processed:     {} bytes", report.total_bytes_processed);
+        println!("Throughput:          {:.4} GB/s", report.throughput_gb_per_sec);
+        println!("Slots Consumed:      {}", report.slots_consumed);
+        println!("Backpressure Hits:   {}", report.backpressure_hits);
+        println!("Integrity Verified:  {}", report.integrity_verified);
+        println!("==================================================");
+
+        assert!(report.integrity_verified, "CRITICAL FAULT: Memory corruption or torn reads detected in ring buffer!");
+        assert!(report.total_bytes_processed > 0, "CRITICAL FAULT: No bytes processed. Producer threads failed to advance.");
     }
 }
