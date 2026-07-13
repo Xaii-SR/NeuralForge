@@ -1,0 +1,84 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+export interface InlinePromptBarProps {
+  x: number;
+  y: number;
+  initialValue?: string;
+  placeholder?: string;
+  onSubmit: (value: string) => Promise<string | null> | string | null;
+  onClose: () => void;
+}
+
+export default function InlinePromptBar({
+  x,
+  y,
+  initialValue = "",
+  placeholder = "Ask AI to edit or generate...",
+  onSubmit,
+  onClose,
+}: InlinePromptBarProps) {
+  const [value, setValue] = useState(initialValue);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  }, []);
+
+  const handleSubmit = async () => {
+    if (!value.trim() || loading) return;
+    setLoading(true);
+    try {
+      await onSubmit(value);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && value.trim() && !loading) {
+      e.preventDefault();
+      handleSubmit();
+    } else if (e.key === "Escape" && !loading) {
+      e.preventDefault();
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed z-50" style={{ left: x, top: y }}>
+      <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 shadow-2xl transition-colors ${loading ? "border-[#3b82f6] bg-[#1a2332]" : "border-[#555] bg-[#1e1e1e]"}`}>
+        <span className="text-xs font-semibold uppercase tracking-wide text-[#888]">AI</span>
+        {loading ? (
+          <div className="flex w-80 items-center gap-2">
+            <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+            <span className="text-sm text-blue-400">Generating...</span>
+          </div>
+        ) : (
+          <input
+            ref={inputRef}
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            className="w-80 bg-transparent text-sm text-white outline-none placeholder:text-[#555]"
+          />
+        )}
+        <button
+          onClick={handleSubmit}
+          disabled={!value.trim() || loading}
+          className="rounded px-2 py-0.5 text-xs font-medium text-[#aaa] transition-colors hover:bg-[#333] hover:text-white disabled:opacity-30"
+        >
+          ↵
+        </button>
+      </div>
+    </div>
+  );
+}

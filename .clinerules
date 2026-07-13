@@ -1,0 +1,340 @@
+==================================================
+NEURALFORGE ENGINEERING CONSTITUTION
+==================================================
+
+
+# Identity
+
+NeuralForge is an autonomous desktop AI development environment designed to become a Cursor-level IDE replacement.
+
+Architecture:
+
+- Tauri desktop shell
+- Rust backend
+- Next.js frontend
+- React
+- TypeScript
+- Monaco Editor
+- SQLite persistence
+- AI model routing
+- Repository indexing
+- Autonomous engineering workflows
+
+
+Operating principle:
+
+UNDERSTAND FIRST.
+
+MODIFY SECOND.
+
+VALIDATE ALWAYS.
+
+
+==================================================
+
+# Source Of Truth
+
+When information conflicts:
+
+Priority:
+
+1. Repository files.
+2. Automated tests.
+3. Git history.
+4. Documentation.
+5. Previous AI conversations.
+
+
+Never assume previous AI output is correct.
+
+
+==================================================
+
+# Development Rules
+
+Before changing files:
+
+Explain:
+
+CHANGE:
+
+WHY:
+
+FILES:
+
+RISK:
+
+EXPECTED RESULT:
+
+
+After changes:
+
+Provide:
+
+FILES CHANGED:
+
+IMPLEMENTATION:
+
+VALIDATION:
+
+RESULT:
+
+
+==================================================
+
+# No Silent Mutation
+
+Never silently:
+
+- edit files
+- create files
+- install dependencies
+- change configuration
+- modify tests
+
+
+==================================================
+
+# Testing Rules
+
+Never:
+
+- delete failing tests
+- weaken assertions
+- skip validation
+- hide failures
+
+
+All changes require validation.
+
+
+Rust:
+
+cargo test
+
+
+Frontend:
+
+npm run build
+
+tsc --noEmit
+
+
+==================================================
+# FROZEN ARCHITECTURE PROTECTION
+==================================================
+
+The following files represent protected NeuralForge foundation systems.
+
+They must not be modified without explicit Level 5 approval.
+
+Protected files:
+
+src-tauri/src/agent/executor.rs
+
+src-tauri/src/agent/planner.rs
+
+src-tauri/src/database/indexer.rs
+
+src-tauri/src/database/search.rs
+
+src-tauri/src/database/resolver.rs
+
+src-tauri/src/extensions/
+
+
+Protected concepts:
+
+- execution safety pipeline
+- snapshot/apply/verify/rollback behavior
+- AI planning behavior
+- repository indexing behavior
+- semantic search behavior
+- workspace resolution behavior
+- extension architecture
+
+
+If a change appears necessary:
+
+STOP.
+
+Generate:
+
+CHANGE REQUEST:
+
+WHY REQUIRED:
+
+EXPECTED BENEFIT:
+
+POSSIBLE REGRESSION:
+
+ALTERNATIVES:
+
+ROLLBACK PLAN:
+
+
+Wait for explicit approval before editing.
+
+
+==================================================
+END FROZEN ARCHITECTURE PROTECTION
+==================================================
+
+# Dependency Rules
+
+Before adding packages:
+
+Report:
+
+Package:
+
+Reason:
+
+Alternative:
+
+Security impact:
+
+Build impact:
+
+
+Never automatically upgrade major dependencies.
+
+
+==================================================
+
+# Change Classification
+
+
+LEVEL 0:
+
+Documentation.
+
+
+LEVEL 1:
+
+Small isolated fixes.
+
+
+LEVEL 2:
+
+Normal features.
+
+
+LEVEL 3:
+
+Shared systems.
+
+Requires analysis.
+
+
+LEVEL 4:
+
+Architecture changes.
+
+Requires approval.
+
+
+LEVEL 5:
+
+Core redesign.
+
+Requires explicit approval.
+
+
+==================================================
+
+# AI Model Responsibilities
+
+
+DeepSeek Coding Model:
+
+Used for:
+
+- implementation
+- debugging
+- file editing
+- testing
+
+
+Reasoning Models:
+
+Used for:
+
+- architecture
+- major planning
+- complex debugging
+
+
+Local Models:
+
+Used for:
+
+- quick searches
+- explanations
+- lightweight tasks
+
+
+==================================================
+
+# Token Efficiency
+
+Before reading large files:
+
+Explain why.
+
+
+Avoid:
+
+- duplicate context
+- unnecessary scans
+- rewriting existing documentation
+
+
+Use the smallest required context.
+
+
+==================================================
+
+# Engineering Reports
+
+Every task ends with:
+
+
+STATUS:
+
+DISCOVERY:
+
+ROOT CAUSE:
+
+PLAN:
+
+FILES AFFECTED:
+
+RISK:
+
+IMPLEMENTATION:
+
+VALIDATION:
+
+RESULT:
+
+NEXT STEP:
+
+
+==================================================
+
+# Git Protection
+
+Never:
+
+- rebase
+- squash
+- rewrite history
+
+
+Protect existing commits.
+
+
+==================================================
+END CONSTITUTION
+==================================================

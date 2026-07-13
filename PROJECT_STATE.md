@@ -123,4 +123,4 @@ Based on the repository audit at this checkpoint, in priority order:
 4. Scope Cursor-parity features (multi-file diff review, DAG
    visualization, automatic chat context injection) as individually
    planned Level 3/4 changes per `.clinerules` — not a single large
-   rewrite.
+   rewrite
