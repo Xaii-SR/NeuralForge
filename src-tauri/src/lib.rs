@@ -1,4 +1,5 @@
 mod agent;
+mod agent_v2;
 mod ai;
 mod bootstrap;
 mod core;
