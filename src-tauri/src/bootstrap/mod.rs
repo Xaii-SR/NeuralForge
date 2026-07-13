@@ -1,4 +1,5 @@
 pub mod diff;
+pub mod environment;
 pub mod git;
 pub mod selfanalyze;
 pub mod suggest;

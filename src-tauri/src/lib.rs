@@ -26,6 +26,11 @@ use terminal::TerminalRegistry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  if let Err(e) = bootstrap::environment::enforce_environment_gate() {
+    eprintln!("{}", e);
+    std::process::exit(1);
+  }
+
   tauri::Builder::default()
     .manage(AppState::default())
     .manage(TerminalRegistry::default())
