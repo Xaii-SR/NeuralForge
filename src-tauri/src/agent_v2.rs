@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::{AppHandle, Emitter};
 use crate::intelligence::router;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -33,12 +34,18 @@ impl AgentTask {
         }
     }
 
-    pub fn transition_to(&mut self, new_state: AgentState) {
+    pub fn transition_to(&mut self, new_state: AgentState, app_handle: Option<&AppHandle>) {
         println!(
             "[AGENT:{}] State Transition: {:?} -> {:?}",
             self.id, self.state, new_state
         );
-        self.state = new_state;
+        self.state = new_state.clone();
+
+        if let Some(app) = app_handle {
+            if let Err(e) = app.emit("agent-state-changed", self.clone()) {
+                eprintln!("[AGENT:{}] Failed to emit state telemetry: {}", self.id, e);
+            }
+        }
     }
 }
 
@@ -104,9 +111,8 @@ impl WorkspaceVerifier {
 pub struct AgentRunner;
 
 impl AgentRunner {
-    pub async fn process_task(mut task: AgentTask) -> Result<AgentTask, String> {
-        // 1. PLANNING PHASE
-        task.transition_to(AgentState::Planning);
+    pub async fn process_task(app_handle: AppHandle, mut task: AgentTask) -> Result<AgentTask, String> {
+        task.transition_to(AgentState::Planning, Some(&app_handle));
 
         let prompt = format!(
             "You are the Neural Forge Architect. Create a concise, 3-step execution plan for the user's request. Do not write code yet, only the plan.\n\nUser Request: {}",
@@ -117,20 +123,18 @@ impl AgentRunner {
             Ok(response) => {
                 println!("[AGENT:{}] Planning successful.", task.id);
                 task.plan_output = Some(response);
-                task.transition_to(AgentState::AwaitingApproval);
+                task.transition_to(AgentState::AwaitingApproval, Some(&app_handle));
             }
             Err(e) => {
                 let err_msg = format!("Planning failed: {}", e);
-                task.transition_to(AgentState::Failed(err_msg.clone()));
+                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
                 return Err(err_msg);
             }
         }
 
-        // 2. AWAITING APPROVAL PHASE (Auto-approved for Phase C validation)
         println!("[AGENT:{}] Auto-approving plan for system validation...", task.id);
-        task.transition_to(AgentState::Executing);
+        task.transition_to(AgentState::Executing, Some(&app_handle));
 
-        // 3. EXECUTING PHASE
         println!("[AGENT:{}] Executing task instructions...", task.id);
 
         let executor = FileExecutor::new(".");
@@ -140,29 +144,42 @@ impl AgentRunner {
         let backup = match executor.safe_write(test_file, test_content) {
             Ok(b) => b,
             Err(e) => {
-                task.transition_to(AgentState::Failed(e.clone()));
+                task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
                 return Err(e);
             }
         };
 
-        task.transition_to(AgentState::Verifying);
+        task.transition_to(AgentState::Verifying, Some(&app_handle));
 
-        // 4. VERIFYING PHASE
         println!("[AGENT:{}] Validating execution outcomes via compiler...", task.id);
 
         let verifier = WorkspaceVerifier;
         if let Err(e) = verifier.verify_cargo(Path::new(".")) {
             println!("[AGENT:{}] Verification failed! Initiating auto-rollback...", task.id);
             let _ = executor.rollback(test_file, backup);
-            task.transition_to(AgentState::Failed(e.clone()));
+            task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
             return Err(e);
         }
 
         println!("[AGENT:{}] Verification passed. Cleaning up test artifact...", task.id);
         let _ = executor.rollback(test_file, backup);
 
-        task.transition_to(AgentState::Completed);
+        task.transition_to(AgentState::Completed, Some(&app_handle));
 
         Ok(task)
     }
+}
+
+#[tauri::command]
+pub async fn start_agent_task(app_handle: AppHandle, description: String) -> Result<String, String> {
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let task = AgentTask::new(&task_id, &description);
+
+    let worker_app_handle = app_handle.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let _ = AgentRunner::process_task(worker_app_handle, task).await;
+    });
+
+    Ok(task_id)
 }

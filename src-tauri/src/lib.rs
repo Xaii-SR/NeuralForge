@@ -95,6 +95,7 @@ pub fn run() {
       ai::git::get_git_diff,
       ai::web::search_web,
       ai::inline::stream_inline_edit,
+      agent_v2::start_agent_task,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,
