@@ -234,26 +234,26 @@ impl SharedRingBufferArena {
 
             let next_write = target_write + total_size as u64;
 
-            if wrap_needed && target_write == ctrl_size {
-                let old_space_left = control.capacity - current_write;
-                if old_space_left >= header_size as u64 {
-                    unsafe {
-                        let header_ptr = self.storage_ptr.add(current_write as usize) as *mut SlotHeader;
-                        (*header_ptr).len = WRAP_SENTINEL;
-                        (*header_ptr).kind = 0;
-                        (*header_ptr).flags = FLAG_COMMITTED;
-                        let epoch = control.epoch.load(Ordering::Relaxed);
-                        (*header_ptr).seq.store(epoch, Ordering::Release);
-                    }
-                }
-            }
-
             if control.write_head.compare_exchange_weak(
                 current_write,
                 next_write,
                 Ordering::Release,
                 Ordering::Relaxed,
             ).is_ok() {
+                // Write WRAP_SENTINEL AFTER CAS succeeds, using the old tail position
+                if wrap_needed && target_write == ctrl_size {
+                    let old_space_left = control.capacity - current_write;
+                    if old_space_left >= header_size as u64 {
+                        unsafe {
+                            let header_ptr = self.storage_ptr.add(current_write as usize) as *mut SlotHeader;
+                            (*header_ptr).len = WRAP_SENTINEL;
+                            (*header_ptr).kind = 0;
+                            (*header_ptr).flags = FLAG_COMMITTED;
+                            let epoch = control.epoch.load(Ordering::Relaxed);
+                            (*header_ptr).seq.store(epoch, Ordering::Release);
+                        }
+                    }
+                }
                 unsafe {
                     let header_ptr = self.storage_ptr.add(target_write as usize) as *mut SlotHeader;
                     (*header_ptr).len = len;

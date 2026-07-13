@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 use crate::performance::arena_v5::{SharedRingBufferArena, ArenaError, SlotHeader, FLAG_COMMITTED, WRAP_SENTINEL};
-use crate::performance::viewport::ViewportManager;
 
 const PATTERN_BYTE: u8 = 0xA5;
 
@@ -18,7 +17,6 @@ pub struct SoakTestReport {
 
 pub struct SubstrateStressRig {
     arena: Arc<SharedRingBufferArena>,
-    viewport: Arc<ViewportManager>,
     running: Arc<AtomicBool>,
     backpressure_counter: Arc<AtomicU64>,
     bytes_counter: Arc<AtomicU64>,
@@ -28,13 +26,13 @@ pub struct SubstrateStressRig {
 impl SubstrateStressRig {
     pub fn new(arena_capacity: usize) -> Result<Self, ArenaError> {
         let arena = Arc::new(SharedRingBufferArena::new(arena_capacity)?);
-        let viewport = Arc::new(ViewportManager::new());
-        let running = Arc::new(AtomicBool::new(false));
-        let backpressure_counter = Arc::new(AtomicU64::new(0));
-        let bytes_counter = Arc::new(AtomicU64::new(0));
-        let slots_counter = Arc::new(AtomicU64::new(0));
-
-        Ok(Self { arena, viewport, running, backpressure_counter, bytes_counter, slots_counter })
+        Ok(Self {
+            arena,
+            running: Arc::new(AtomicBool::new(false)),
+            backpressure_counter: Arc::new(AtomicU64::new(0)),
+            bytes_counter: Arc::new(AtomicU64::new(0)),
+            slots_counter: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     pub fn execute_sprint(&self, duration: Duration, thread_count: usize) -> SoakTestReport {
@@ -46,7 +44,7 @@ impl SubstrateStressRig {
         let mut producer_handles = Vec::new();
         let payload_size: u32 = 1024;
 
-        for thread_idx in 0..thread_count {
+        for _thread_idx in 0..thread_count {
             let arena = Arc::clone(&self.arena);
             let running = Arc::clone(&self.running);
             let bp_count = Arc::clone(&self.backpressure_counter);
@@ -73,7 +71,6 @@ impl SubstrateStressRig {
         }
 
         let arena = Arc::clone(&self.arena);
-        let viewport = Arc::clone(&self.viewport);
         let running = Arc::clone(&self.running);
         let slots_count = Arc::clone(&self.slots_counter);
 
@@ -110,9 +107,6 @@ impl SubstrateStressRig {
                     slots_count.fetch_add(1, Ordering::Relaxed);
                     for &byte in data.iter() {
                         if byte != PATTERN_BYTE { corruption_detected = true; }
-                    }
-                    if let Ok(desc) = viewport.allocate_frame(1920, 1080) {
-                        let _ = viewport.free_frame(desc.handle_id);
                     }
 
                     let next_read = read_pos + (header_size + payload_size) as u64;
@@ -171,7 +165,7 @@ mod tests {
         println!("Integrity Verified:  {}", report.integrity_verified);
         println!("==================================================");
 
-        assert!(report.integrity_verified, "CRITICAL FAULT: Memory corruption or torn reads detected in ring buffer!");
-        assert!(report.total_bytes_processed > 0, "CRITICAL FAULT: No bytes processed. Producer threads failed to advance.");
+        assert!(report.integrity_verified);
+        assert!(report.total_bytes_processed > 0);
     }
 }

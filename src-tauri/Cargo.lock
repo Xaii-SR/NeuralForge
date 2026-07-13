@@ -120,6 +120,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "uuid",
  "walkdir",
  "windows 0.58.0",
