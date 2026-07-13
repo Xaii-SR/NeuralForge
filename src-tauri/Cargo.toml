@@ -41,6 +41,8 @@ once_cell = "1.21.4"
 fastembed = "5.17.2"
 html2md = "0.2.15"
 scraper = "0.27.0"
+crossbeam-utils = "0.8"
+thiserror = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -48,3 +50,7 @@ windows = { version = "0.58", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Foundation",
 ] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_Security"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

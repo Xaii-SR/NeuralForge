@@ -95,10 +95,12 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 name = "app"
 version = "1.0.0"
 dependencies = [
+ "crossbeam-utils",
  "fastembed",
  "futures-util",
  "html2md",
  "lazy_static",
+ "libc",
  "once_cell",
  "portable-pty",
  "regex",
@@ -113,6 +115,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-appender",
@@ -120,6 +123,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "windows 0.58.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

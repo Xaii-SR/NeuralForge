@@ -12,6 +12,7 @@ mod intelligence;
 mod release_validation;
 mod planning;
 mod terminal;
+mod performance;
 mod workspace;
 
 use ai::benchmarks::BenchmarkDbState;
