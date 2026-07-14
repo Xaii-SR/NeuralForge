@@ -13,6 +13,7 @@ import BootstrapPanel from "@/components/BootstrapPanel";
 import GovernancePanel from "@/components/GovernancePanel";
 import WorkersPanel from "@/components/WorkersPanel";
 import PromptMaker from "@/components/PromptMaker";
+import BootstrapManager from "@/components/BootstrapManager";
 import EmptyState from "@/components/ui/EmptyState";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
@@ -60,13 +61,13 @@ export default function Home() {
               ))}
             </div>
             <div className="min-h-0 flex-1">
-              <div className={bottomTab === "terminal" ? "h-full" : "hidden"}><Terminal /></div>
-              <div className={bottomTab === "logs" ? "h-full" : "hidden"}><LogViewer /></div>
-              <div className={bottomTab === "agent" ? "h-full" : "hidden"}><AgentPanel workspaceOpen={!!workspace.workspaceRoot} /></div>
-              <div className={bottomTab === "extensions" ? "h-full" : "hidden"}><ExtensionsPanel /></div>
-              <div className={bottomTab === "bootstrap" ? "h-full" : "hidden"}><BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} /></div>
-              <div className={bottomTab === "governance" ? "h-full" : "hidden"}><GovernancePanel workspaceOpen={!!workspace.workspaceRoot} /></div>
-              <div className={bottomTab === "workers" ? "h-full" : "hidden"}><WorkersPanel workspaceOpen={!!workspace.workspaceRoot} /></div>
+              {bottomTab === "terminal" && <div className="h-full"><Terminal /></div>}
+              {bottomTab === "logs" && <div className="h-full"><LogViewer /></div>}
+              {bottomTab === "agent" && <div className="h-full"><AgentPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
+              {bottomTab === "extensions" && <div className="h-full"><ExtensionsPanel /></div>}
+              {bottomTab === "bootstrap" && <div className="h-full"><BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
+              {bottomTab === "governance" && <div className="h-full"><GovernancePanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
+              {bottomTab === "workers" && <div className="h-full"><WorkersPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
             </div>
           </div>
         </div>
@@ -75,6 +76,7 @@ export default function Home() {
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">{lastEvent ?? "Ready"}</div>
+      <BootstrapManager />
     </main>
   );
 }
