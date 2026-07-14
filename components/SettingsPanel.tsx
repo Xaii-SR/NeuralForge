@@ -183,19 +183,26 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
           </>
         )}
 
-        <div className="flex justify-end gap-2 border-t border-neutral-100 pt-4 dark:border-neutral-800">
-          <button
-            onClick={onClose}
-            className="rounded px-3 py-1.5 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500"
-          >
-            Save
-          </button>
+        <div className="flex justify-between items-end mt-auto pt-6 border-t border-neutral-100 dark:border-neutral-700 w-full">
+          <div className="flex items-center">
+            <button onClick={handleClearCache} className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded font-semibold transition-colors text-xs">Clear Cache</button>
+          </div>
+          <div className="flex flex-col items-end space-y-3">
+            <div className="flex items-center space-x-3 bg-neutral-100 dark:bg-neutral-900 p-3 rounded border border-neutral-200 dark:border-neutral-700">
+              <div className="flex flex-col">
+                <label className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">Custom API Key</label>
+                <input type="password" placeholder="sk-..." className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-600 rounded px-3 py-1.5 text-sm text-neutral-800 dark:text-white w-64 focus:border-blue-500 outline-none" defaultValue="" />
+              </div>
+              <div className="flex flex-col">
+                <label className="text-xs text-neutral-500 dark:text-neutral-400 mb-1">Custom Model</label>
+                <input type="text" placeholder="e.g., gpt-4o or claude-3" className="bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-600 rounded px-3 py-1.5 text-sm text-neutral-800 dark:text-white w-48 focus:border-blue-500 outline-none" defaultValue="" />
+              </div>
+            </div>
+            <div className="flex space-x-3 w-full justify-end">
+              <button onClick={onClose} className="bg-neutral-200 dark:bg-neutral-600 hover:bg-neutral-300 dark:hover:bg-neutral-500 text-neutral-700 dark:text-white px-6 py-2 rounded font-semibold transition-colors text-xs">Cancel</button>
+              <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-semibold transition-colors shadow-lg text-xs">Save</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

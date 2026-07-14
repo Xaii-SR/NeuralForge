@@ -28,6 +28,7 @@ pub async fn route_with_system(system_prompt: &str, user_prompt: &str) -> Result
         ],
         temperature: 0.3,
         stream: false,
+        api_key: None,
     };
 
     gateway.execute_chat(request).await
