@@ -56,8 +56,16 @@ Output ONLY the final prompt template. Do not include markdown fences or explana
 
       setGeneratedPrompt(output);
       localStorage.setItem("nf_custom_prompt", output);
-    } catch (e: any) {
-      setGenerationError(e.message || String(e));
+    } catch (error: any) {
+      console.error("Inference link broken:", error);
+      setGenerationError(
+        "OLLAMA BACKEND OFFLINE: Local hardware pipeline is unreachable at port 11434.\n\n" +
+        "🔧 FIX PROTOCOL:\n" +
+        "1. Ensure the Ollama icon is active in your Windows System Tray.\n" +
+        "2. If active but rejected, terminate Ollama and run this command in CMD to bypass local CORS headers:\n" +
+        "   set OLLAMA_ORIGINS=* && ollama serve\n" +
+        "3. Ensure your local hardware has the baseline model pulled ('ollama pull qwen2.5-coder:7b' or your mapped alternative)."
+      );
     } finally {
       setIsGenerating(false);
     }

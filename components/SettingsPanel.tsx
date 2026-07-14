@@ -11,11 +11,20 @@ const OPTION_ACTIVE = "bg-blue-600 text-white";
 const OPTION_INACTIVE = "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700";
 
 const PROVIDER_MODELS: Record<string, string[]> = {
-  "DeepSeek": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
-  "Anthropic": ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
-  "OpenAI": ["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"],
-  "Ollama": ["qwen2.5-coder:7b", "deepseek-coder:latest", "llama3.1:latest"],
-  "Custom": [],
+  OpenAI: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5-pro", "gpt-5.5-base", "gpt-5.4", "gpt-5.1-medium", "o3", "gpt-4o", "gpt-oss-120b", "gpt-oss-20b"],
+  Anthropic: ["claude-mythos-5", "claude-fable-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-5", "claude-sonnet-4.6"],
+  Google: ["gemini-3.1-pro", "gemini-3.5-flash", "gemini-3-ultra", "gemini-2.5-pro", "gemini-2.0-flash", "gemma-4", "gemma-3"],
+  DeepSeek: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v3.2-exp", "deepseek-r1-0528", "deepseek-chat", "deepseek-reasoner", "deepseek-coder:latest"],
+  Qwen: ["qwen3.7-max", "qwen3.7-plus", "qwen3-vl-235b", "qwen3-235b", "qwen2.5-coder:7b"],
+  xAI: ["grok-4.5", "grok-4", "grok-1"],
+  Amazon: ["nova-micro", "alexatm", "titan"],
+  Cohere: ["command-a-plus-218b", "command-r-plus", "command-zero"],
+  ZhipuAI: ["glm-5.2", "glm-5.1", "glm-4.7-thinking", "glm-4.6"],
+  Moonshot: ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-0905"],
+  Mistral: ["mistral-large-2", "mistral-small-2506", "mixtral-8x7b", "mistral-7b"],
+  Microsoft: ["phi-4", "phi-3", "phi-2", "phi-1"],
+  Regional_And_Niche: ["apriel-v1.5-15b-thinker", "minimax-m2.5", "falcon-180b", "yandexgpt-2", "granite-3.0", "pangu-sigma-1085b", "mimo-on-device"],
+  Custom: [],
 };
 
 const REMOTE_PROVIDERS = ["DeepSeek", "Anthropic", "OpenAI", "Custom"];
