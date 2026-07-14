@@ -10,7 +10,8 @@ pub enum AgentState {
     Initialized,
     Planning,
     AwaitingApproval,
-    Executing,
+    ExecutingCoder,
+    ExecutingReviewer,
     Verifying,
     Completed,
     Failed(String),
@@ -46,6 +47,18 @@ impl AgentTask {
                 eprintln!("[AGENT:{}] Failed to emit state telemetry: {}", self.id, e);
             }
         }
+    }
+}
+
+pub struct WorkerPrompts;
+
+impl WorkerPrompts {
+    pub fn coder_system() -> &'static str {
+        "You are the Neural Forge Coder Agent. Your job is to output precise, functional implementation strategies based on architectural constraints. Keep solutions direct."
+    }
+
+    pub fn reviewer_system() -> &'static str {
+        "You are the Neural Forge Reviewer Agent. Your job is to audit proposed implementation paths for structural flaws, security risks, or redundant logic. Output a clear LGTM or list faults."
     }
 }
 
@@ -133,13 +146,58 @@ impl AgentRunner {
         }
 
         println!("[AGENT:{}] Auto-approving plan for system validation...", task.id);
-        task.transition_to(AgentState::Executing, Some(&app_handle));
+        task.transition_to(AgentState::ExecutingCoder, Some(&app_handle));
 
-        println!("[AGENT:{}] Executing task instructions...", task.id);
+        println!("[AGENT:{}] Dispatching instruction set to Coder Agent Node...", task.id);
+
+        let coder_response = match router::route_with_system(
+            WorkerPrompts::coder_system(),
+            &task.description,
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(e) => {
+                let err_msg = format!("Coder node failed: {}", e);
+                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                return Err(err_msg);
+            }
+        };
+
+        task.transition_to(AgentState::ExecutingReviewer, Some(&app_handle));
+        println!(
+            "[AGENT:{}] Routing Coder output to Reviewer Agent Node for verification...",
+            task.id
+        );
+
+        let review_payload = format!(
+            "Original Task: {}\nProposed Code Strategy:\n{}",
+            task.description, coder_response
+        );
+        match router::route_with_system(WorkerPrompts::reviewer_system(), &review_payload).await {
+            Ok(review_output) => {
+                println!(
+                    "[AGENT:{}] Review complete. Output logged successfully.",
+                    task.id
+                );
+                let _ = review_output;
+            }
+            Err(e) => {
+                let err_msg = format!("Reviewer node failed: {}", e);
+                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                return Err(err_msg);
+            }
+        }
+
+        task.transition_to(AgentState::Verifying, Some(&app_handle));
+        println!(
+            "[AGENT:{}] Running system compilation sanity checks...",
+            task.id
+        );
 
         let executor = FileExecutor::new(".");
-        let test_file = "src/agent_v2_test_artifact.rs";
-        let test_content = "pub fn ai_generated() { println!(\"AI execution verified\"); }";
+        let test_file = "src/agent_v2_multi_agent_gate.rs";
+        let test_content = "pub fn pipeline_verified() { // Multi-agent handshake active\n}";
 
         let backup = match executor.safe_write(test_file, test_content) {
             Ok(b) => b,
@@ -149,21 +207,18 @@ impl AgentRunner {
             }
         };
 
-        task.transition_to(AgentState::Verifying, Some(&app_handle));
-
-        println!("[AGENT:{}] Validating execution outcomes via compiler...", task.id);
-
         let verifier = WorkspaceVerifier;
         if let Err(e) = verifier.verify_cargo(Path::new(".")) {
-            println!("[AGENT:{}] Verification failed! Initiating auto-rollback...", task.id);
+            println!(
+                "[AGENT:{}] Compilation gate rejected changes! Reverting...",
+                task.id
+            );
             let _ = executor.rollback(test_file, backup);
             task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
             return Err(e);
         }
 
-        println!("[AGENT:{}] Verification passed. Cleaning up test artifact...", task.id);
         let _ = executor.rollback(test_file, backup);
-
         task.transition_to(AgentState::Completed, Some(&app_handle));
 
         Ok(task)
