@@ -54,11 +54,38 @@ pub struct WorkerPrompts;
 
 impl WorkerPrompts {
     pub fn coder_system() -> &'static str {
-        "You are the Neural Forge Coder Agent. Your job is to output precise, functional implementation strategies based on architectural constraints. Keep solutions direct."
+        "You are the Neural Forge Coder Agent. You must propose modifications to files in the workspace.\n\
+        Your output MUST wrap the code in a single tag exactly like this:\n\
+        <write_file path=\"relative/path/to/file.rs\">\n\
+        // your code here\n\
+        </write_file>\n\
+        Do not output markdown code blocks outside of this tag. Keep explanations outside of the tag."
     }
 
     pub fn reviewer_system() -> &'static str {
         "You are the Neural Forge Reviewer Agent. Your job is to audit proposed implementation paths for structural flaws, security risks, or redundant logic. Output a clear LGTM or list faults."
+    }
+}
+
+pub struct PayloadParser;
+
+impl PayloadParser {
+    pub fn parse_write_payload(input: &str) -> Option<(String, String)> {
+        let start_marker = "<write_file path=\"";
+        let end_marker = "\">";
+        let close_marker = "</write_file>";
+
+        let start_idx = input.find(start_marker)?;
+        let path_start = start_idx + start_marker.len();
+
+        let path_end = input[path_start..].find(end_marker)?;
+        let target_path = input[path_start..path_start + path_end].to_string();
+
+        let content_start = path_start + path_end + end_marker.len();
+        let content_end = input[content_start..].find(close_marker)?;
+        let content = input[content_start..content_start + content_end].to_string();
+
+        Some((target_path, content))
     }
 }
 
@@ -164,6 +191,15 @@ impl AgentRunner {
             }
         };
 
+        let (relative_path, new_content) = match PayloadParser::parse_write_payload(&coder_response) {
+            Some((path, code)) => (path, code),
+            None => {
+                let err_msg = "Coder failed to generate structured tags (<write_file path=\"...\">)".to_string();
+                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                return Err(err_msg);
+            }
+        };
+
         task.transition_to(AgentState::ExecutingReviewer, Some(&app_handle));
         println!(
             "[AGENT:{}] Routing Coder output to Reviewer Agent Node for verification...",
@@ -171,16 +207,12 @@ impl AgentRunner {
         );
 
         let review_payload = format!(
-            "Original Task: {}\nProposed Code Strategy:\n{}",
-            task.description, coder_response
+            "Original Task: {}\nTarget Path: {}\nProposed Code:\n{}",
+            task.description, relative_path, new_content
         );
         match router::route_with_system(WorkerPrompts::reviewer_system(), &review_payload).await {
-            Ok(review_output) => {
-                println!(
-                    "[AGENT:{}] Review complete. Output logged successfully.",
-                    task.id
-                );
-                let _ = review_output;
+            Ok(_) => {
+                println!("[AGENT:{}] Review complete.", task.id);
             }
             Err(e) => {
                 let err_msg = format!("Reviewer node failed: {}", e);
@@ -191,15 +223,13 @@ impl AgentRunner {
 
         task.transition_to(AgentState::Verifying, Some(&app_handle));
         println!(
-            "[AGENT:{}] Running system compilation sanity checks...",
-            task.id
+            "[AGENT:{}] Writing changes to workspace file: {}",
+            task.id, relative_path
         );
 
         let executor = FileExecutor::new(".");
-        let test_file = "src/agent_v2_multi_agent_gate.rs";
-        let test_content = "pub fn pipeline_verified() { // Multi-agent handshake active\n}";
 
-        let backup = match executor.safe_write(test_file, test_content) {
+        let backup = match executor.safe_write(&relative_path, &new_content) {
             Ok(b) => b,
             Err(e) => {
                 task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
@@ -210,15 +240,18 @@ impl AgentRunner {
         let verifier = WorkspaceVerifier;
         if let Err(e) = verifier.verify_cargo(Path::new(".")) {
             println!(
-                "[AGENT:{}] Compilation gate rejected changes! Reverting...",
-                task.id
+                "[AGENT:{}] Compiler rejected changes! Initiating auto-rollback on: {}",
+                task.id, relative_path
             );
-            let _ = executor.rollback(test_file, backup);
+            let _ = executor.rollback(&relative_path, backup);
             task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
             return Err(e);
         }
 
-        let _ = executor.rollback(test_file, backup);
+        println!(
+            "[AGENT:{}] Verification passed successfully for file: {}",
+            task.id, relative_path
+        );
         task.transition_to(AgentState::Completed, Some(&app_handle));
 
         Ok(task)
@@ -237,4 +270,31 @@ pub async fn start_agent_task(app_handle: AppHandle, description: String) -> Res
     });
 
     Ok(task_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_payload_parser_success() {
+        let sample_output = "Here is my code implementation:\n\
+                             <write_file path=\"src/core/utils.rs\">\n\
+                             pub fn compute() -> usize { 42 }\n\
+                             </write_file>\n\
+                             Let me know if you need modifications.";
+
+        let parsed = PayloadParser::parse_write_payload(sample_output);
+        assert!(parsed.is_some());
+        let (path, code) = parsed.unwrap();
+        assert_eq!(path, "src/core/utils.rs");
+        assert_eq!(code.trim(), "pub fn compute() -> usize { 42 }");
+    }
+
+    #[test]
+    fn test_payload_parser_missing_tags() {
+        let bad_output = "This does not have tags\npub fn fail() {}";
+        let parsed = PayloadParser::parse_write_payload(bad_output);
+        assert!(parsed.is_none());
+    }
 }
