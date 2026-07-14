@@ -35,6 +35,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "language": "en-US"
+      }
     }
   }
 }

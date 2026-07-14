@@ -1,0 +1,35 @@
+name: 'Publish Release'
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Frontend Dependencies
+        run: npm install
+      - name: Build and Publish Tauri App
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: __VERSION__
+          releaseName: 'Neural Forge __VERSION__'
+          releaseBody: 'Automated release of Neural Forge. See the attached assets to download and install.'
+          releaseDraft: false
+          prerelease: false
