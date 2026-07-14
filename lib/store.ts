@@ -7,7 +7,7 @@ function safeJSONParse(value: string | null) {
   catch { return null; }
 }
 
-function migrateConfig(old: any): AIConfig {
+export async function migrateConfig(old: any): Promise<AIConfig> {
   const defaultCfg: AIConfig = {
     version: STORE_VERSION,
     provider: "ollama",
@@ -15,10 +15,20 @@ function migrateConfig(old: any): AIConfig {
     model: "qwen2.5-coder:7b",
     temperature: 0.2,
     context: 8192,
+    effort: "High",
   };
   if (!old) return defaultCfg;
-  if (!old.version) return { ...defaultCfg, ...old, version: STORE_VERSION };
-  return old as AIConfig;
+
+  if (!old.version) {
+    const migrated = { ...defaultCfg, ...old, version: STORE_VERSION, effort: old.effort || "High" } as AIConfig;
+    if (old.apiKey) {
+      localStorage.setItem("nf_api_key_backup", old.apiKey);
+      delete (migrated as any).apiKey;
+      migrated.apiKeyRef = "migrated-key";
+    }
+    return migrated;
+  }
+  return { ...old, effort: old.effort || "High" } as AIConfig;
 }
 
 export async function getAppConfig(): Promise<AIConfig> {
