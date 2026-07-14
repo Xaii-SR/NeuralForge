@@ -21,8 +21,8 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [autoMode, setAutoMode] = useState(true);
   const [autoSelection, setAutoSelection] = useState<ai.AutoSelection | null>(null);
+  const [customProvider, setCustomProvider] = useState("");
   const [customModel, setCustomModel] = useState("");
-  const [availableCustomModel, setAvailableCustomModel] = useState("");
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -32,8 +32,13 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   const activeRequestId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const updateCustomModel = () => { const m = localStorage.getItem("nf_custom_model") || ""; setAvailableCustomModel(m); };
-  useEffect(() => { updateCustomModel(); window.addEventListener("nf_settings_updated", updateCustomModel); return () => window.removeEventListener("nf_settings_updated", updateCustomModel); }, []);
+  const loadSettings = () => {
+    const p = localStorage.getItem("nf_provider") || "";
+    const m = localStorage.getItem("nf_custom_model") || "";
+    setCustomProvider(p);
+    setCustomModel(m);
+  };
+  useEffect(() => { loadSettings(); window.addEventListener("nf_settings_updated", loadSettings); return () => window.removeEventListener("nf_settings_updated", loadSettings); }, []);
 
   async function handleIndex() { setIndexing(true); setIndexStatus(null); try { const s = await ai.indexWorkspace(); setIndexStatus(`Indexed ${s.files_indexed} files (${s.chunks_created} chunks)`); } catch (e) { setIndexStatus(`Index failed: ${e}`); } finally { setIndexing(false); } }
 
@@ -42,7 +47,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => { if (payload.request_id !== activeRequestId.current) return; setMessages((prev) => { const n = [...prev]; const last = n[n.length - 1]; if (last && last.role === "assistant") n[n.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache }; else n.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() }); return n; }); if (payload.done) { setSending(false); activeRequestId.current = null; } });
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
 
-  async function handleSend() { if (!input.trim() || sending) return; setError(null); const rid = crypto.randomUUID(); activeRequestId.current = rid; const um: DisplayMessage = { role: "user", content: input, timestamp: Date.now() }; const nm = [...messages, um]; setMessages(nm); setInput(""); setSending(true); let mtu = selectedModel; if (autoMode) { try { const sel = await ai.autoSelectModel(um.content); setAutoSelection(sel); mtu = sel.model; } catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; return; } } else { setAutoSelection(null); } if (!mtu) { setError("No model available"); setSending(false); activeRequestId.current = null; return; } let cp: string | null = null; try { cp = await ai.getContextForQuery(um.content); } catch { cp = null; } const out: ai.ChatMessage[] = []; if (cp) out.push({ role: "system", content: cp }); out.push(...nm.map((m) => ({ role: m.role, content: m.content }))); try { await ai.chatWithModel(rid, mtu, out); } catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; } }
+  async function handleSend() { if (!input.trim() || sending) return; setError(null); const rid = crypto.randomUUID(); activeRequestId.current = rid; const um: DisplayMessage = { role: "user", content: input, timestamp: Date.now() }; const nm = [...messages, um]; setMessages(nm); setInput(""); setSending(true); let mtu = customModel || selectedModel; if (autoMode) { try { const sel = await ai.autoSelectModel(um.content); setAutoSelection(sel); mtu = sel.model; } catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; return; } } else { setAutoSelection(null); } if (!mtu) { setError("No model available"); setSending(false); activeRequestId.current = null; return; } let cp: string | null = null; try { cp = await ai.getContextForQuery(um.content); } catch { cp = null; } const out: ai.ChatMessage[] = []; if (cp) out.push({ role: "system", content: cp }); out.push(...nm.map((m) => ({ role: m.role, content: m.content }))); try { await ai.chatWithModel(rid, mtu, out); } catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; } }
 
   if (ollamaAvailable === null) return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Checking Ollama...</div>;
   if (!ollamaAvailable) return <EmptyState icon="🔌" title="Ollama not detected" hint="Install Ollama and make sure it's running at localhost:11434, then reopen NeuralForge." />;
@@ -50,9 +55,15 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   return (
     <div className="flex h-full flex-col bg-white dark:bg-neutral-900">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-neutral-200 px-2 dark:border-neutral-800">
-        <button onClick={() => { setAutoMode((v) => !v); if (!autoMode && customModel) setCustomModel(""); }} className={`rounded px-2 py-1 text-xs font-medium transition-colors ${autoMode ? "bg-blue-600 text-white hover:bg-blue-500" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"}`}>Auto</button>
-        {!autoMode && (
-          <select value={customModel || selectedModel} onChange={(e) => { const v = e.target.value; setSelectedModel(v); setCustomModel(v); }} className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+        {customProvider && customModel ? (
+          <div className="rounded px-2 py-1 text-xs font-medium bg-green-600 text-white">
+            {customProvider} · {customModel}
+          </div>
+        ) : (
+          <button onClick={() => { setAutoMode((v) => !v); }} className={`rounded px-2 py-1 text-xs font-medium transition-colors ${autoMode ? "bg-blue-600 text-white hover:bg-blue-500" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"}`}>Auto</button>
+        )}
+        {!autoMode && !(customProvider && customModel) && (
+          <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
             {models.map((m) => (<option key={m.name} value={m.name}>{m.name} ({m.parameter_size})</option>))}
           </select>
         )}

@@ -27,48 +27,61 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
     setIsGenerating(true);
     setGenerationError("");
 
-    const systemPrompt = `You are a Meta-Prompt Engineer. Based on the user's objective, generate a beautifully structured AI system prompt containing:
-1. A System Persona / Role definition.
-2. Strict Edge-Case Constraints the model must follow.
-3. Explicit Output Formatting rules.
+    const provider = localStorage.getItem("nf_provider") || "Ollama";
+    const customModel = localStorage.getItem("nf_custom_model") || "";
+    const apiKey = localStorage.getItem("nf_custom_api_key") || "";
 
-Output ONLY the final prompt template. Do not include markdown fences or explanatory text.`;
+    const systemInstruction = "You are an elite Meta-Prompt Engineer. Take the user's optimization intent and generate a comprehensive, professional System Prompt with clear Personas, strict constraints, and formatting parameters.";
 
+    // ROUTE A: DEEPSEEK / CLOUD ENDPOINT ROUTING
+    if (provider === "DeepSeek" && apiKey) {
+      try {
+        const res = await fetch("https://api.deepseek.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: customModel || "deepseek-v4-pro",
+            messages: [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: userIntent },
+            ],
+          }),
+        });
+        if (!res.ok) throw new Error(`DeepSeek API error: ${res.status}`);
+        const data = await res.json();
+        const output = (data.choices?.[0]?.message?.content || "").trim();
+        if (output) { setGeneratedPrompt(output); localStorage.setItem("nf_custom_prompt", output); setIsGenerating(false); return; }
+      } catch (err: any) {
+        console.error("Cloud inference failed, trying local fallback...", err);
+      }
+    }
+
+    // ROUTE B: LOCAL OLLAMA INFERENCE (FALLBACK OR DEFAULT)
     try {
       const res = await fetch("http://127.0.0.1:11434/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "deepseek-coder:latest",
-          prompt: `${systemPrompt}\n\nUser Objective: ${userIntent}\n`,
+          model: customModel || "qwen2.5-coder:7b",
+          prompt: `${systemInstruction}\n\nOptimize this target objective: ${userIntent}`,
           stream: false,
         }),
       });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => `HTTP ${res.status}`);
-        throw new Error(errText);
-      }
-
+      if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
       const data = await res.json();
       const output = (data.response || "").trim();
-      if (!output) throw new Error("Model returned empty response");
-
-      setGeneratedPrompt(output);
-      localStorage.setItem("nf_custom_prompt", output);
-    } catch (error: any) {
-      console.error("Inference link broken:", error);
+      if (output) { setGeneratedPrompt(output); localStorage.setItem("nf_custom_prompt", output); }
+      else throw new Error("Model returned empty response");
+    } catch (localErr: any) {
       setGenerationError(
-        "OLLAMA BACKEND OFFLINE: Local hardware pipeline is unreachable at port 11434.\n\n" +
-        "🔧 FIX PROTOCOL:\n" +
-        "1. Ensure the Ollama icon is active in your Windows System Tray.\n" +
-        "2. If active but rejected, terminate Ollama and run this command in CMD to bypass local CORS headers:\n" +
-        "   set OLLAMA_ORIGINS=* && ollama serve\n" +
-        "3. Ensure your local hardware has the baseline model pulled ('ollama pull qwen2.5-coder:7b' or your mapped alternative)."
+        "GENERATE PROTOCOL FAILED:\n" +
+        "Cloud Connection Error or Local Ollama instance is offline.\n\n" +
+        "To fix:\n" +
+        "1. Verify your DeepSeek API key is correctly saved in Settings.\n" +
+        "2. Or launch Ollama and verify it via 'set OLLAMA_ORIGINS=* && ollama serve' in CMD."
       );
-    } finally {
-      setIsGenerating(false);
     }
+    setIsGenerating(false);
   }
 
   function handleSave() {
@@ -85,44 +98,26 @@ Output ONLY the final prompt template. Do not include markdown fences or explana
         </div>
 
         <div className="space-y-4">
-          {/* User Intent Input */}
           <div>
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-400">What objective or role do you want to optimize this AI agent for?</label>
-            <textarea
-              value={userIntent}
-              onChange={(e) => setUserIntent(e.target.value)}
-              rows={3}
-              placeholder="e.g., Make a drift physics tuner for Assetto Corsa"
-              className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-            />
+            <textarea value={userIntent} onChange={(e) => setUserIntent(e.target.value)} rows={3} placeholder="e.g., Make a drift physics tuner for Assetto Corsa" className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" />
           </div>
 
-          {/* Generate Button */}
-          <button
-            onClick={handleGenerate}
-            disabled={isGenerating || !userIntent.trim()}
-            className="flex w-full items-center justify-center gap-2 rounded bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:opacity-50"
-          >
+          <button onClick={handleGenerate} disabled={isGenerating || !userIntent.trim()} className="flex w-full items-center justify-center gap-2 rounded bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:opacity-50">
             {isGenerating && <Spinner size={14} />}
             {isGenerating ? "Generating via Local AI..." : "⚡ Generate System Prompt via Local AI"}
           </button>
 
           {generationError && (
-            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
-              Error: {generationError}
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 whitespace-pre-wrap dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+              {generationError}
             </div>
           )}
 
-          {/* Generated Prompt */}
           {generatedPrompt && (
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-400">Final System Prompt (Editable)</label>
-              <textarea
-                value={generatedPrompt}
-                onChange={(e) => setGeneratedPrompt(e.target.value)}
-                rows={12}
-                className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 font-mono text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-              />
+              <textarea value={generatedPrompt} onChange={(e) => setGeneratedPrompt(e.target.value)} rows={12} className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 font-mono text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" />
             </div>
           )}
         </div>
