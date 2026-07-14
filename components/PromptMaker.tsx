@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Spinner from "@/components/ui/Spinner";
+import { executeGeneration } from "@/lib/ai/runtime/executor";
 
 export interface PromptMakerProps { onClose: () => void; }
 
@@ -18,85 +19,15 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
     if (!userIntent.trim() || isGenerating) return;
     setIsGenerating(true);
     setGenerationError("");
-
-    const provider = localStorage.getItem("nf_provider") || "Ollama";
-    const customModel = localStorage.getItem("nf_custom_model") || "";
-    const apiKey = localStorage.getItem("nf_custom_api_key") || "";
-
-    const systemInstruction = "You are an elite Meta-Prompt Engineer. Take the user's optimization intent and generate a comprehensive, professional System Prompt with clear Personas, strict constraints, and formatting parameters.";
-
-    // ROUTE A: CLOUD PROVIDER (exclusive — no fallback to Ollama)
-    const isCloud = provider !== "Ollama" && provider !== "Custom" && provider !== "";
-
-    if (isCloud) {
-      if (!apiKey) {
-        setGenerationError(`${provider} API Key Missing! Please save your ${provider} API key in Settings.`);
-        setIsGenerating(false);
-        return;
-      }
-
-      try {
-        const endpointMap: Record<string, string> = {
-          "DeepSeek": "https://api.deepseek.com/v1/chat/completions",
-          "OpenAI": "https://api.openai.com/v1/chat/completions",
-          "Anthropic": "https://api.anthropic.com/v1/messages",
-          "Google": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-          "xAI": "https://api.x.ai/v1/chat/completions",
-          "Cohere": "https://api.cohere.ai/v1/chat",
-          "Mistral": "https://api.mistral.ai/v1/chat/completions",
-        };
-        const endpoint = endpointMap[provider] || `https://api.openai.com/v1/chat/completions`;
-
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: customModel || "deepseek-v4-pro",
-            messages: [
-              { role: "system", content: systemInstruction },
-              { role: "user", content: userIntent },
-            ],
-          }),
-        });
-
-        if (!res.ok) throw new Error(`${provider} API error: ${res.status}`);
-        const data = await res.json();
-        const output = (data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-        if (output) { setGeneratedPrompt(output); localStorage.setItem("nf_custom_prompt", output); setIsGenerating(false); return; }
-        throw new Error(`${provider} returned empty response`);
-      } catch (err: any) {
-        setGenerationError(`${provider} API Error: Request failed. Please check your API key and network connection.\n\nDetail: ${err.message || String(err)}`);
-        setIsGenerating(false);
-        return;
-      }
-    }
-
-    // ROUTE B: LOCAL OLLAMA INFERENCE (Ollama or Custom provider)
     try {
-      const res = await fetch("http://127.0.0.1:11434/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: customModel || "qwen2.5-coder:7b",
-          prompt: `${systemInstruction}\n\nOptimize this target objective: ${userIntent}`,
-          stream: false,
-        }),
-      });
-      if (!res.ok) throw new Error(`Ollama error: ${res.status}`);
-      const data = await res.json();
-      const output = (data.response || "").trim();
-      if (output) { setGeneratedPrompt(output); localStorage.setItem("nf_custom_prompt", output); }
-      else throw new Error("Model returned empty response");
-    } catch (localErr: any) {
-      setGenerationError(
-        "GENERATE PROTOCOL FAILED:\n" +
-        "Local Ollama instance is offline.\n\n" +
-        "To fix:\n" +
-        "1. Launch Ollama and verify it via 'set OLLAMA_ORIGINS=* && ollama serve' in CMD.\n" +
-        "2. Ensure your local hardware has the baseline model pulled ('ollama pull qwen2.5-coder:7b')."
-      );
+      const result = await executeGeneration(userIntent);
+      setGeneratedPrompt(result.text);
+      localStorage.setItem("nf_custom_prompt", result.text);
+    } catch (err: any) {
+      setGenerationError(err.message || String(err));
+    } finally {
+      setIsGenerating(false);
     }
-    setIsGenerating(false);
   }
 
   function handleSave() { localStorage.setItem("nf_custom_prompt", generatedPrompt); onClose(); }
@@ -107,7 +38,7 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
         <div className="mb-5 flex items-center justify-between"><h2 className="text-base font-semibold">🛠️ AI Prompt Orchestration Studio</h2><button onClick={onClose} className="rounded px-1.5 py-0.5 text-neutral-400 transition-colors hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button></div>
         <div className="space-y-4">
           <div><label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-400">What objective or role do you want to optimize this AI agent for?</label><textarea value={userIntent} onChange={(e) => setUserIntent(e.target.value)} rows={3} placeholder="e.g., Make a drift physics tuner for Assetto Corsa" className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" /></div>
-          <button onClick={handleGenerate} disabled={isGenerating || !userIntent.trim()} className="flex w-full items-center justify-center gap-2 rounded bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:opacity-50">{isGenerating && <Spinner size={14} />}{isGenerating ? "Generating via Local AI..." : "⚡ Generate System Prompt via Local AI"}</button>
+          <button onClick={handleGenerate} disabled={isGenerating || !userIntent.trim()} className="flex w-full items-center justify-center gap-2 rounded bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-purple-500 disabled:opacity-50">{isGenerating && <Spinner size={14} />}{isGenerating ? "Generating via Runtime..." : "⚡ Generate System Prompt via Runtime"}</button>
           {generationError && (<div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 whitespace-pre-wrap dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">{generationError}</div>)}
           {generatedPrompt && (<div><label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-400">Final System Prompt (Editable)</label><textarea value={generatedPrompt} onChange={(e) => setGeneratedPrompt(e.target.value)} rows={12} className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 font-mono text-xs text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" /></div>)}
         </div>
