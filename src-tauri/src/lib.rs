@@ -40,6 +40,7 @@ pub fn run() {
     .manage(BenchmarkDbState::default())
     .manage(ComposerSessionState::default())
     .manage(ProcessTracker::new())
+    .manage(agent_v2::ApprovalRegistry::new())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -96,6 +97,8 @@ pub fn run() {
       ai::web::search_web,
       ai::inline::stream_inline_edit,
       agent_v2::start_agent_task,
+      agent_v2::approve_agent_task,
+      agent_v2::reject_agent_task,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,

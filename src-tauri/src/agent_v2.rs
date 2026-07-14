@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::{AppHandle, Emitter};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, State};
 use crate::intelligence::router;
+
+const MAX_RETRIES: u8 = 3;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum AgentState {
@@ -23,6 +27,7 @@ pub struct AgentTask {
     pub description: String,
     pub state: AgentState,
     pub plan_output: Option<String>,
+    pub retries: u8,
 }
 
 impl AgentTask {
@@ -32,6 +37,7 @@ impl AgentTask {
             description: description.to_string(),
             state: AgentState::Initialized,
             plan_output: None,
+            retries: 0,
         }
     }
 
@@ -50,6 +56,44 @@ impl AgentTask {
     }
 }
 
+// ── HITL Approval Registry ───────────────────────────────────────────────
+
+pub struct ApprovalRegistry {
+    pub channels: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+}
+
+impl ApprovalRegistry {
+    pub fn new() -> Self {
+        Self { channels: Arc::new(Mutex::new(HashMap::new())) }
+    }
+}
+
+#[tauri::command]
+pub async fn approve_agent_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+    let sender = {
+        let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
+        map.remove(&id)
+    };
+    if let Some(tx) = sender {
+        let _ = tx.send(true);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reject_agent_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+    let sender = {
+        let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
+        map.remove(&id)
+    };
+    if let Some(tx) = sender {
+        let _ = tx.send(false);
+    }
+    Ok(())
+}
+
+// ── Worker Prompts ────────────────────────────────────────────────────────
+
 pub struct WorkerPrompts;
 
 impl WorkerPrompts {
@@ -66,68 +110,53 @@ impl WorkerPrompts {
     }
 }
 
+// ── Payload Parser ────────────────────────────────────────────────────────
+
 pub struct PayloadParser;
 
 impl PayloadParser {
-    /// Parses multiple code modifications wrapped in <write_file path="...">...</write_file>
     pub fn parse_write_payloads(input: &str) -> Vec<(String, String)> {
         let mut results = Vec::new();
         let mut search_text = input;
-
         let start_marker = "<write_file path=\"";
         let end_marker = "\">";
         let close_marker = "</write_file>";
 
         while let Some(start_idx) = search_text.find(start_marker) {
             let path_start = start_idx + start_marker.len();
-
             if let Some(path_end) = search_text[path_start..].find(end_marker) {
                 let target_path = search_text[path_start..path_start + path_end].to_string();
                 let content_start = path_start + path_end + end_marker.len();
-
                 if let Some(content_end) = search_text[content_start..].find(close_marker) {
                     let content = search_text[content_start..content_start + content_end].to_string();
                     results.push((target_path, content));
-
                     search_text = &search_text[content_start + content_end + close_marker.len()..];
                     continue;
                 }
             }
             break;
         }
-
         results
     }
 }
 
-pub struct FileExecutor {
-    workspace_root: PathBuf,
-}
+// ── File Executor ─────────────────────────────────────────────────────────
+
+pub struct FileExecutor { workspace_root: PathBuf }
 
 impl FileExecutor {
-    pub fn new(root: &str) -> Self {
-        Self { workspace_root: PathBuf::from(root) }
-    }
+    pub fn new(root: &str) -> Self { Self { workspace_root: PathBuf::from(root) } }
 
     pub fn safe_write(&self, relative_path: &str, content: &str) -> Result<Option<String>, String> {
         if relative_path.contains("..") || relative_path.starts_with('/') || relative_path.starts_with('\\') {
-            return Err("SECURITY BREACH: Path traversal detected in AI execution plan".to_string());
+            return Err("SECURITY BREACH: Path traversal detected".to_string());
         }
-
         let target = self.workspace_root.join(relative_path);
-
-        let backup = if target.exists() {
-            fs::read_to_string(&target).ok()
-        } else {
-            None
-        };
-
+        let backup = if target.exists() { fs::read_to_string(&target).ok() } else { None };
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {}", e))?;
         }
-
         fs::write(&target, content).map_err(|e| format!("Failed to write file: {}", e))?;
-
         Ok(backup)
     }
 
@@ -140,29 +169,32 @@ impl FileExecutor {
     }
 }
 
+// ── Workspace Verifier ────────────────────────────────────────────────────
+
 pub struct WorkspaceVerifier;
 
 impl WorkspaceVerifier {
-    pub fn verify_cargo(&self, workspace_root: &Path) -> Result<(), String> {
-        let output = Command::new("cargo")
-            .arg("check")
-            .current_dir(workspace_root)
-            .output()
-            .map_err(|e| format!("Failed to spawn cargo check: {}", e))?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Cargo check failed:\n{}", stderr))
+    pub fn verify_cargo_with_stderr(&self, workspace_root: &Path) -> Result<(), String> {
+        let output = Command::new("cargo").arg("check").current_dir(workspace_root)
+            .output().map_err(|e| format!("Failed to spawn cargo check: {}", e))?;
+        if output.status.success() { Ok(()) }
+        else {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            Err(stderr)
         }
     }
 }
 
+// ── Agent Runner (Retry Loop + HITL) ──────────────────────────────────────
+
 pub struct AgentRunner;
 
 impl AgentRunner {
-    pub async fn process_task(app_handle: AppHandle, mut task: AgentTask) -> Result<AgentTask, String> {
+    pub async fn process_task(
+        app_handle: AppHandle,
+        registry: State<'_, ApprovalRegistry>,
+        mut task: AgentTask,
+    ) -> Result<AgentTask, String> {
         task.transition_to(AgentState::Planning, Some(&app_handle));
 
         let prompt = format!(
@@ -183,106 +215,139 @@ impl AgentRunner {
             }
         }
 
-        println!("[AGENT:{}] Auto-approving plan for system validation...", task.id);
-        task.transition_to(AgentState::ExecutingCoder, Some(&app_handle));
-
-        println!("[AGENT:{}] Dispatching instruction set to Coder Agent Node...", task.id);
-
-        let coder_response = match router::route_with_system(
-            WorkerPrompts::coder_system(),
-            &task.description,
-        )
-        .await
+        // ── HITL Approval Gate ──
         {
-            Ok(res) => res,
-            Err(e) => {
-                let err_msg = format!("Coder node failed: {}", e);
-                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
-                return Err(err_msg);
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            {
+                let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
+                map.insert(task.id.clone(), tx);
             }
-        };
 
-        let payloads = PayloadParser::parse_write_payloads(&coder_response);
-        if payloads.is_empty() {
-            let err_msg = "Coder failed to generate any valid structured tags (<write_file path=\"...\">)".to_string();
-            task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
-            return Err(err_msg);
-        }
-
-        task.transition_to(AgentState::ExecutingReviewer, Some(&app_handle));
-        println!("[AGENT:{}] Routing Coder output to Reviewer Agent Node for verification...", task.id);
-
-        let mut review_payload = format!("Original Task: {}\nProposed Code:\n", task.description);
-        for (path, code) in &payloads {
-            review_payload.push_str(&format!("--- TARGET: {} ---\n{}\n", path, code));
-        }
-
-        match router::route_with_system(WorkerPrompts::reviewer_system(), &review_payload).await {
-            Ok(_) => println!("[AGENT:{}] Review complete.", task.id),
-            Err(e) => {
-                let err_msg = format!("Reviewer node failed: {}", e);
-                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
-                return Err(err_msg);
-            }
-        }
-
-        task.transition_to(AgentState::Verifying, Some(&app_handle));
-        let executor = FileExecutor::new(".");
-        let mut backups: Vec<(String, Option<String>)> = Vec::new();
-
-        println!("[AGENT:{}] Committing {} files to workspace...", task.id, payloads.len());
-
-        for (relative_path, new_content) in &payloads {
-            match executor.safe_write(relative_path, new_content) {
-                Ok(backup) => backups.push((relative_path.clone(), backup)),
-                Err(e) => {
-                    println!(
-                        "[AGENT:{}] Write failure on {}. Initiating atomic rollback of previously written files...",
-                        task.id, relative_path
-                    );
-                    for (p, b) in backups.into_iter().rev() {
-                        let _ = executor.rollback(&p, b);
+            match rx.await {
+                Ok(true) => {
+                    println!("[AGENT:{}] Task approved by user.", task.id);
+                }
+                Ok(false) | Err(_) => {
+                    let err_msg = "Task rejected by user".to_string();
+                    {
+                        let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
+                        map.remove(&task.id);
                     }
-                    task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
-                    return Err(e);
+                    task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                    return Err(err_msg);
                 }
             }
         }
 
-        let verifier = WorkspaceVerifier;
-        if let Err(e) = verifier.verify_cargo(Path::new(".")) {
-            println!(
-                "[AGENT:{}] Compiler rejected changes! Initiating atomic rollback of {} files...",
-                task.id,
-                backups.len()
-            );
-            for (p, b) in backups.into_iter().rev() {
-                let _ = executor.rollback(&p, b);
+        // ── Self-Healing Execution Loop ──
+        let mut coder_prompt = task.description.clone();
+        loop {
+            task.transition_to(AgentState::ExecutingCoder, Some(&app_handle));
+            println!("[AGENT:{}] Dispatching instruction set to Coder Agent Node (retry {}/{})...", task.id, task.retries, MAX_RETRIES);
+
+            let coder_response = match router::route_with_system(WorkerPrompts::coder_system(), &coder_prompt).await {
+                Ok(res) => res,
+                Err(e) => {
+                    let err_msg = format!("Coder node failed: {}", e);
+                    task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                    return Err(err_msg);
+                }
+            };
+
+            let payloads = PayloadParser::parse_write_payloads(&coder_response);
+            if payloads.is_empty() {
+                let err_msg = "Coder failed to generate any valid structured tags".to_string();
+                task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                return Err(err_msg);
             }
-            task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
-            return Err(e);
+
+            task.transition_to(AgentState::ExecutingReviewer, Some(&app_handle));
+
+            let mut review_payload = format!("Original Task: {}\nProposed Code:\n", task.description);
+            for (path, code) in &payloads {
+                review_payload.push_str(&format!("--- TARGET: {} ---\n{}\n", path, code));
+            }
+
+            match router::route_with_system(WorkerPrompts::reviewer_system(), &review_payload).await {
+                Ok(_) => println!("[AGENT:{}] Review complete.", task.id),
+                Err(e) => {
+                    let err_msg = format!("Reviewer node failed: {}", e);
+                    task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                    return Err(err_msg);
+                }
+            }
+
+            task.transition_to(AgentState::Verifying, Some(&app_handle));
+            let executor = FileExecutor::new(".");
+            let mut backups: Vec<(String, Option<String>)> = Vec::new();
+
+            println!("[AGENT:{}] Committing {} files to workspace...", task.id, payloads.len());
+
+            for (relative_path, new_content) in &payloads {
+                match executor.safe_write(relative_path, new_content) {
+                    Ok(backup) => backups.push((relative_path.clone(), backup)),
+                    Err(e) => {
+                        for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
+                        task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
+                        return Err(e);
+                    }
+                }
+            }
+
+            let verifier = WorkspaceVerifier;
+            match verifier.verify_cargo_with_stderr(Path::new(".")) {
+                Ok(()) => {
+                    println!("[AGENT:{}] Verification passed for {} files.", task.id, payloads.len());
+                    task.transition_to(AgentState::Completed, Some(&app_handle));
+                    return Ok(task);
+                }
+                Err(stderr) if task.retries < MAX_RETRIES => {
+                    println!("[AGENT:{}] Compiler rejected changes (retry {}/{}). Rolling back and retrying...", task.id, task.retries + 1, MAX_RETRIES);
+                    for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
+                    task.retries += 1;
+                    coder_prompt = format!(
+                        "{}\n\nThe previous attempt failed with this compiler error:\n{}\nFix the code.",
+                        task.description, stderr
+                    );
+                    // Continue loop — re-invoke coder with error context
+                    continue;
+                }
+                Err(stderr) => {
+                    for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
+                    let err_msg = format!("Compiler failed after {} retries. Final error:\n{}", task.retries, stderr);
+                    task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                    return Err(err_msg);
+                }
+            }
         }
-
-        println!(
-            "[AGENT:{}] Verification passed successfully for {} files.",
-            task.id,
-            payloads.len()
-        );
-        task.transition_to(AgentState::Completed, Some(&app_handle));
-
-        Ok(task)
     }
 }
 
+// ── Tauri Command ─────────────────────────────────────────────────────────
+
 #[tauri::command]
-pub async fn start_agent_task(app_handle: AppHandle, description: String) -> Result<String, String> {
+pub async fn start_agent_task(
+    app_handle: AppHandle,
+    registry: State<'_, ApprovalRegistry>,
+    description: String,
+) -> Result<String, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let task = AgentTask::new(&task_id, &description);
-
     let worker_app_handle = app_handle.clone();
+    // Clone the Arc so the spawned task owns it
+    let registry_arc = registry.channels.clone();
 
     tauri::async_runtime::spawn(async move {
-        let _ = AgentRunner::process_task(worker_app_handle, task).await;
+        // Build a minimal State-like wrapper for the spawned context
+        struct DummyState<T>(T);
+        impl<T> std::ops::Deref for DummyState<T> {
+            type Target = T;
+            fn deref(&self) -> &Self::Target { &self.0 }
+        }
+        let dummy_registry = DummyState(ApprovalRegistry { channels: registry_arc });
+        // SAFETY: DummyState wraps a persistent Arc; lifetime is bound to the spawned task's duration.
+        let registry_ref: State<'_, ApprovalRegistry> = unsafe { std::mem::transmute(&dummy_registry) };
+        let _ = AgentRunner::process_task(worker_app_handle, registry_ref, task).await;
     });
 
     Ok(task_id)
@@ -298,7 +363,6 @@ mod tests {
                              <write_file path=\"src/file1.rs\">\nfn one() {}\n</write_file>\n\
                              Some text\n\
                              <write_file path=\"src/file2.rs\">\nfn two() {}\n</write_file>";
-
         let parsed = PayloadParser::parse_write_payloads(sample_output);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].0, "src/file1.rs");
