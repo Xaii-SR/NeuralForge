@@ -3,6 +3,7 @@ mod agent_controller;
 mod agent_v2;
 mod change_executor;
 mod context_retrieval;
+mod error_analyzer;
 mod workspace_scanner;
 mod ai;
 mod bootstrap;
