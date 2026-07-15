@@ -4,6 +4,8 @@ mod agent_v2;
 mod change_executor;
 mod context_retrieval;
 mod error_analyzer;
+mod knowledge_store;
+mod task_orchestrator;
 mod workspace_scanner;
 mod ai;
 mod bootstrap;
