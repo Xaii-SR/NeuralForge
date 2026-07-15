@@ -1,4 +1,15 @@
-import { AIConfig, PromptHistoryLog } from "./ai/types";
+export type AIProviderId = string;
+
+export interface AIConfig {
+  version: number;
+  provider: AIProviderId;
+  endpoint: string;
+  model: string;
+  temperature: number;
+  context: number;
+  apiKeyRef?: string;
+  effort: "Light" | "Medium" | "High" | "Extra High";
+}
 
 const STORE_VERSION = 1;
 
@@ -39,14 +50,4 @@ export async function getAppConfig(): Promise<AIConfig> {
 export async function saveAppConfig(config: AIConfig): Promise<void> {
   config.version = STORE_VERSION;
   localStorage.setItem("nf_app_config", JSON.stringify(config));
-}
-
-export async function getPromptHistory(): Promise<PromptHistoryLog[]> {
-  return safeJSONParse(localStorage.getItem("nf_prompt_history")) || [];
-}
-
-export async function savePromptHistory(log: PromptHistoryLog): Promise<void> {
-  const history = await getPromptHistory();
-  const updated = [log, ...history].slice(0, 100);
-  localStorage.setItem("nf_prompt_history", JSON.stringify(updated));
 }

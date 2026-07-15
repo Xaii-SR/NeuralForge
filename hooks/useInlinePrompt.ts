@@ -16,18 +16,20 @@ export interface InlinePromptState {
   status: InlineStatus;
   originalText: string;
   streamedText: string;
+  error: string | null;
 }
 
 export interface InlineStreamPayload {
   chunk: string;
   done: boolean;
+  error?: string | null;
 }
 
 export function useInlinePrompt() {
   const [state, setState] = useState<InlinePromptState>({
     isOpen: false, x: 0, y: 0, selectedText: "", cursorLine: 0,
     selectionRange: { startLine: 0, endLine: 0 },
-    status: "idle", originalText: "", streamedText: "",
+    status: "idle", originalText: "", streamedText: "", error: null,
   });
   const resolveRef = useRef<((value: string | null) => void) | null>(null);
   const streamedRef = useRef("");
@@ -38,7 +40,11 @@ export function useInlinePrompt() {
     let disposed = false;
     listen<InlineStreamPayload>("inline-stream", (event) => {
       if (disposed) return;
-      const { chunk, done } = event.payload;
+      const { chunk, done, error } = event.payload;
+      if (error) {
+        setState((prev) => ({ ...prev, status: "idle", error }));
+        return;
+      }
       if (done) {
         setState((prev) => ({ ...prev, status: "review" }));
       } else if (chunk) {
@@ -53,7 +59,7 @@ export function useInlinePrompt() {
     (x: number, y: number, selectedText: string, cursorLine: number, selectionRange: { startLine: number; endLine: number }) => {
       setState({
         isOpen: true, x, y, selectedText, cursorLine, selectionRange,
-        status: "idle", originalText: selectedText, streamedText: "",
+        status: "idle", originalText: selectedText, streamedText: "", error: null,
       });
       streamedRef.current = "";
       return new Promise<string | null>((resolve) => {
@@ -64,7 +70,7 @@ export function useInlinePrompt() {
   );
 
   const submitInlinePrompt = useCallback(async (prompt: string, filePath: string) => {
-    setState((prev) => ({ ...prev, status: "streaming", streamedText: "" }));
+    setState((prev) => ({ ...prev, status: "streaming", streamedText: "", error: null }));
     streamedRef.current = "";
     await invoke("stream_inline_edit", { prompt, selectedText: state.originalText, filePath });
   }, [state.originalText]);

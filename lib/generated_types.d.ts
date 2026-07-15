@@ -263,15 +263,6 @@ export type CostEstimate = {
   is_free: boolean;
 };
 
-export type BenchmarkResult = {
-  model: string;
-  tokens_per_second: number | null;
-  latency_ms: number;
-  vram_required_mb: number;
-  reliable: boolean;
-  benchmarked_at: number;
-};
-
 export type AutoSelection = {
   provider: string;
   model: string;

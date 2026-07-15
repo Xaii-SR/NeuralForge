@@ -146,15 +146,6 @@ export interface CostEstimate {
   is_free: boolean;
 }
 
-export interface BenchmarkResult {
-  model: string;
-  tokens_per_second: number | null;
-  latency_ms: number;
-  vram_required_mb: number;
-  reliable: boolean;
-  benchmarked_at: number;
-}
-
 export interface AutoSelection {
   provider: string;
   model: string;
@@ -175,18 +166,6 @@ export function estimateCostForPrompt(prompt: string): Promise<CostEstimate> {
   return invoke("estimate_cost_for_prompt", { prompt });
 }
 
-export function runModelBenchmark(model: string): Promise<BenchmarkResult> {
-  return invoke("run_model_benchmark", { model });
-}
-
-export function getBenchmarks(): Promise<BenchmarkResult[]> {
-  return invoke("get_benchmarks");
-}
-
-export function getBenchmarkForModel(model: string): Promise<BenchmarkResult | null> {
-  return invoke("get_benchmark_for_model", { model });
-}
-
 export function clearResponseCache(): Promise<number> {
   return invoke("clear_response_cache");
 }
@@ -195,20 +174,3 @@ export function autoSelectModel(prompt: string): Promise<AutoSelection> {
   return invoke("auto_select_model", { prompt });
 }
 
-export interface InlineRefactorPayload {
-  file_path: string;
-  selected_code: string;
-  user_instruction: string;
-}
-
-export interface InlineRefactorResponse {
-  success: boolean;
-  message: string;
-  generated_code: string | null;
-}
-
-export function dispatchInlineRefactor(
-  payload: InlineRefactorPayload
-): Promise<InlineRefactorResponse> {
-  return invoke("dispatch_inline_refactor", { payload });
-}

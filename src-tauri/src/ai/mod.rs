@@ -1,4 +1,3 @@
-pub mod benchmarks;
 pub mod autocomplete;
 pub mod cache;
 pub mod completion;
@@ -16,11 +15,9 @@ pub mod router;
 use crate::core::errors::{AppError, AppResult};
 use crate::core::state::AppState;
 use crate::database::DbState;
-use benchmarks::{BenchmarkDbState, BenchmarkResult};
 use health::{HealthRegistry, ProviderHealthInfo};
 use providers::{ollama, ProviderMetadata};
 use router::{AutoSelection, CostEstimate, Preferences};
-use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
@@ -142,48 +139,6 @@ pub fn estimate_cost_for_prompt(prompt: String) -> CostEstimate {
 }
 
 #[tauri::command]
-pub async fn run_model_benchmark(
-    benchmark_db: State<'_, BenchmarkDbState>,
-    model: String,
-) -> AppResult<BenchmarkResult> {
-    let models = ollama::list_models().await?;
-    let info = models
-        .iter()
-        .find(|m| m.name == model)
-        .ok_or_else(|| AppError::NotFound(model.clone()))?;
-
-    let result = benchmarks::run_benchmark(&model, &info.parameter_size, &info.quantization_level).await?;
-
-    let guard = benchmark_db.conn.lock().unwrap();
-    if let Some(conn) = guard.as_ref() {
-        benchmarks::store(conn, &result)?;
-    }
-    tracing::info!(
-        target: "ai",
-        event = "benchmark_completed",
-        model = %model,
-        tps = ?result.tokens_per_second,
-        latency_ms = result.latency_ms
-    );
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn get_benchmarks(benchmark_db: State<BenchmarkDbState>) -> AppResult<Vec<BenchmarkResult>> {
-    let guard = benchmark_db.conn.lock().unwrap();
-    match guard.as_ref() {
-        Some(conn) => benchmarks::list(conn),
-        None => Ok(vec![]),
-    }
-}
-
-#[tauri::command]
-pub fn get_benchmark_for_model(benchmark_db: State<BenchmarkDbState>, model: String) -> Option<BenchmarkResult> {
-    let guard = benchmark_db.conn.lock().unwrap();
-    guard.as_ref().and_then(|conn| benchmarks::get(conn, &model))
-}
-
-#[tauri::command]
 pub fn clear_response_cache(db: State<DbState>) -> AppResult<usize> {
     let guard = db.conn.lock().unwrap();
     let conn = guard
@@ -195,7 +150,6 @@ pub fn clear_response_cache(db: State<DbState>) -> AppResult<usize> {
 #[tauri::command]
 pub async fn auto_select_model(
     db: State<'_, DbState>,
-    benchmark_db: State<'_, BenchmarkDbState>,
     health: State<'_, HealthRegistry>,
     prompt: String,
 ) -> AppResult<AutoSelection> {
@@ -206,15 +160,7 @@ pub async fn auto_select_model(
 
     let models = ollama::list_models().await?;
 
-    let benchmark_map: HashMap<String, BenchmarkResult> = {
-        let guard = benchmark_db.conn.lock().unwrap();
-        match guard.as_ref() {
-            Some(conn) => benchmarks::list(conn)?.into_iter().map(|b| (b.model.clone(), b)).collect(),
-            None => HashMap::new(),
-        }
-    };
-
-    let selection = router::select_model(&models, &benchmark_map, &health, &prefs, &prompt)?;
+    let selection = router::select_model(&models, &health, &prefs, &prompt)?;
     tracing::info!(
         target: "ai",
         event = "auto_selected",
@@ -225,67 +171,11 @@ pub async fn auto_select_model(
     Ok(selection)
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct InlineRefactorPayload {
-    pub file_path: String,
-    pub selected_code: String,
-    pub user_instruction: String,
-}
-
-#[derive(serde::Serialize, Clone, Debug)]
-pub struct InlineRefactorResponse {
-    pub success: bool,
-    pub message: String,
-    pub generated_code: Option<String>,
-}
-
-#[tauri::command]
-pub async fn dispatch_inline_refactor(
-    app: AppHandle,
-    payload: InlineRefactorPayload,
-) -> Result<InlineRefactorResponse, String> {
-    tracing::info!(
-        target: "ai",
-        event = "inline_refactor_dispatched",
-        file_path = %payload.file_path,
-        selected_len = %payload.selected_code.len(),
-        instruction_len = %payload.user_instruction.len(),
-    );
-
-    // Construct the prompt from the selection + user instruction
-    let _prompt = if payload.selected_code.is_empty() {
-        payload.user_instruction.clone()
-    } else {
-        format!(
-            "File: {}\n\nSelected code:\n```\n{}\n```\n\nInstruction: {}",
-            payload.file_path, payload.selected_code, payload.user_instruction
-        )
-    };
-
-    let _ = app.emit("inline-refactor-started", &payload);
-
-    // Generate simulated response
-    let generated = format!(
-        "// Generated response for: {}\n// Instruction: {}\nfn result() {{\n    todo!()\n}}",
-        payload.file_path, payload.user_instruction
-    );
-
-    // Emit line-level streaming diff
-    let request_id = format!("refactor-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
-    completion::stream_inline_diff(app.clone(), request_id, &payload.selected_code, &generated).await;
-
-    Ok(InlineRefactorResponse {
-        success: true,
-        message: "Refactor completed".to_string(),
-        generated_code: Some(generated),
-    })
-}
-
 /// Pure core: model lookup -> VRAM gate -> health-cooldown check -> stream ->
 /// record health + log. Decoupled from AppHandle so it's testable without a
 /// live Tauri runtime (same pattern as ollama::chat_stream). Returns the
 /// full accumulated response text (for caching) alongside Ollama's real
-/// generation stats (for benchmarking/TPS).
+/// generation stats (proof the response came from a genuine generation).
 async fn chat_with_model_core<F>(
     health: &HealthRegistry,
     model: &str,

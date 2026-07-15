@@ -18,7 +18,6 @@ mod performance;
 mod services;
 mod workspace;
 
-use ai::benchmarks::BenchmarkDbState;
 use ai::composer::ComposerSessionState;
 use ai::composer::ProcessTracker;
 use ai::health::HealthRegistry;
@@ -39,7 +38,6 @@ pub fn run() {
     .manage(TerminalRegistry::default())
     .manage(HealthRegistry::default())
     .manage(DbState::default())
-    .manage(BenchmarkDbState::default())
     .manage(ComposerSessionState::default())
     .manage(ProcessTracker::new())
     .manage(agent_v2::ApprovalRegistry::new())
@@ -73,13 +71,9 @@ pub fn run() {
       ai::save_preferences,
       ai::get_preferences,
       ai::estimate_cost_for_prompt,
-      ai::run_model_benchmark,
-      ai::get_benchmarks,
-      ai::get_benchmark_for_model,
       ai::clear_response_cache,
       ai::autocomplete::fetch_ghost_suggestion,
       ai::auto_select_model,
-      ai::dispatch_inline_refactor,
       ai::completion::get_ghost_text_prediction,
       ai::completion::get_prediction_with_fim,
       ai::completion::store_prediction_result,
@@ -146,11 +140,6 @@ pub fn run() {
       let log_dir = app.path().app_log_dir()?;
       let guard = core::logging::init(&log_dir)?;
       app.manage(guard);
-
-      let data_dir = app.path().app_data_dir()?;
-      std::fs::create_dir_all(&data_dir)?;
-      let benchmark_conn = ai::benchmarks::open(&data_dir.join("model_benchmarks.db"))?;
-      app.state::<BenchmarkDbState>().conn.lock().unwrap().replace(benchmark_conn);
 
       tracing::info!(target: "core", event = "app_started", "NeuralForge started");
       Ok(())

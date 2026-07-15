@@ -1,4 +1,3 @@
-use crate::ai::benchmarks::BenchmarkResult;
 use crate::ai::health::HealthRegistry;
 use crate::ai::providers::ollama::OllamaModel;
 use crate::ai::providers::ProviderId;
@@ -6,7 +5,6 @@ use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Preferences {
@@ -96,76 +94,25 @@ fn parse_param_count(parameter_size: &str) -> f64 {
     parameter_size.trim_end_matches(['B', 'b']).parse().unwrap_or(1.0)
 }
 
-/// Pure scoring: no I/O, fully testable. "speed" goal prefers benchmarked TPS
-/// (falling back to smaller parameter count as a proxy when unbenchmarked);
-/// "quality" goal prefers larger parameter count as a proxy for capability
-/// (no quality benchmark exists yet - this is an honest heuristic, not a
-/// real quality score). Returns candidates sorted best-first.
-pub fn score_models(
-    models: &[OllamaModel],
-    benchmarks: &HashMap<String, BenchmarkResult>,
-    prefs: &Preferences,
-) -> Vec<(f64, String, String)> {
+/// Pure scoring: no I/O, fully testable. "speed" goal prefers a smaller
+/// parameter count as a proxy for generation speed; "quality" goal prefers
+/// a larger parameter count as a proxy for capability. Both are honest
+/// heuristics - no measured speed or quality data exists.
+/// Returns candidates sorted best-first.
+pub fn score_models(models: &[OllamaModel], prefs: &Preferences) -> Vec<(f64, String, String)> {
     let mut scored: Vec<(f64, String, String)> = models
         .iter()
         .map(|m| {
-            let benchmark = benchmarks.get(&m.name);
+            let params = parse_param_count(&m.parameter_size);
             let (score, reason) = if prefs.goal == "speed" {
-                match benchmark.and_then(|b| b.tokens_per_second) {
-                    Some(tps) => (tps, format!("fastest benchmarked model ({tps:.1} tok/s)")),
-                    None => {
-                        let params = parse_param_count(&m.parameter_size);
-                        (1.0 / params.max(0.1), format!("smallest available model (~{} params, not yet benchmarked)", m.parameter_size))
-                    }
-                }
+                (1.0 / params.max(0.1), format!("smallest available model (~{} params) for fastest responses", m.parameter_size))
             } else {
-                let params = parse_param_count(&m.parameter_size);
                 (params, format!("largest available model (~{} params) for best quality", m.parameter_size))
             };
             (score, m.name.clone(), reason)
         })
         .collect();
 
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored
-}
-
-/// Sprint 5: capability-aware scoring layered ON TOP of the Phase 4
-/// scoring. This is a separate additive function - score_models above is
-/// byte-for-byte untouched and remains the code path every existing
-/// caller uses. Guarantee: with no capability requirement (empty
-/// `required_capabilities`), this returns EXACTLY what score_models
-/// returns - same scores, same order, same reasons - because it delegates
-/// to it and applies a uniform no-op adjustment. A capability requirement
-/// adds +B to every model that covers all required capabilities (per
-/// `model_capabilities`), where B exceeds any Phase 4 score in practice,
-/// so capable models outrank incapable ones while the Phase 4 ordering
-/// still decides among equally capable ones.
-pub fn score_models_with_capabilities(
-    models: &[OllamaModel],
-    benchmarks: &HashMap<String, BenchmarkResult>,
-    prefs: &Preferences,
-    required_capabilities: &[String],
-    model_capabilities: &HashMap<String, Vec<String>>,
-) -> Vec<(f64, String, String)> {
-    let base = score_models(models, benchmarks, prefs);
-    if required_capabilities.is_empty() {
-        return base;
-    }
-
-    const CAPABILITY_BOOST: f64 = 1_000_000.0;
-    let mut scored: Vec<(f64, String, String)> = base
-        .into_iter()
-        .map(|(score, name, reason)| {
-            let have: Vec<String> = model_capabilities.get(&name).map(|c| c.iter().map(|s| s.to_lowercase()).collect()).unwrap_or_default();
-            let covers_all = required_capabilities.iter().all(|r| have.contains(&r.to_lowercase()));
-            if covers_all {
-                (score + CAPABILITY_BOOST, name, format!("{reason}; covers required capabilities [{}]", required_capabilities.join(", ")))
-            } else {
-                (score, name, format!("{reason}; missing some required capabilities"))
-            }
-        })
-        .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored
 }
@@ -186,7 +133,6 @@ pub struct AutoSelection {
 /// second real provider would plug into.
 pub fn select_model(
     models: &[OllamaModel],
-    benchmarks: &HashMap<String, BenchmarkResult>,
     health: &HealthRegistry,
     prefs: &Preferences,
     prompt: &str,
@@ -195,7 +141,7 @@ pub fn select_model(
         return Err(AppError::Provider("no local models available to select from".to_string()));
     }
 
-    let scored = score_models(models, benchmarks, prefs);
+    let scored = score_models(models, prefs);
     let (_, model, reason) = scored.into_iter().next().unwrap();
 
     let cost = estimate_cost(&ProviderId::Ollama, prompt);
@@ -229,34 +175,11 @@ mod tests {
         }
     }
 
-    fn benchmark(name: &str, tps: f64) -> BenchmarkResult {
-        BenchmarkResult {
-            model: name.to_string(),
-            tokens_per_second: Some(tps),
-            latency_ms: 100.0,
-            vram_required_mb: 1000,
-            reliable: true,
-            benchmarked_at: 0,
-        }
-    }
-
     #[test]
-    fn speed_goal_prefers_higher_benchmarked_tps() {
-        let models = vec![model("slow-model", "7B"), model("fast-model", "1B")];
-        let mut benchmarks = HashMap::new();
-        benchmarks.insert("slow-model".to_string(), benchmark("slow-model", 10.0));
-        benchmarks.insert("fast-model".to_string(), benchmark("fast-model", 80.0));
-
-        let prefs = Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
-        let scored = score_models(&models, &benchmarks, &prefs);
-        assert_eq!(scored[0].1, "fast-model");
-    }
-
-    #[test]
-    fn speed_goal_without_benchmarks_prefers_smaller_model() {
+    fn speed_goal_prefers_smaller_model() {
         let models = vec![model("big", "70B"), model("small", "1B")];
         let prefs = Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
-        let scored = score_models(&models, &HashMap::new(), &prefs);
+        let scored = score_models(&models, &prefs);
         assert_eq!(scored[0].1, "small");
     }
 
@@ -264,7 +187,7 @@ mod tests {
     fn quality_goal_prefers_larger_model() {
         let models = vec![model("small", "1B"), model("big", "70B")];
         let prefs = Preferences { goal: "quality".to_string(), cost_preference: "quality_first".to_string() };
-        let scored = score_models(&models, &HashMap::new(), &prefs);
+        let scored = score_models(&models, &prefs);
         assert_eq!(scored[0].1, "big");
     }
 
@@ -272,7 +195,7 @@ mod tests {
     fn select_model_errors_on_empty_model_list() {
         let prefs = Preferences::default();
         let health = HealthRegistry::default();
-        let result = select_model(&[], &HashMap::new(), &health, &prefs, "hello");
+        let result = select_model(&[], &health, &prefs, "hello");
         assert!(result.is_err());
     }
 
@@ -281,7 +204,7 @@ mod tests {
         let models = vec![model("m1", "1B")];
         let prefs = Preferences::default();
         let health = HealthRegistry::default();
-        let selection = select_model(&models, &HashMap::new(), &health, &prefs, "hello world").unwrap();
+        let selection = select_model(&models, &health, &prefs, "hello world").unwrap();
         assert!(selection.is_free);
         assert_eq!(selection.estimated_cost_usd, 0.0);
         assert_eq!(selection.model, "m1");
@@ -293,64 +216,6 @@ mod tests {
         let long = estimate_cost(&ProviderId::OpenAi, &"word ".repeat(1000));
         assert!(long.estimated_cost_usd > short.estimated_cost_usd);
         assert!(!short.is_free);
-    }
-
-    /// Sprint 5 regression proof: with no capability requirement, the
-    /// capability-aware entry point is EXACTLY the Phase 4 scorer - same
-    /// scores, same order, same reasons - for both goals.
-    #[test]
-    fn capability_scoring_with_no_requirement_is_identical_to_phase4_scoring() {
-        let models = vec![model("slow-model", "7B"), model("fast-model", "1B"), model("big", "70B")];
-        let mut benchmarks = HashMap::new();
-        benchmarks.insert("slow-model".to_string(), benchmark("slow-model", 10.0));
-        benchmarks.insert("fast-model".to_string(), benchmark("fast-model", 80.0));
-
-        for (goal, cost) in [("speed", "free"), ("quality", "quality_first")] {
-            let prefs = Preferences { goal: goal.to_string(), cost_preference: cost.to_string() };
-            let phase4 = score_models(&models, &benchmarks, &prefs);
-            let sprint5 = score_models_with_capabilities(&models, &benchmarks, &prefs, &[], &HashMap::new());
-            assert_eq!(phase4.len(), sprint5.len());
-            for (a, b) in phase4.iter().zip(sprint5.iter()) {
-                assert_eq!(a.0, b.0, "scores must be identical for goal {goal}");
-                assert_eq!(a.1, b.1, "order must be identical for goal {goal}");
-                assert_eq!(a.2, b.2, "reasons must be identical for goal {goal}");
-            }
-        }
-    }
-
-    /// A capability requirement outranks the Phase 4 dimensions: the model
-    /// that covers "testing" wins even when another model is far faster.
-    #[test]
-    fn capability_requirement_outranks_speed_scoring() {
-        let models = vec![model("fast-generalist", "1B"), model("test-capable", "7B")];
-        let mut benchmarks = HashMap::new();
-        benchmarks.insert("fast-generalist".to_string(), benchmark("fast-generalist", 500.0));
-
-        let mut caps = HashMap::new();
-        caps.insert("test-capable".to_string(), vec!["testing".to_string()]);
-
-        let prefs = Preferences::default(); // speed goal
-        let scored = score_models_with_capabilities(&models, &benchmarks, &prefs, &["testing".to_string()], &caps);
-        assert_eq!(scored[0].1, "test-capable");
-        assert!(scored[0].2.contains("covers required capabilities"));
-        assert!(scored[1].2.contains("missing some required capabilities"));
-    }
-
-    /// Among equally capable models, the Phase 4 ordering still decides.
-    #[test]
-    fn phase4_ordering_decides_among_equally_capable_models() {
-        let models = vec![model("cap-slow", "7B"), model("cap-fast", "1B")];
-        let mut benchmarks = HashMap::new();
-        benchmarks.insert("cap-slow".to_string(), benchmark("cap-slow", 10.0));
-        benchmarks.insert("cap-fast".to_string(), benchmark("cap-fast", 80.0));
-
-        let mut caps = HashMap::new();
-        caps.insert("cap-slow".to_string(), vec!["testing".to_string()]);
-        caps.insert("cap-fast".to_string(), vec!["testing".to_string()]);
-
-        let prefs = Preferences::default();
-        let scored = score_models_with_capabilities(&models, &benchmarks, &prefs, &["testing".to_string()], &caps);
-        assert_eq!(scored[0].1, "cap-fast");
     }
 
     #[test]

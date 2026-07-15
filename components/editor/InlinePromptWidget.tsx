@@ -12,6 +12,7 @@ export interface InlinePromptWidgetProps {
   x: number; y: number;
   initialValue?: string; placeholder?: string;
   status: InlineStatus;
+  error?: string | null;
   onSubmit: (value: string, context?: string) => Promise<string | null> | string | null;
   onAccept: () => void;
   onReject: () => void;
@@ -21,7 +22,7 @@ export interface InlinePromptWidgetProps {
 export default function InlinePromptWidget({
   x, y, initialValue = "",
   placeholder = "Ask AI to edit or generate...",
-  status, onSubmit, onAccept, onReject, onClose,
+  status, error, onSubmit, onAccept, onReject, onClose,
 }: InlinePromptWidgetProps) {
   const [value, setValue] = useState(initialValue);
   const [loading, setLoading] = useState(false);
@@ -125,36 +126,36 @@ export default function InlinePromptWidget({
         <div className="mb-1 flex flex-wrap gap-1">
           {attachedItems.map((item) => (
             <span key={item.label}
-              className="inline-flex items-center gap-1 rounded border border-[#444] bg-[#1e1e1e] px-2 py-0.5 text-[10px] text-[#aaa]">
+              className="inline-flex items-center gap-1 rounded border border-neutral-300 bg-white px-2 py-0.5 text-[10px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400">
               {item.type === "doc" ? "📚" : "@"} {item.label.split("/").pop()}
-              <button onClick={() => setAttachedItems((p) => p.filter((a) => a.label !== item.label))}
-                className="ml-0.5 text-[#666] hover:text-white">✕</button>
+              <button onClick={() => setAttachedItems((p) => p.filter((a) => a.label !== item.label))} aria-label={`Remove ${item.label}`}
+                className="ml-0.5 text-neutral-400 transition-colors hover:text-neutral-900 dark:text-neutral-500 dark:hover:text-white">✕</button>
             </span>
           ))}
         </div>
       )}
-      <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 shadow-2xl transition-colors ${status === "streaming" ? "border-[#3b82f6] bg-[#1a2332]" : status === "review" ? "border-[#22c55e] bg-[#1a2e1a]" : "border-[#555] bg-[#1e1e1e]"}`}>
-        <span className="text-xs font-semibold uppercase tracking-wide text-[#888]">AI</span>
+      <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 shadow-2xl transition-colors ${status === "streaming" ? "border-blue-500 bg-blue-50 dark:bg-[#1a2332]" : status === "review" ? "border-green-500 bg-green-50 dark:bg-[#1a2e1a]" : "border-neutral-300 bg-white dark:border-neutral-600 dark:bg-neutral-900"}`}>
+        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">AI</span>
 
         {status === "streaming" && (
           <div className="flex w-64 items-center gap-2">
             <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-            <span className="text-sm text-blue-400">Generating...</span>
+            <span className="text-sm text-blue-600 dark:text-blue-400">Generating...</span>
           </div>
         )}
 
         {status === "review" && (
-          <span className="text-sm text-green-400">Review changes</span>
+          <span className="text-sm text-green-600 dark:text-green-400">Review changes</span>
         )}
 
         {status === "idle" && (
           <input ref={inputRef} type="text" value={value} onChange={(e) => handleChange(e.target.value)} onKeyDown={handleKeyDown}
-            placeholder={placeholder} className="w-64 bg-transparent text-sm text-white outline-none placeholder:text-[#555]" />
+            placeholder={placeholder} className="w-64 bg-transparent text-sm text-neutral-900 outline-none placeholder:text-neutral-400 dark:text-white dark:placeholder:text-neutral-600" />
         )}
 
         {status === "idle" ? (
-          <button onClick={handleSubmit} disabled={!value.trim() || loading}
-            className="rounded px-2 py-0.5 text-xs font-medium text-[#aaa] transition-colors hover:bg-[#333] hover:text-white disabled:opacity-30">↵</button>
+          <button onClick={handleSubmit} disabled={!value.trim() || loading} aria-label="Submit prompt"
+            className="rounded px-2 py-0.5 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 disabled:opacity-30 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white">↵</button>
         ) : status === "review" ? (
           <div className="flex items-center gap-1">
             <button onClick={onAccept} className="rounded bg-green-700 px-2 py-0.5 text-xs font-medium text-white transition-colors hover:bg-green-600">✓ Accept</button>
@@ -162,6 +163,12 @@ export default function InlinePromptWidget({
           </div>
         ) : null}
       </div>
+
+      {error && (
+        <div className="mt-1 max-w-80 rounded border border-red-800 bg-red-950/90 px-2 py-1 text-xs text-red-300 shadow-xl">
+          {error}
+        </div>
+      )}
 
       {/* Mention menu */}
       {mention.isOpen && (

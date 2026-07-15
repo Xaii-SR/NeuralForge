@@ -12,8 +12,7 @@ pub struct VramCheckResult {
 /// Rough VRAM estimate from parameter count + quantization. Not a precise
 /// model of KV-cache/runtime overhead - a 20% margin is added on top of raw
 /// weight size, which is conservative enough to catch "this obviously won't
-/// fit" cases without needing per-architecture profiling (that's Phase 4's
-/// benchmark system).
+/// fit" cases without needing per-architecture profiling.
 pub fn estimate_required_mb(parameter_size: &str, quantization_level: &str) -> u64 {
     let params_billions: f64 = parameter_size.trim_end_matches(['B', 'b']).parse().unwrap_or(0.0);
 

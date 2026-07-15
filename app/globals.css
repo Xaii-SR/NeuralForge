@@ -38,15 +38,18 @@ html.dark body {
   background-color: rgba(120, 120, 120, 0.6);
 }
 
+/* Panel resize (usePanelLayout): keep the resize cursor and suppress text
+   selection for the whole drag, even when the pointer crosses other panels. */
+body.nf-resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}
+body.nf-resizing-row {
+  cursor: row-resize;
+  user-select: none;
+}
+
 /* Inline Diff decorations applied via Monaco editor options */
-.diff-insert-line {
-  background-color: rgba(34, 197, 94, 0.15) !important;
-}
-.diff-delete-line {
-  background-color: rgba(239, 68, 68, 0.15) !important;
-  text-decoration: line-through;
-  text-decoration-color: rgba(239, 68, 68, 0.5);
-}
 .inline-diff-deleted {
   background-color: rgba(239, 68, 68, 0.2) !important;
   text-decoration: line-through;

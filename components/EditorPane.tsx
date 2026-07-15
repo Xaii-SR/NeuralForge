@@ -12,6 +12,7 @@ import { languageFromPath } from "@/lib/language";
 import { useVersionCache } from "@/hooks/useVersionCache";
 import { useComposer } from "@/hooks/useComposer";
 import { useInlinePrompt } from "@/hooks/useInlinePrompt";
+import { useInlineDiff } from "@/hooks/useInlineDiff";
 import type { OpenFile } from "@/hooks/useWorkspace";
 
 export interface EditorPaneProps {
@@ -32,10 +33,12 @@ export default function EditorPane({
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
   const { state: prompt, open: openPrompt, close: closePrompt, submitInlinePrompt, acceptChanges, rejectChanges } = useInlinePrompt();
+  const { diffState, clearDiff } = useInlineDiff();
   const { pendingDiffs, setPendingDiffs, activeDiffIndex, setActiveDiffIndex } = useComposer();
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const inlineDecorationsRef = useRef<string[]>([]);
+  const selectionRangeRef = useRef<any>(null);
   const [diffOriginal, setDiffOriginal] = useState<string>("");
   const [diffLanguage, setDiffLanguage] = useState("text");
 
@@ -91,26 +94,43 @@ export default function EditorPane({
     editor?.focus();
   }, []);
 
-  const handleAccept = useCallback(() => { clearDecorations(); acceptChanges(); }, [clearDecorations, acceptChanges]);
-  const handleReject = useCallback(() => { clearDecorations(); rejectChanges(); }, [clearDecorations, rejectChanges]);
+  const handleAccept = useCallback(() => {
+    const editor = (window as any).__neuralforge_editor;
+    const monaco = (window as any).monaco;
+    const range = selectionRangeRef.current;
+    if (editor && monaco && range && activeFile) {
+      editor.executeEdits("inline-prompt-accept", [
+        { range, text: prompt.streamedText, forceMoveMarkers: true },
+      ]);
+      onChange(activeFile.path, editor.getValue());
+    }
+    clearDecorations();
+    clearDiff();
+    acceptChanges();
+  }, [clearDecorations, clearDiff, acceptChanges, prompt.streamedText, activeFile, onChange]);
 
+  const handleReject = useCallback(() => { clearDecorations(); clearDiff(); rejectChanges(); }, [clearDecorations, clearDiff, rejectChanges]);
+
+  // Real per-line diff decorations, streamed from the backend's stream_inline_diff.
   useEffect(() => {
     const editor = (window as any).__neuralforge_editor;
     const monaco = (window as any).monaco;
     if (!editor || !monaco) return;
-    if (prompt.status === "review" && prompt.originalText && prompt.streamedText) {
-      const origLines = prompt.originalText.split("\n").length;
-      const streamLines = prompt.streamedText.split("\n").length;
+    if (diffState.active || diffState.lines.length > 0) {
       const decorations: any[] = [];
-      for (let i = 1; i <= origLines; i++)
-        decorations.push({ range: new monaco.Range(i, 1, i, 1), options: { isWholeLine: true, className: "inline-diff-deleted" } });
-      for (let i = origLines + 1; i <= origLines + streamLines; i++)
-        decorations.push({ range: new monaco.Range(i, 1, i, 1), options: { isWholeLine: true, className: "inline-diff-inserted" } });
+      for (const dl of diffState.lines) {
+        const lineNum = dl.line_index + 1;
+        if (dl.op === "Insert") {
+          decorations.push({ range: new monaco.Range(lineNum, 1, lineNum, 1), options: { isWholeLine: true, className: "inline-diff-inserted" } });
+        } else if (dl.op === "Delete") {
+          decorations.push({ range: new monaco.Range(lineNum, 1, lineNum, 1), options: { isWholeLine: true, className: "inline-diff-deleted" } });
+        }
+      }
       inlineDecorationsRef.current = editor.deltaDecorations(inlineDecorationsRef.current, decorations);
-    } else if (prompt.status !== "streaming" && inlineDecorationsRef.current.length > 0) {
+    } else if (inlineDecorationsRef.current.length > 0) {
       inlineDecorationsRef.current = editor.deltaDecorations(inlineDecorationsRef.current, []);
     }
-  }, [prompt.status, prompt.originalText, prompt.streamedText]);
+  }, [diffState]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Inline prompt review state: Cmd+Enter = accept, Escape = reject
@@ -131,8 +151,14 @@ export default function EditorPane({
       e.preventDefault();
       const c = editorContainerRef.current;
       if (!c || !activeFile) return;
+      const editor = (window as any).__neuralforge_editor;
+      const selection = editor?.getSelection?.();
+      const model = editor?.getModel?.();
+      const selectedText = selection && model ? model.getValueInRange(selection) : "";
+      selectionRangeRef.current = selection ?? null;
+      const cursorLine = selection?.positionLineNumber ?? 1;
       const r = c.getBoundingClientRect();
-      openPrompt(r.left + 20, r.top + 60, activeFile.content.substring(0, 200), 1, { startLine: 1, endLine: 1 });
+      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine });
     }
   }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);
@@ -147,9 +173,9 @@ export default function EditorPane({
         onAccept={() => { if (!activeFile) return; if (activeComposerBlockId && onDiffResolved) onDiffResolved(activeComposerBlockId, "accepted"); clearSnapshot(activeFile.path); setIsDiffMode(false); }}
         onReject={() => { if (!activeFile) return; if (activeComposerBlockId && onDiffResolved) onDiffResolved(activeComposerBlockId, "rejected"); const o = getSnapshot(activeFile.path); if (o !== null) onChange(activeFile.path, o); clearSnapshot(activeFile.path); setIsDiffMode(false); }}
       />
-      <div className="flex items-center gap-2 border-b border-[#333] bg-[#252526] px-3 py-1">
+      <div className="flex items-center gap-2 border-b border-neutral-200 bg-neutral-50 px-3 py-1 dark:border-neutral-800 dark:bg-neutral-900">
         <button onClick={() => { if (!isDiffMode && activeFile) setSnapshot(activeFile.path, activeFile.content); setIsDiffMode(!isDiffMode); }}
-          className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-[#333] text-[#aaa] hover:bg-[#444]"}`}>{isDiffMode ? "Diff Mode ON" : "Diff Mode OFF"}</button>
+          className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${isDiffMode ? "bg-blue-600 text-white" : "bg-neutral-200 text-neutral-600 hover:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"}`}>{isDiffMode ? "Diff Mode ON" : "Diff Mode OFF"}</button>
       </div>
       <div className="min-h-0 flex-1">
         {isDiffReview ? (
@@ -184,6 +210,7 @@ export default function EditorPane({
           x={prompt.x} y={prompt.y}
           initialValue={prompt.selectedText ? `refactor: ${prompt.selectedText}` : ""}
           status={prompt.status}
+          error={prompt.error}
           onSubmit={async (v) => { submitInlinePrompt(v, activeFile?.path ?? ""); return null; }}
           onAccept={handleAccept}
           onReject={handleReject}

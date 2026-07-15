@@ -40,12 +40,12 @@ export default function DiffActionBar({
   if (!isDiffMode) return null;
 
   return (
-    <div className="flex items-center justify-center gap-3 border-b border-[#333] bg-[#1e1e1e] px-4 py-2">
+    <div className="flex items-center justify-center gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2 dark:border-neutral-800 dark:bg-neutral-900">
       {totalDiffs != null && totalDiffs > 1 && onPrevDiff && onNextDiff && (
-        <div className="flex items-center gap-1 mr-2">
-          <button onClick={onPrevDiff} className="rounded bg-[#333] px-2 py-0.5 text-xs text-[#aaa] hover:bg-[#444]">◀</button>
-          <span className="text-xs text-[#888]">File {(activeDiffIndex ?? 0) + 1} of {totalDiffs}</span>
-          <button onClick={onNextDiff} className="rounded bg-[#333] px-2 py-0.5 text-xs text-[#aaa] hover:bg-[#444]">▶</button>
+        <div className="mr-2 flex items-center gap-1">
+          <button onClick={onPrevDiff} aria-label="Previous file" className="rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700">◀</button>
+          <span className="text-xs text-neutral-500">File {(activeDiffIndex ?? 0) + 1} of {totalDiffs}</span>
+          <button onClick={onNextDiff} aria-label="Next file" className="rounded bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700">▶</button>
         </div>
       )}
       <button
