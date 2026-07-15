@@ -12,8 +12,10 @@ mod intelligence;
 #[cfg(test)]
 mod release_validation;
 mod planning;
+mod parsers;
 mod terminal;
 mod performance;
+mod services;
 mod workspace;
 
 use ai::benchmarks::BenchmarkDbState;
