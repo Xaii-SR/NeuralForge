@@ -9,6 +9,8 @@ pub enum AppError {
     Terminal(String),
     Provider(String),
     InsufficientResources(String),
+    CommandRejected(String),
+    CommandTimeout(String),
 }
 
 impl fmt::Display for AppError {
@@ -20,6 +22,8 @@ impl fmt::Display for AppError {
             AppError::Terminal(msg) => write!(f, "Terminal error: {msg}"),
             AppError::Provider(msg) => write!(f, "Provider error: {msg}"),
             AppError::InsufficientResources(msg) => write!(f, "Insufficient resources: {msg}"),
+            AppError::CommandRejected(msg) => write!(f, "Command rejected: {msg}"),
+            AppError::CommandTimeout(msg) => write!(f, "Command timeout: {msg}"),
         }
     }
 }

@@ -19,6 +19,7 @@ mod planning;
 mod parsers;
 mod planning_engine;
 mod terminal;
+mod terminal_executor;
 mod performance;
 mod services;
 mod workspace;
@@ -30,6 +31,7 @@ use core::state::AppState;
 use database::DbState;
 use tauri::Manager;
 use terminal::TerminalRegistry;
+use terminal_executor::SandboxState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,6 +48,7 @@ pub fn run() {
     .manage(ComposerSessionState::default())
     .manage(ProcessTracker::new())
     .manage(agent_v2::ApprovalRegistry::new())
+    .manage(SandboxState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -140,6 +143,9 @@ pub fn run() {
       workspace::embeddings::generate_local_embeddings,
       workspace::embeddings::query_codebase_semantic,
       bootstrap::apply_self_improvement,
+      terminal_executor::execute_sandboxed_command,
+      terminal_executor::allowlist_add,
+      terminal_executor::denylist_add,
     ])
     .setup(|app| {
       let log_dir = app.path().app_log_dir()?;
