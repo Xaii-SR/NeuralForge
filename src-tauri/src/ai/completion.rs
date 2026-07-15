@@ -131,21 +131,62 @@ pub async fn stream_inline_diff(
 
 pub async fn async_stream_completion(app: AppHandle, request_id: String, file_path: String, content: String, cursor_line: usize, cursor_column: usize, _template: FimTemplate) {
     if should_debounce() { return; }
-    let ctx = extract_prediction_window(file_path, content, cursor_line, cursor_column);
-    let fp = ctx.file_path.clone(); let sfx = ctx.suffix.clone();
-    let pl = ctx.prefix.lines().last().unwrap_or("").to_string(); let sl = sfx.lines().next().unwrap_or("").to_string();
+    let ctx = extract_prediction_window(file_path.clone(), content, cursor_line, cursor_column);
+    let fp = ctx.file_path.clone();
+    let sfx = ctx.suffix.clone();
+    let prefix = ctx.prefix.clone();
+    let suffix = ctx.suffix.clone();
     drop(ctx);
+
+    // Check prediction cache first
     if let Some((completion, _, _)) = check_prediction_cache(&fp, &sfx) {
-        let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: completion, done: true, request_id: request_id.clone() }); return;
+        let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: completion, done: true, request_id: request_id.clone() });
+        return;
     }
-    let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: "[waiting...]".into(), done: false, request_id: request_id.clone() });
-    let resp = format!("// for:\n// prefix: {} ... suffix: {}\nfn r() -> i32 {{ 42 }}", pl, sl);
-    for ch in resp.chars() {
-        let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: ch.to_string(), done: false, request_id: request_id.clone() });
-        tokio::time::sleep(Duration::from_millis(1)).await;
+
+    // Build FIM prompt and call Ollama
+    let fim_prompt = format!("<|fim_prefix|>{}<|fim_suffix|>{}<|fim_middle|>", prefix, suffix);
+
+    match call_ollama_fim(&fim_prompt).await {
+        Ok(completion) if !completion.is_empty() => {
+            for ch in completion.chars() {
+                let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: ch.to_string(), done: false, request_id: request_id.clone() });
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
+            cache_prediction(&fp, &sfx, &completion);
+        }
+        Ok(_) => {
+            let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
+        }
+        Err(err) => {
+            tracing::warn!(target: "ai", event = "ghost_completion_failed", error = %err, file_path = %fp);
+            let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
+        }
     }
-    let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id });
-    cache_prediction(&fp, &sfx, &resp);
+}
+
+/// Calls Ollama's `/api/generate` with a FIM prompt and returns the raw completion text.
+async fn call_ollama_fim(fim_prompt: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://localhost:11434/api/generate")
+        .json(&serde_json::json!({
+            "model": "qwen2.5-coder:1.5b",
+            "prompt": fim_prompt,
+            "stream": false,
+            "raw": true,
+            "options": { "num_predict": 64, "temperature": 0.1 }
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama connection failed: {e}"))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse: {e}"))?;
+    if let Some(err) = body.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(body.get("response").and_then(|v| v.as_str()).unwrap_or("").to_string())
 }
 
 #[tauri::command]
