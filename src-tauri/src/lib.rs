@@ -1,6 +1,7 @@
 mod agent;
 mod agent_controller;
 mod agent_v2;
+mod context_retrieval;
 mod workspace_scanner;
 mod ai;
 mod bootstrap;
