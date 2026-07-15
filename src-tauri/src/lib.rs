@@ -16,6 +16,7 @@ mod intelligence;
 mod release_validation;
 mod planning;
 mod parsers;
+mod planning_engine;
 mod terminal;
 mod performance;
 mod services;
