@@ -1,7 +1,17 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Spinner from "@/components/ui/Spinner";
+import {
+  createOrchestratorTask,
+  approveOrchestratorTask,
+  rejectOrchestratorTask,
+  cancelOrchestratorTask,
+  getOrchestratorState,
+  listenOrchestratorState,
+  type OrchestratorTask,
+  type OrchestratorStatePayload,
+} from "@/lib/orchestrator";
 
 type AgentPhase =
   | "idle"
@@ -45,6 +55,20 @@ const PHASE_LABELS: Record<AgentPhase, string> = {
   cancelled: "Cancelled",
 };
 
+const backendPhaseToUI: Record<string, AgentPhase> = {
+  Created: "idle",
+  Analyzing: "analyzing",
+  Planning: "planning",
+  "Awaiting Approval": "awaiting_approval",
+  Executing: "executing",
+  Observing: "observing",
+  Recovering: "recovering",
+  Verifying: "verifying",
+  Completed: "completed",
+  Failed: "failed",
+  Cancelled: "cancelled",
+};
+
 export default function AgentWorkbench() {
   const [phase, setPhase] = useState<AgentPhase>("idle");
   const [userGoal, setUserGoal] = useState("");
@@ -58,6 +82,24 @@ export default function AgentWorkbench() {
   const [streamOutput, setStreamOutput] = useState("");
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [knowledgeResults, setKnowledgeResults] = useState<string[]>([]);
+  const unlistenRef = useRef<(() => void) | null>(null);
+
+  // Listen for real backend state changes
+  useEffect(() => {
+    listenOrchestratorState((payload: OrchestratorStatePayload) => {
+      const uiPhase = backendPhaseToUI[payload.phase_name] || "idle";
+      setPhase(uiPhase);
+      setRecoveryCount(payload.recovery_attempts);
+
+      appendTimeline(
+        uiPhase,
+        payload.phase_name,
+        `Progress: ${payload.progress_percent.toFixed(0)}% · ${(payload.elapsed_ms / 1000).toFixed(0)}s`,
+        0
+      );
+    }).then((fn) => { unlistenRef.current = fn; });
+    return () => { unlistenRef.current?.(); };
+  }, []);
 
   const appendTimeline = useCallback(
     (p: AgentPhase, summary: string, detail = "", durationMs = 0) => {
@@ -69,7 +111,8 @@ export default function AgentWorkbench() {
     []
   );
 
-  const resetAgent = () => {
+  const resetAgent = async () => {
+    try { await cancelOrchestratorTask(); } catch {}
     setPhase("idle");
     setUserGoal("");
     setTimeline([]);
@@ -88,50 +131,49 @@ export default function AgentWorkbench() {
     setErrorMessage(null);
     setIsRunning(true);
     setStartedAt(Date.now());
-    setPhase("analyzing");
-    appendTimeline("analyzing", "Analyzing workspace", "Scanning project files...");
-    await new Promise((r) => setTimeout(r, 600));
-    setPhase("retrieving_context");
-    appendTimeline("retrieving_context", "Retrieving relevant context", "Matching goal to project structure");
-    await new Promise((r) => setTimeout(r, 500));
-    setPhase("planning");
-    const steps = [`Identify files to modify for: "${goal}"`, "Generate code changes", "Run build verification"];
-    setPlanSteps(steps);
-    setAffectedFiles(["src/main.rs", "src/lib.rs"]);
-    appendTimeline("planning", "Generated implementation plan", `${steps.length} steps planned`, 1200);
-    await new Promise((r) => setTimeout(r, 600));
-    setPhase("awaiting_approval");
-    appendTimeline("awaiting_approval", "Waiting for human approval", "Plan requires review before execution");
-    setIsRunning(false);
+
+    try {
+      const task: OrchestratorTask = await createOrchestratorTask(goal);
+      const uiPhase = backendPhaseToUI[task.phase] || "idle";
+      setPhase(uiPhase);
+      appendTimeline(uiPhase, task.phase || "Created", `Goal: ${goal}`);
+
+      if (task.current_plan) {
+        setPlanSteps(task.current_plan.subtasks?.map((s: any) => s.description) || []);
+        setAffectedFiles(task.current_plan.affected_files || []);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || String(err));
+      setIsRunning(false);
+    }
   };
 
   const approveAndExecute = async () => {
     setIsRunning(true);
-    setPhase("applying_patch");
-    appendTimeline("applying_patch", "Applying approved changes", "Writing modifications to workspace...");
-    await new Promise((r) => setTimeout(r, 800));
-    setPhase("executing");
-    appendTimeline("executing", "Running verification commands", "Executing cargo check...");
-    const lines = ["Running cargo check...", " Checking src/main.rs", " Checking src/lib.rs", " Compilation successful!", "Running cargo test...", " All tests passed!", ""];
-    for (const line of lines) {
-      await new Promise((r) => setTimeout(r, 200));
-      setStreamOutput((prev) => prev + line + "\n");
+    try {
+      const task = await approveOrchestratorTask();
+      appendTimeline("applying_patch", "Applying patch", "Human approved execution");
+      // Poll for updated state
+      const updated = await getOrchestratorState();
+      if (updated.current_plan) {
+        setPlanSteps(updated.current_plan.subtasks?.map((s: any) => s.description) || []);
+        setAffectedFiles(updated.current_plan.affected_files || []);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || String(err));
+      setIsRunning(false);
     }
-    setPhase("observing");
-    appendTimeline("observing", "Build passed, all tests green", "Exit code 0", 2500);
-    setPhase("verifying");
-    appendTimeline("verifying", "Verification complete", "Task successfully executed");
-    setPhase("updating_knowledge");
-    appendTimeline("updating_knowledge", "Updating project knowledge", "Caching successful strategy");
-    setPhase("completed");
-    appendTimeline("completed", "Task completed successfully");
-    setIsRunning(false);
   };
 
-  const rejectPlan = () => {
-    appendTimeline("failed", "Plan rejected by user", "Approval was declined");
-    setPhase("cancelled");
-    setIsRunning(false);
+  const rejectPlan = async () => {
+    try {
+      await rejectOrchestratorTask();
+      appendTimeline("cancelled", "Plan rejected", "Human declined execution");
+      setPhase("cancelled");
+      setIsRunning(false);
+    } catch (err: any) {
+      setErrorMessage(err?.message || String(err));
+    }
   };
 
   const paused = phase === "awaiting_approval";

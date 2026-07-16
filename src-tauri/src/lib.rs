@@ -35,6 +35,7 @@ use database::DbState;
 use tauri::Manager;
 use terminal::TerminalRegistry;
 use terminal_executor::SandboxState;
+use task_orchestrator::OrchestratorState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,6 +53,7 @@ pub fn run() {
     .manage(ProcessTracker::new())
     .manage(agent_v2::ApprovalRegistry::new())
     .manage(SandboxState::default())
+    .manage(OrchestratorState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -149,6 +151,12 @@ pub fn run() {
       terminal_executor::execute_sandboxed_command,
       terminal_executor::allowlist_add,
       terminal_executor::denylist_add,
+      task_orchestrator::orchestrator_create_task,
+      task_orchestrator::orchestrator_approve_task,
+      task_orchestrator::orchestrator_reject_task,
+      task_orchestrator::orchestrator_cancel_task,
+      task_orchestrator::orchestrator_get_state,
+      task_orchestrator::orchestrator_reset,
     ])
     .setup(|app| {
       let log_dir = app.path().app_log_dir()?;
