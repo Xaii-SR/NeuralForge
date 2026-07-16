@@ -8,6 +8,7 @@ import LogViewer from "@/components/LogViewer";
 import ChatPane from "@/components/ChatPane";
 import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
+import AgentWorkbench from "@/components/AgentWorkbench";
 import ExtensionsPanel from "@/components/ExtensionsPanel";
 import BootstrapPanel from "@/components/BootstrapPanel";
 import GovernancePanel from "@/components/GovernancePanel";
