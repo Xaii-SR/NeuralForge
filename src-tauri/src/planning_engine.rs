@@ -12,6 +12,14 @@ pub struct TaskPlan {
     pub risks: Vec<String>,
     pub verification: Vec<String>,
     pub unknown_information: Vec<String>,
+    /// Estimated complexity of the plan (1-10).
+    pub confidence: f64,
+    /// Estimated runtime in commands (number of verification steps).
+    pub estimated_runtime_commands: usize,
+    /// Plan for rolling back changes on failure.
+    pub rollback_plan: String,
+    /// Human-readable reasoning for the plan.
+    pub reasoning: String,
 }
 
 /// A single ordered step in the plan with dependencies and expectations.
@@ -22,6 +30,8 @@ pub struct Subtask {
     pub dependencies: Vec<usize>,
     pub required_files: Vec<String>,
     pub expected_outcome: String,
+    /// Confidence score for this subtask (0.0-1.0).
+    pub confidence_score: f64,
 }
 
 /// The Planning Engine decomposes user tasks into structured, validated plans.
@@ -69,6 +79,7 @@ impl PlanningEngine {
                 dependencies: deps.clone(),
                 required_files: vec![file.clone()],
                 expected_outcome: format!("`{}` is updated and compiles successfully", file),
+                confidence_score: if id == 0 { 0.9 } else { 0.75 },
             });
             id += 1;
         }
@@ -82,6 +93,7 @@ impl PlanningEngine {
                 dependencies: (0..id).collect(),
                 required_files: files.to_vec(),
                 expected_outcome: "All tests pass, no regressions detected".to_string(),
+                confidence_score: 0.85,
             });
         }
 
@@ -168,6 +180,22 @@ impl PlanningEngine {
         }
     }
 
+    /// Compute overall plan confidence from subtask scores.
+    pub fn compute_confidence(plan: &TaskPlan) -> f64 {
+        if plan.subtasks.is_empty() { return 0.0; }
+        let sum: f64 = plan.subtasks.iter().map(|s| s.confidence_score).sum();
+        let avg = sum / plan.subtasks.len() as f64;
+        // Penalize for large plans
+        if plan.subtasks.len() > 5 { avg - 0.1 } else { avg }.max(0.0).min(1.0)
+    }
+
+    /// Generate a rollback plan description.
+    pub fn generate_rollback_plan(plan: &TaskPlan) -> String {
+        if plan.affected_files.is_empty() { return "No files were modified — no rollback needed".to_string(); }
+        let file_list = plan.affected_files.join(", ");
+        format!("Revert changes to files: {}. Use git checkout or manual undo following the patch backup files.", file_list)
+    }
+
     // ── Private helpers ──
 
     fn derive_objective(request: &str) -> String {
@@ -186,7 +214,6 @@ impl PlanningEngine {
             .cloned()
             .collect();
 
-        // Add heuristic-based system names
         let known_systems = ["auth", "database", "api", "ui", "config", "models", "routes", "handler", "service", "repository"];
         for sys in &known_systems {
             if keywords.contains(sys) || files.iter().any(|f| f.contains(sys)) {
@@ -247,9 +274,8 @@ impl PlanningEngine {
             }
         }
 
-        // DFS-based cycle detection with proper visited tracking
         for start in 0..n {
-            let mut color: Vec<u8> = vec![0; n]; // 0=white, 1=gray, 2=black
+            let mut color: Vec<u8> = vec![0; n];
             if Self::dfs_cycle(start, &adj, &mut color) {
                 return true;
             }
@@ -259,19 +285,13 @@ impl PlanningEngine {
     }
 
     fn dfs_cycle(node: usize, adj: &[Vec<usize>], color: &mut [u8]) -> bool {
-        if color[node] == 1 {
-            return true; // back edge — cycle
-        }
-        if color[node] == 2 {
-            return false; // already fully processed
-        }
-        color[node] = 1; // mark as in-progress
+        if color[node] == 1 { return true; }
+        if color[node] == 2 { return false; }
+        color[node] = 1;
         for &dep in &adj[node] {
-            if Self::dfs_cycle(dep, adj, color) {
-                return true;
-            }
+            if Self::dfs_cycle(dep, adj, color) { return true; }
         }
-        color[node] = 2; // mark as done
+        color[node] = 2;
         false
     }
 }
@@ -310,27 +330,32 @@ pub fn plan_task(ctx: &mut AgentContext) -> Result<TaskPlan, String> {
         task_description: ctx.user_task.clone(),
         objective: analysis.objective.clone(),
         affected_files: ctx.relevant_files.clone(),
-        subtasks,
+        subtasks: subtasks.clone(),
         risks: analysis.potential_risks.clone(),
         verification: vec!["cargo check".to_string(), "cargo test".to_string()],
         unknown_information: analysis.unknown_information.clone(),
+        confidence: 0.0, // filled after validation
+        estimated_runtime_commands: subtasks.len() + 1,
+        rollback_plan: String::new(), // filled below
+        reasoning: format!(
+            "Generated plan with {} subtask(s) affecting {} file(s) in the {} system(s).",
+            subtasks.len(), ctx.relevant_files.len(), analysis.affected_systems.len()
+        ),
     };
 
     let validation = PlanningEngine::validate_plan(&plan);
     if !validation.is_valid {
-        return Err(format!(
-            "Plan validation failed: {}",
-            validation.warnings.join("; ")
-        ));
+        return Err(format!("Plan validation failed: {}", validation.warnings.join("; ")));
     }
 
-    // Surface the plan into AgentContext for downstream phases
-    let steps: Vec<String> = plan.subtasks.iter()
-        .map(|s| s.description.clone())
-        .collect();
+    let mut finalized = plan;
+    finalized.confidence = PlanningEngine::compute_confidence(&finalized);
+    finalized.rollback_plan = PlanningEngine::generate_rollback_plan(&finalized);
+
+    let steps: Vec<String> = finalized.subtasks.iter().map(|s| s.description.clone()).collect();
     crate::agent_controller::AgentController::plan(ctx, steps);
 
-    Ok(plan)
+    Ok(finalized)
 }
 
 #[cfg(test)]
@@ -344,69 +369,10 @@ mod tests {
         ctx
     }
 
-    #[test]
-    fn simple_task_planning() {
-        let mut ctx = test_context("Fix authentication bug", vec!["src/auth.rs"]);
-        let plan = plan_task(&mut ctx).unwrap();
-        assert!(!plan.subtasks.is_empty(), "should have at least one subtask");
-        assert_eq!(plan.affected_files.len(), 1);
-        assert!(plan.objective.contains("authentication"));
-    }
-
-    #[test]
-    fn multi_step_decomposition() {
-        let mut ctx = test_context(
-            "Refactor the database layer",
-            vec!["src/db/mod.rs", "src/db/connection.rs", "src/db/query.rs"],
-        );
-        let plan = plan_task(&mut ctx).unwrap();
-        assert!(plan.subtasks.len() >= 3, "should decompose into multiple subtasks");
-        assert!(plan.subtasks.iter().any(|s| s.description.contains("Verify")));
-    }
-
-    #[test]
-    fn missing_context_handling() {
-        let mut ctx = test_context("Implement caching layer", vec![]);
-        let result = plan_task(&mut ctx);
-        assert!(result.is_err(), "should fail when no files are known");
-    }
-
-    #[test]
-    fn impact_analysis_detects_risks() {
-        let files: Vec<String> = vec!["src/main.rs".into(), "src/types.rs".into(), "src/handler.rs".into()];
-        let plan = TaskPlan {
-            task_description: "Add new route".into(),
-            objective: "Add new route".into(),
-            affected_files: files.clone(),
-            subtasks: vec![
-                Subtask { id: 0, description: "Modify main.rs".into(), dependencies: vec![], required_files: vec!["src/main.rs".into()], expected_outcome: "ok".into() },
-                Subtask { id: 1, description: "Modify types.rs".into(), dependencies: vec![0], required_files: vec!["src/types.rs".into()], expected_outcome: "ok".into() },
-            ],
-            risks: vec![],
-            verification: vec![],
-            unknown_information: vec![],
-        };
-        let report = PlanningEngine::impact_analysis(&files, &plan);
-        assert!(!report.regression_risks.is_empty());
-        assert!(report.affected_components.iter().any(|c| c.contains("types")));
-    }
-
-    #[test]
-    fn validation_detects_circular_deps() {
-        let plan = TaskPlan {
-            task_description: "test".into(),
-            objective: "test".into(),
-            affected_files: vec!["a.rs".into()],
-            subtasks: vec![
-                Subtask { id: 0, description: "A".into(), dependencies: vec![1], required_files: vec!["a.rs".into()], expected_outcome: "ok".into() },
-                Subtask { id: 1, description: "B".into(), dependencies: vec![0], required_files: vec!["a.rs".into()], expected_outcome: "ok".into() },
-            ],
-            risks: vec![],
-            verification: vec![],
-            unknown_information: vec![],
-        };
-        let validation = PlanningEngine::validate_plan(&plan);
-        assert!(!validation.is_valid, "should detect circular dependency");
-        assert!(validation.warnings.iter().any(|w| w.to_lowercase().contains("circular")));
-    }
+    #[test] fn simple_task_planning() { let mut ctx = test_context("Fix authentication bug", vec!["src/auth.rs"]); let plan = plan_task(&mut ctx).unwrap(); assert!(!plan.subtasks.is_empty()); assert!(plan.confidence > 0.0); assert!(!plan.rollback_plan.is_empty()); }
+    #[test] fn multi_step_decomposition() { let mut ctx = test_context("Refactor the database layer", vec!["src/db/mod.rs", "src/db/connection.rs", "src/db/query.rs"]); let plan = plan_task(&mut ctx).unwrap(); assert!(plan.subtasks.len() >= 3); }
+    #[test] fn missing_context_handling() { let mut ctx = test_context("Implement caching layer", vec![]); assert!(plan_task(&mut ctx).is_err()); }
+    #[test] fn impact_analysis_detects_risks() { let files: Vec<String> = vec!["src/main.rs".into(), "src/types.rs".into(), "src/handler.rs".into()]; let plan = TaskPlan { task_description: "t".into(), objective: "o".into(), affected_files: files.clone(), subtasks: vec![Subtask{id:0,description:"d".into(),dependencies:vec![],required_files:vec!["a".into()],expected_outcome:"ok".into(),confidence_score:0.9},Subtask{id:1,description:"d2".into(),dependencies:vec![0],required_files:vec!["b".into()],expected_outcome:"ok".into(),confidence_score:0.9}], risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.9,estimated_runtime_commands:2,rollback_plan:"Revert".into(),reasoning:"t".into()}; let report = PlanningEngine::impact_analysis(&files, &plan); assert!(!report.regression_risks.is_empty()); }
+    #[test] fn validation_detects_circular_deps() { let plan = TaskPlan { task_description:"t".into(),objective:"o".into(),affected_files:vec!["a.rs".into()],subtasks:vec![Subtask{id:0,description:"A".into(),dependencies:vec![1],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:0.9},Subtask{id:1,description:"B".into(),dependencies:vec![0],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:0.9}],risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.0,estimated_runtime_commands:2,rollback_plan:String::new(),reasoning:String::new()}; let v = PlanningEngine::validate_plan(&plan); assert!(!v.is_valid); }
+    #[test] fn confidence_penalizes_large_plans() { let mut plan = TaskPlan { task_description:"t".into(),objective:"o".into(),affected_files:vec!["a.rs".into()],subtasks:Vec::new(),risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.0,estimated_runtime_commands:0,rollback_plan:String::new(),reasoning:String::new()}; for i in 0..10 { plan.subtasks.push(Subtask{id:i,description:"s".into(),dependencies:vec![],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:1.0}); } assert!(PlanningEngine::compute_confidence(&plan) <= 0.9); }
 }

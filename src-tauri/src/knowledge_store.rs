@@ -444,7 +444,7 @@ mod tests {
 
     #[test] fn record_plan_and_find() {
         let conn = temp_conn();
-        let plan = TaskPlan { task_description: "Fix auth".into(), objective: "f".into(), affected_files: vec!["a.rs".into()], subtasks: vec![], risks: vec![], verification: vec![], unknown_information: vec![] };
+        let plan = TaskPlan { task_description: "Fix auth".into(), objective: "f".into(), affected_files: vec!["a.rs".into()], subtasks: vec![], risks: vec![], verification: vec![], unknown_information: vec![], confidence: 0.0, estimated_runtime_commands: 0, rollback_plan: String::new(), reasoning: String::new() };
         KnowledgeStore::record_plan(&conn, &plan).unwrap();
         let r = KnowledgeStore::find_similar_plans(&conn, "auth", 5).unwrap();
         assert!(!r.is_empty());
