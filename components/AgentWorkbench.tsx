@@ -83,11 +83,15 @@ export default function AgentWorkbench() {
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [knowledgeResults, setKnowledgeResults] = useState<string[]>([]);
   const unlistenRef = useRef<(() => void) | null>(null);
+  const lastPhaseRef = useRef<string>("");
 
-  // Listen for real backend state changes
+  // Listen for real backend state changes (deduplicated — only fires on phase change)
   useEffect(() => {
     listenOrchestratorState((payload: OrchestratorStatePayload) => {
       const uiPhase = backendPhaseToUI[payload.phase_name] || "idle";
+      if (lastPhaseRef.current === uiPhase) return;
+      lastPhaseRef.current = uiPhase;
+
       setPhase(uiPhase);
       setRecoveryCount(payload.recovery_attempts);
 

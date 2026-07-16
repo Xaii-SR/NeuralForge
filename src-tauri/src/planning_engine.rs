@@ -100,6 +100,76 @@ impl PlanningEngine {
         subtasks
     }
 
+    /// Graph-aware decomposition: uses dependency graph for smarter task ordering.
+    pub fn decompose_task_with_graph(analysis: &TaskAnalysis, files: &[String], dep_graph: &HashMap<String, Vec<String>>) -> Vec<Subtask> {
+        if dep_graph.is_empty() || files.len() <= 1 {
+            return Self::decompose_task(analysis, files);
+        }
+
+        // Topological sort: files with no incoming dependencies first
+        let mut ordered: Vec<String> = Vec::new();
+        let mut remaining: Vec<String> = files.to_vec();
+
+        while !remaining.is_empty() {
+            let mut next_batch: Vec<String> = Vec::new();
+            let mut pending: Vec<String> = Vec::new();
+
+            for file in remaining {
+                let has_unresolved_dep = dep_graph.get(&file).map_or(false, |deps| {
+                    deps.iter().any(|d| !ordered.contains(d) && files.contains(d))
+                });
+                if has_unresolved_dep {
+                    pending.push(file);
+                } else {
+                    next_batch.push(file);
+                }
+            }
+
+            if next_batch.is_empty() {
+                // Cycle or unresolvable dependency — fall back to sequential
+                next_batch.append(&mut pending);
+            }
+
+            ordered.extend(next_batch);
+            remaining = pending;
+        }
+
+        let mut subtasks = Vec::new();
+        for (id, file) in ordered.iter().enumerate() {
+            let deps: Vec<usize> = dep_graph.get(file)
+                .map(|deps| {
+                    deps.iter()
+                        .filter_map(|d| ordered.iter().position(|f| f == d))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let has_deps = !deps.is_empty();
+            subtasks.push(Subtask {
+                id,
+                description: format!("Modify `{}` to implement the change", file),
+                dependencies: deps,
+                required_files: vec![file.clone()],
+                expected_outcome: format!("`{}` is updated and compiles successfully", file),
+                confidence_score: if has_deps { 0.75 } else { 0.9 },
+            });
+        }
+
+        if !subtasks.is_empty() {
+            let vid = subtasks.len();
+            subtasks.push(Subtask {
+                id: vid,
+                description: "Verify all changes compile and pass tests".to_string(),
+                dependencies: (0..subtasks.len()).collect(),
+                required_files: ordered.clone(),
+                expected_outcome: "All tests pass, no regressions detected".to_string(),
+                confidence_score: 0.85,
+            });
+        }
+
+        subtasks
+    }
+
     /// Phase 3: Impact Analysis — identify what could break.
     pub fn impact_analysis(files: &[String], plan: &TaskPlan) -> ImpactReport {
         let mut regression_risks = Vec::new();
@@ -323,8 +393,13 @@ pub struct PlanValidation {
 
 /// High-level entry point: run the full planning pipeline and store results in AgentContext.
 pub fn plan_task(ctx: &mut AgentContext) -> Result<TaskPlan, String> {
+    plan_task_with_graph(ctx, &HashMap::new())
+}
+
+/// Extended planning that consumes a dependency graph for smarter task ordering.
+pub fn plan_task_with_graph(ctx: &mut AgentContext, dep_graph: &HashMap<String, Vec<String>>) -> Result<TaskPlan, String> {
     let analysis = PlanningEngine::analyze_task(ctx, &ctx.user_task);
-    let subtasks = PlanningEngine::decompose_task(&analysis, &ctx.relevant_files);
+    let subtasks = PlanningEngine::decompose_task_with_graph(&analysis, &ctx.relevant_files, dep_graph);
 
     let plan = TaskPlan {
         task_description: ctx.user_task.clone(),
@@ -334,11 +409,11 @@ pub fn plan_task(ctx: &mut AgentContext) -> Result<TaskPlan, String> {
         risks: analysis.potential_risks.clone(),
         verification: vec!["cargo check".to_string(), "cargo test".to_string()],
         unknown_information: analysis.unknown_information.clone(),
-        confidence: 0.0, // filled after validation
+        confidence: 0.0,
         estimated_runtime_commands: subtasks.len() + 1,
-        rollback_plan: String::new(), // filled below
+        rollback_plan: String::new(),
         reasoning: format!(
-            "Generated plan with {} subtask(s) affecting {} file(s) in the {} system(s).",
+            "Generated graph-aware plan with {} subtask(s) affecting {} file(s) in the {} system(s).",
             subtasks.len(), ctx.relevant_files.len(), analysis.affected_systems.len()
         ),
     };

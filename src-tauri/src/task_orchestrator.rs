@@ -1,10 +1,9 @@
 use crate::agent_controller::{AgentContext, AgentController};
-use crate::change_executor::{ChangeGenerator, DiffGenerator};
-use crate::context_retrieval::{self, RankedFile};
+use crate::context_retrieval::{RankedFile, ContextRetrieval};
 use crate::error_analyzer::{ErrorAnalyzer, FailureReport, RetryState};
 use crate::knowledge_store::{KnowledgeEntry, KnowledgeCategory, KnowledgeStore};
-use crate::planning_engine::{self, TaskPlan, Subtask};
-use crate::terminal_executor::{ExecutionRequest, ExecutionResult};
+use crate::planning_engine::{self, TaskPlan};
+use crate::terminal_executor::ExecutionResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -152,6 +151,19 @@ impl TaskOrchestrator {
     pub fn plan(task: &mut OrchestratorTask) -> Result<TaskPlan, String> {
         let ctx = task.agent_context.as_mut().ok_or_else(|| "No agent context".to_string())?;
         let plan = planning_engine::plan_task(ctx)?;
+        task.current_plan = Some(plan.clone());
+        if let Some(last) = task.execution_history.last_mut() { last.success = Some(true); }
+        Self::transition(task, TaskLifecycle::AwaitingApproval);
+        Ok(plan)
+    }
+
+    /// Plan with full semantic graph from database.
+    pub fn plan_with_db(task: &mut OrchestratorTask, conn: &rusqlite::Connection) -> Result<TaskPlan, String> {
+        let ctx = task.agent_context.as_mut().ok_or_else(|| "No agent context".to_string())?;
+        let dep_graph = ContextRetrieval::build_repository_graph(conn)
+            .unwrap_or_default();
+        let plan = planning_engine::plan_task_with_graph(ctx, &dep_graph)
+            .unwrap_or_else(|_| planning_engine::plan_task(ctx).unwrap());
         task.current_plan = Some(plan.clone());
         if let Some(last) = task.execution_history.last_mut() { last.success = Some(true); }
         Self::transition(task, TaskLifecycle::AwaitingApproval);

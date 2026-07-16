@@ -5,6 +5,7 @@ mod change_executor;
 mod context_retrieval;
 mod error_analyzer;
 mod knowledge_store;
+mod multi_agent;
 mod task_orchestrator;
 mod workspace_scanner;
 mod ai;
