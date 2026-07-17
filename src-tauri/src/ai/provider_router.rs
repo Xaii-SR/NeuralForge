@@ -279,6 +279,82 @@ pub fn select_provider_and_model_for_task(
     best.map(|(_, provider, model)| (provider.clone(), model.to_string()))
 }
 
+// ═══════════════════════════════════════════════════════════════
+// FIM (fill-in-middle) capability routing
+// ═══════════════════════════════════════════════════════════════
+
+/// Picks a configured, enabled, non-Ollama provider that explicitly
+/// declares FIM support (`capabilities.fim = true`), if any. Selection
+/// prefers the smallest declared context length as a speed proxy - FIM
+/// completions are the most latency-sensitive request type in the app,
+/// same reasoning as `TaskCapability::Fast` elsewhere in this module.
+/// Returns `None` in the common/default case where no configured provider
+/// advertises FIM (`ProviderCapabilities::default()` sets `fim: false`).
+pub fn select_fim_provider(providers: &[ProviderConfig]) -> Option<ProviderConfig> {
+    providers
+        .iter()
+        .filter(|p| p.enabled && p.provider_type != "ollama" && p.capabilities.fim)
+        .min_by_key(|p| p.capabilities.context_length)
+        .cloned()
+}
+
+/// Capability-gated FIM (fill-in-middle) raw-completion routing - the
+/// single entry point ghost text (`ai::completion`) and inline autocomplete
+/// (`ai::autocomplete`) use for latency-sensitive completions that cannot
+/// be expressed as a chat message list (Ollama's `/api/generate` with
+/// `raw: true`, not `/api/chat`).
+///
+/// Only Ollama has a real, working FIM adapter today
+/// (`providers::ollama::generate_raw`). A configured non-Ollama provider is
+/// only even considered if it explicitly declares `capabilities.fim = true`
+/// via `select_fim_provider`; since no adapter currently implements FIM for
+/// any non-Ollama provider_type, selecting one produces a clear, honest
+/// error - the same pattern already used for Anthropic/Gemini's
+/// `AdapterKind::Unimplemented` chat routing - rather than silently
+/// dropping the request or sending it somewhere it can't be served. The
+/// common/default case (no provider declares FIM) falls straight through
+/// to the real local Ollama path, with model choice via the existing speed
+/// heuristic in `ai::router` (never a hardcoded model name).
+pub async fn complete_fim(
+    providers: &[ProviderConfig],
+    health: &HealthRegistry,
+    prompt: &str,
+    num_predict: u32,
+    temperature: f32,
+) -> AppResult<String> {
+    if let Some(config) = select_fim_provider(providers) {
+        return Err(AppError::Provider(format!(
+            "{} advertises FIM support but no FIM adapter exists yet for provider_type '{}'",
+            config.name, config.provider_type
+        )));
+    }
+
+    let models = ollama::list_models().await?;
+    let prefs = crate::ai::router::Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
+    let model = crate::ai::router::score_models(&models, &prefs)
+        .into_iter()
+        .next()
+        .map(|(_, name, _)| name)
+        .ok_or_else(|| AppError::Provider("no local Ollama models available".to_string()))?;
+
+    let config = provider_registry::default_ollama_provider();
+    let health_key = health_key_for(&config);
+    if !health.is_healthy(&health_key) {
+        return Err(AppError::Provider(format!(
+            "{} is in cooldown after repeated failures - try again shortly",
+            config.name
+        )));
+    }
+
+    let start = Instant::now();
+    let result = ollama::generate_raw(&model, prompt, num_predict, temperature).await;
+    match &result {
+        Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
+        Err(_) => health.record_failure(&health_key),
+    }
+    result
+}
+
 /// Single-shot, non-streaming chat generation for callers that just need a
 /// complete response string (e.g. agent_v2's planner/coder/reviewer nodes),
 /// with the model chosen by task capability rather than hardcoded.
@@ -501,5 +577,95 @@ mod tests {
 
         assert!(!response.trim().is_empty());
         assert_eq!(response, streamed, "accumulated response should match what was streamed token-by-token");
+    }
+
+    // ── FIM capability routing ──────────────────────────────────────────
+
+    fn fim_provider(id: &str, fim: bool, context_length: u64) -> ProviderConfig {
+        ProviderConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            provider_type: "openai_compatible".to_string(),
+            base_url: "http://localhost:1234/v1".to_string(),
+            api_key: String::new(),
+            models: vec!["some-model".to_string()],
+            enabled: true,
+            is_default: false,
+            capabilities: ProviderCapabilities { fim, context_length, ..ProviderCapabilities::default() },
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn select_fim_provider_only_considers_providers_that_advertise_fim() {
+        let providers = vec![
+            fim_provider("no-fim", false, 32_000),
+            fim_provider("has-fim", true, 32_000),
+        ];
+        let selected = select_fim_provider(&providers).expect("expected the fim-capable provider to be selected");
+        assert_eq!(selected.id, "has-fim");
+    }
+
+    #[test]
+    fn select_fim_provider_returns_none_when_no_provider_advertises_fim() {
+        let providers = vec![fim_provider("no-fim-a", false, 8_000), fim_provider("no-fim-b", false, 200_000)];
+        assert!(select_fim_provider(&providers).is_none(), "providers without FIM capability must not be selected");
+    }
+
+    #[test]
+    fn select_fim_provider_prefers_smallest_context_among_fim_capable_providers() {
+        let providers = vec![fim_provider("big", true, 200_000), fim_provider("small", true, 8_000)];
+        let selected = select_fim_provider(&providers).unwrap();
+        assert_eq!(selected.id, "small", "FIM selection should bias toward the fastest (smallest-context) capable provider");
+    }
+
+    #[test]
+    fn select_fim_provider_ignores_ollama_entries() {
+        // The built-in Ollama config now also has fim: true, but real
+        // Ollama execution always goes through complete_fim's explicit
+        // fallback path, never through select_fim_provider - this proves
+        // that separation holds even if an "ollama" entry is present in
+        // the loaded provider list (e.g. read back from the settings table).
+        let providers = vec![provider_registry::default_ollama_provider()];
+        assert!(select_fim_provider(&providers).is_none());
+    }
+
+    /// Rule: a provider that advertises FIM support but has no working FIM
+    /// adapter must be rejected gracefully (a clear error, no panic, no
+    /// silent mis-dispatch) rather than either crashing or falling through
+    /// to Ollama unannounced. This never makes a network call, so it needs
+    /// no live Ollama instance and is not `#[ignore]`d.
+    #[tokio::test]
+    async fn complete_fim_rejects_provider_that_advertises_fim_with_no_working_adapter() {
+        let health = HealthRegistry::default();
+        let providers = vec![fim_provider("cloud-fim", true, 32_000)];
+
+        let result = complete_fim(&providers, &health, "<|fim_prefix|>x<|fim_suffix|>y<|fim_middle|>", 16, 0.1).await;
+
+        let err = result.expect_err("a FIM-capable provider with no adapter must error, not silently succeed");
+        let msg = err.to_string();
+        assert!(msg.contains("cloud-fim"), "error should name the rejected provider: {msg}");
+        assert!(msg.contains("no FIM adapter"), "error should explain why it was rejected: {msg}");
+    }
+
+    /// Ollama FIM flow: when no configured provider advertises FIM (the
+    /// common/default case), complete_fim must fall through to a real,
+    /// working local Ollama completion - proving the standard flow still
+    /// functions end to end through the new capability-gated entry point.
+    #[tokio::test]
+    #[ignore = "requires a running local Ollama instance"]
+    async fn complete_fim_falls_back_to_real_ollama_when_no_provider_advertises_fim() {
+        let health = HealthRegistry::default();
+        let response = complete_fim(
+            &[], // no configured providers at all - forces the Ollama fallback
+            &health,
+            "<|fim_prefix|>fn add(a: i32, b: i32) -> i32 {\n    <|fim_suffix|>\n}<|fim_middle|>",
+            32,
+            0.1,
+        )
+        .await
+        .expect("should complete via the real local Ollama FIM path");
+
+        assert!(!response.trim().is_empty(), "expected a non-empty real FIM completion");
     }
 }

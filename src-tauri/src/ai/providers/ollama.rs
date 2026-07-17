@@ -308,8 +308,9 @@ mod tests {
     }
 
     /// Real round trip for the FIM/raw completion path used by ghost text
-    /// (`ai::completion::call_ollama_fim`), now routed through this adapter
-    /// instead of a separate hand-rolled HTTP client.
+    /// and autocomplete, reached via `ai::provider_router::complete_fim`
+    /// rather than a separate hand-rolled HTTP client in either feature
+    /// module.
     #[tokio::test]
     #[ignore = "requires a running local Ollama instance"]
     async fn generate_raw_produces_real_fim_completion() {

@@ -9,12 +9,110 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-fb61134 — "Migrate agent_v2 to unified AI provider router"
+cfa5a00 — "Migrate inline edit and ghost text to unified AI provider router"
 
 Current branch:
 
 master
 
+## Autocomplete + Ghost Text FIM Consolidation (Phase 4)
+
+**Mission:** eliminate the last confirmed AI-provider bypass
+(`ai::autocomplete.rs`) and retroactively bring `ai::completion.rs`'s FIM
+path (built in Phase 3, before this stricter rule existed) fully under
+`provider_router`'s authority for selection/resolution/health/telemetry,
+via a new capability-gated FIM abstraction.
+
+**What changed:**
+- `provider_registry::ProviderCapabilities` gained a `fim: bool` field
+  (default `false`). `default_ollama_provider()` now sets `fim: true` —
+  Ollama is the only provider with a real, working FIM adapter today.
+- `provider_router` gained `select_fim_provider(providers)` (picks a
+  configured, enabled, non-Ollama provider that explicitly declares
+  `capabilities.fim = true`, smallest-context-first as a speed proxy) and
+  `complete_fim(providers, health, prompt, num_predict, temperature)` — the
+  single capability-gated entry point for raw/FIM completion. A
+  FIM-capable non-Ollama provider is honored by selection but currently
+  rejected with a clear, named error at execution time (no adapter
+  implements FIM for any non-Ollama `provider_type` yet — same honest
+  pattern as Anthropic/Gemini's `Unimplemented` chat routing, not a silent
+  drop or mis-dispatch). The common/default case (nothing advertises FIM)
+  falls straight through to real local Ollama via `providers::ollama::
+  generate_raw`, model chosen by the existing `ai::router::score_models`
+  speed heuristic — never hardcoded.
+- `ai::autocomplete::fetch_ghost_suggestion` rewritten: no more
+  `reqwest::Client`, no hardcoded `http://localhost:11434/api/generate`, no
+  hardcoded `"qwen2.5-coder:1.5b"`. Now resolves the live provider list and
+  calls `provider_router::complete_fim`. Gained `health`/`db` Tauri-managed
+  state params (invisible to the frontend `invoke()` call — same pattern as
+  every prior phase's migrations); FIM prompt formatting, fence-stripping,
+  and "empty string on failure" behavior all preserved exactly.
+- `ai::completion::call_ollama_fim` (and its callers `async_stream_completion`/
+  `request_async_completion`) now route through `provider_router::complete_fim`
+  instead of calling `ollama::list_models`/`ollama::generate_raw` directly
+  (which is what Phase 3 had left it doing) — closes the retroactive gap
+  noted in this phase's audit.
+- Frontend: **untouched**. Confirmed during audit that `request_async_completion`
+  has no frontend caller at all today (the live, user-visible ghost text
+  path is `fetch_ghost_suggestion` via `hooks/useGhostText.ts`'s `suggestion`
+  state, wired into Monaco's `registerInlineCompletionsProvider` in
+  `Editor.tsx`) — its debounce/cancellation/staleness behavior is exactly
+  as before.
+
+**Verified this session:** `cargo check`/`cargo clippy --lib` clean.
+`cargo test`: **296 passed, 0 failed, 13 ignored** (5 new tests: 4 sync
+`select_fim_provider`/rejection-path tests + 1 new live-only test).
+`npm run build`/`npx tsc --noEmit` clean (zero frontend files touched).
+Two live integration tests run against this machine's actual running
+Ollama instance, proving the exact migrated paths work, not just compile:
+`provider_router::tests::complete_fim_falls_back_to_real_ollama_when_no_provider_advertises_fim`
+and the Phase 3 `generate_raw_produces_real_fim_completion` test (still
+passing, now reached via `complete_fim` rather than a direct call).
+
+**Verification grep note:** the phase's literal instruction
+(`grep -R "ollama::" src-tauri/src/ai/` etc. expecting 0 matches) is
+unsatisfiable as written — those greps scan the whole `ai/` directory,
+which necessarily includes `provider_router.rs` and `providers/ollama.rs`
+themselves, and per this same phase's own ownership rule
+("`provider_router` remains the only authority... Adapters only execute
+requests"), the router *must* call the adapter. Ran the checks scoped to
+what was actually meant — `autocomplete.rs` and `completion.rs` — where
+all four (`reqwest`, `generate_raw`, `ollama::`, `localhost:11434`)
+correctly return zero matches. Also ran the literal whole-directory
+versions for the record; all hits are pre-existing, legitimate adapter/
+router internals or unrelated files (`docs.rs`/`web.rs`'s own
+non-AI-generation `reqwest` usage), none newly introduced.
+
+**Step 3 (OpenAI-compatible "foundation") was found already complete
+during audit** and intentionally not re-scaffolded: `OpenAiCompatibleProvider`
+(real `health_check`/`list_models`/`chat_stream`, SSE-parsing, tested) has
+existed since an earlier session, is already dispatched by
+`stream_cloud_chat`/`AdapterKind::OpenAiCompatible`, and is already
+creatable end-to-end via `provider_registry::add_provider_config` with
+`provider_type: "openai_compatible"` — `ProviderManager.tsx` already
+defaults new providers to it. No FIM support was added for it this phase
+(would require a new adapter method in `providers/openai_compatible.rs`,
+which was outside this phase's file scope) — see "Still open" below.
+
+**Still open (not addressed this session):**
+- No non-Ollama provider has a working FIM adapter. `complete_fim` will
+  correctly and honestly reject one that claims `fim: true` today (nothing
+  sets that flag except `default_ollama_provider()`, so this is inert
+  until either a user or a future phase adds one) — implementing real
+  OpenAI-compatible-style FIM (legacy `/v1/completions`, where supported)
+  is a real future task, out of this phase's file scope
+  (`providers/openai_compatible.rs` wasn't in it).
+- `lib/providers.ts`'s `ProviderCapabilities` TypeScript interface doesn't
+  yet include the new `fim` field — harmless (extra JSON field is silently
+  ignored by existing untyped consumption), but a type-accuracy gap for
+  whenever the frontend needs to read it. Frontend was out of this phase's
+  scope.
+- Everything previously flagged as out of scope in Phase 3
+  (`docs.rs`/`web.rs`'s unrelated `reqwest` usage, `bootstrap/environment.rs`'s
+  boot-time Ollama ping, `agent_v2`'s hardcoded workspace root and
+  advisory-only reviewer, the fully-inert `task_orchestrator`/
+  `AgentWorkbench.tsx`/`multi_agent.rs` stack) remains unaddressed and was
+  explicitly out of scope again this phase.
 ## Inline Edit / Ghost Text Provider Migration (Phase 3)
 
 **Mission:** the agent architecture audit flagged `ai::inline` (Ctrl+K

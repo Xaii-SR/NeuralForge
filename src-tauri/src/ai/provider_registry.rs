@@ -60,6 +60,13 @@ pub struct ProviderCapabilities {
     pub tool_calling: bool,
     pub function_calling: bool,
     pub embeddings: bool,
+    /// Raw/fill-in-middle completion support (Ollama's `/api/generate`
+    /// with `raw: true`, or an equivalent legacy completion endpoint) -
+    /// distinct from `chat`/`streaming`, which describe `/v1/chat/completions`-
+    /// shaped requests. Defaults to false: only providers with a real,
+    /// working FIM adapter should ever declare this. See
+    /// `ai::provider_router::complete_fim`.
+    pub fim: bool,
     pub context_length: u64,
 }
 
@@ -73,6 +80,7 @@ impl Default for ProviderCapabilities {
             tool_calling: false,
             function_calling: false,
             embeddings: false,
+            fim: false,
             context_length: 128000,
         }
     }
@@ -118,7 +126,10 @@ pub fn default_ollama_provider() -> ProviderConfig {
         models: Vec::new(),
         enabled: true,
         is_default: true,
-        capabilities: ProviderCapabilities::default(),
+        // Ollama is the only provider with a real, working FIM adapter
+        // today (providers::ollama::generate_raw) - see
+        // ai::provider_router::complete_fim.
+        capabilities: ProviderCapabilities { fim: true, ..ProviderCapabilities::default() },
         created_at: 0,
     }
 }

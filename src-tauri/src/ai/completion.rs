@@ -1,12 +1,14 @@
-use crate::ai::providers::ollama;
-use crate::ai::router::{score_models, Preferences};
+use crate::ai::health::HealthRegistry;
+use crate::ai::provider_registry::{self, ProviderConfig};
+use crate::ai::provider_router;
+use crate::database::DbState;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use specta::Type;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 
 const DEBOUNCE_MS: u64 = 75;
 static LAST_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
@@ -131,7 +133,17 @@ pub async fn stream_inline_diff(
 
 // ── Core Prediction Pipeline ──────────────────────────────────────────────
 
-pub async fn async_stream_completion(app: AppHandle, request_id: String, file_path: String, content: String, cursor_line: usize, cursor_column: usize, _template: FimTemplate) {
+pub async fn async_stream_completion(
+    app: AppHandle,
+    health: &HealthRegistry,
+    providers: &[ProviderConfig],
+    request_id: String,
+    file_path: String,
+    content: String,
+    cursor_line: usize,
+    cursor_column: usize,
+    _template: FimTemplate,
+) {
     if should_debounce() { return; }
     let ctx = extract_prediction_window(file_path.clone(), content, cursor_line, cursor_column);
     let fp = ctx.file_path.clone();
@@ -146,10 +158,10 @@ pub async fn async_stream_completion(app: AppHandle, request_id: String, file_pa
         return;
     }
 
-    // Build FIM prompt and call Ollama
+    // Build FIM prompt and route through provider_router
     let fim_prompt = format!("<|fim_prefix|>{}<|fim_suffix|>{}<|fim_middle|>", prefix, suffix);
 
-    match call_ollama_fim(&fim_prompt).await {
+    match call_ollama_fim(health, providers, &fim_prompt).await {
         Ok(completion) if !completion.is_empty() => {
             for ch in completion.chars() {
                 let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: ch.to_string(), done: false, request_id: request_id.clone() });
@@ -168,23 +180,13 @@ pub async fn async_stream_completion(app: AppHandle, request_id: String, file_pa
     }
 }
 
-/// Calls Ollama's `/api/generate` (FIM/raw completion) via the shared
-/// `providers::ollama` adapter - no separate HTTP client. Model is picked
-/// from real installed models via the same speed-biased heuristic
-/// `provider_router::generate_for_task` uses for latency-sensitive tasks
-/// (`ai::router::score_models` with a "speed" goal), never hardcoded: ghost
-/// text fires on nearly every keystroke, so a small/fast model matters here
-/// more than anywhere else in the app.
-async fn call_ollama_fim(fim_prompt: &str) -> Result<String, String> {
-    let models = ollama::list_models().await.map_err(|e| e.to_string())?;
-    let prefs = Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
-    let model = score_models(&models, &prefs)
-        .into_iter()
-        .next()
-        .map(|(_, name, _)| name)
-        .ok_or_else(|| "no local Ollama models available".to_string())?;
-
-    ollama::generate_raw(&model, fim_prompt, 64, 0.1).await.map_err(|e| e.to_string())
+/// Routes a FIM prompt through `provider_router::complete_fim` - the single
+/// capability-gated entry point for raw completion. No HTTP client, no
+/// hardcoded URL/model here: provider_router owns selection, resolution,
+/// health, and telemetry; this function is just the ghost-text-specific
+/// caller.
+async fn call_ollama_fim(health: &HealthRegistry, providers: &[ProviderConfig], fim_prompt: &str) -> Result<String, String> {
+    provider_router::complete_fim(providers, health, fim_prompt, 64, 0.1).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -199,9 +201,25 @@ pub fn get_prediction_with_fim(file_path: String, content: String, cursor_line: 
 #[tauri::command]
 pub fn store_prediction_result(file_path: String, suffix: String, completion: String) { cache_prediction(&file_path, &suffix, &completion); }
 #[tauri::command]
-pub async fn request_async_completion(app: AppHandle, request_id: String, file_path: String, content: String, cursor_line: usize, cursor_column: usize, template: String) {
+pub async fn request_async_completion(
+    app: AppHandle,
+    health: State<'_, HealthRegistry>,
+    db: State<'_, DbState>,
+    request_id: String,
+    file_path: String,
+    content: String,
+    cursor_line: usize,
+    cursor_column: usize,
+    template: String,
+) -> Result<(), String> {
     let t = match template.to_lowercase().as_str() { "codellama" => FimTemplate::CodeLlama, _ => FimTemplate::StarCoder };
-    async_stream_completion(app, request_id, file_path, content, cursor_line, cursor_column, t).await;
+    let providers = {
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
+        // guard dropped here, before the .await below
+    };
+    async_stream_completion(app, &health, &providers, request_id, file_path, content, cursor_line, cursor_column, t).await;
+    Ok(())
 }
 
 #[cfg(test)]
