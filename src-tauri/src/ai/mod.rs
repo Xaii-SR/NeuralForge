@@ -9,6 +9,7 @@ pub mod health;
 pub mod inline;
 pub mod web;
 pub mod model_manager;
+pub mod provider_registry;
 pub mod providers;
 pub mod router;
 
@@ -16,7 +17,7 @@ use crate::core::errors::{AppError, AppResult};
 use crate::core::state::AppState;
 use crate::database::DbState;
 use health::{HealthRegistry, ProviderHealthInfo};
-use providers::{ollama, ProviderMetadata};
+use providers::{ollama, openai_compatible, ProviderMetadata};
 use router::{AutoSelection, CostEstimate, Preferences};
 use tauri::{AppHandle, Emitter, State};
 
@@ -145,6 +146,24 @@ pub fn clear_response_cache(db: State<DbState>) -> AppResult<usize> {
         .as_ref()
         .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
     cache::clear_cache(conn)
+}
+
+#[tauri::command]
+pub async fn test_openai_compatible_connection(
+    base_url: String,
+    api_key: String,
+) -> Result<bool, String> {
+    let provider = openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key);
+    Ok(provider.health_check().await)
+}
+
+#[tauri::command]
+pub async fn list_openai_compatible_models(
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<openai_compatible::OpenAiModel>, String> {
+    let provider = openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key);
+    provider.list_models().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

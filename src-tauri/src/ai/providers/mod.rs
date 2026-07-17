@@ -1,4 +1,5 @@
 pub mod ollama;
+pub mod openai_compatible;
 
 use serde::Serialize;
 use specta::Type;
