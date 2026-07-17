@@ -27,18 +27,30 @@
 //! for the full rationale and the two execution authorities' current
 //! capabilities.
 //!
-//! This module intentionally does NOT yet:
-//! - unify `agent::status` / `agent_v2::AgentState` / `task_orchestrator::
-//!   TaskLifecycle` into one lifecycle model (see `lifecycle.rs`'s doc
-//!   comment - that unification is explicitly out of scope this phase)
+//! This module owns an advisory lifecycle view
+//! (`lifecycle::AgentLifecycleState`, driven by the pure `reducer::reduce`
+//! function) for cross-backend observability. This is explicitly NOT the
+//! "unify agent::status / agent_v2::AgentState / task_orchestrator::
+//! TaskLifecycle into one authoritative lifecycle model" migration flagged
+//! in the Phase 6 audit as future work - that would mean AgentCore
+//! *replacing* those systems' state ownership, which it does not do. Each
+//! backend continues to own and persist its own real state exactly as
+//! before; see `lifecycle::AgentLifecycleState`'s doc comment for the
+//! precise distinction.
+//!
+//! This module still does NOT:
 //! - get wired into `lib.rs`'s Tauri command registration (see
 //!   `commands.rs`'s doc comment)
 //! - change any existing `agent::*`/`agent_v2::*` public function
 //!   signature or behavior
+//! - give the reducer/lifecycle state any I/O, async, or DB access (see
+//!   `reducer.rs`'s doc comment)
 
 pub mod commands;
 pub mod lifecycle;
 pub mod orchestrator;
+pub mod reducer;
+pub mod types;
 
 use lifecycle::ExecutionBackend;
 use std::collections::HashMap;

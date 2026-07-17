@@ -41,6 +41,30 @@ impl ExecutionBackend {
     }
 }
 
+/// An advisory, coordination-layer view of a task's progress - NOT the
+/// source of truth. The real state lives in `agent::status` (DB-backed
+/// string constants) for the Governed backend and `agent_v2::AgentState`
+/// for the V2 backend; both continue to own persistence and drive their
+/// own execution exactly as before. This enum exists only so AgentCore can
+/// answer "roughly where is this task" for cross-backend
+/// observability/telemetry without querying two differently-shaped
+/// systems. If this ever drifts from what a backend actually did, the
+/// backend is right and this is stale - callers needing an authoritative
+/// answer must go to `agent::get_task`/the `agent-state-changed` event,
+/// not this enum.
+///
+/// Intentionally covers only the states reachable by the transitions this
+/// phase implements (see `reducer.rs`) - not a full mirror of either
+/// backend's real state machine. Extend deliberately, not speculatively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentLifecycleState {
+    Created,
+    Planning,
+    AwaitingApproval,
+    Approved,
+    Failed,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
