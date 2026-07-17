@@ -1,9 +1,7 @@
 pub mod context;
-pub mod gateway;
 pub mod matcher;
 pub mod registry;
 pub mod reliability;
-pub mod router;
 
 use crate::core::errors::AppResult;
 use crate::database::{with_conn, DbState};

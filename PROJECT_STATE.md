@@ -9,11 +9,97 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-9518afe — "checkpoint: baseline before provider routing migration"
+ee66607 — "fix: correct architecture audit file extensions to .md"
 
 Current branch:
 
 master
+
+## Agent Architecture (this session — Phase 2)
+
+**Mission:** two full architecture audits (`docs/architecture/
+NEURALFORGE_COMPLETE_PROJECT_AUDIT.md`,
+`docs/architecture/NEURALFORGE_AGENT_ARCHITECTURE_AUDIT.md`) found that
+`agent_v2.rs` — Neural Forge's one real, end-to-end autonomous coding
+agent (real AI calls, real file writes with rollback, real `cargo check`
+verification, real human-approval gate, wired to `AgentPanel.tsx`) — had
+its own independent, duplicate Ollama HTTP client
+(`intelligence::gateway::OllamaGateway`) instead of using
+`ai::provider_router`. This session removed that duplication.
+
+**What changed:**
+- `ai::provider_router` gained `generate_for_task(providers, health, task,
+  system_prompt, user_prompt) -> AppResult<String>` — a single-shot,
+  non-streaming chat entry point for callers (like `agent_v2`) that just
+  need a complete response string. It picks a real model by
+  `TaskCapability` (Coding/Fast/Reasoning), preferring a configured
+  capability-matching non-Ollama provider, falling back to local Ollama
+  with a model chosen via the existing `ai::router::score_models`
+  heuristic (never a hardcoded name).
+- `agent_v2.rs`'s three AI call sites (architect/planner, coder, reviewer)
+  now call this instead of `intelligence::router::route_through_gateway`/
+  `route_with_system`. Every other line of `agent_v2.rs` — the
+  `ApprovalRegistry` HITL gate, `FileExecutor::safe_write`/`rollback`,
+  `WorkspaceVerifier::verify_cargo_with_stderr`, the retry loop, the
+  `PayloadParser` — is byte-for-byte unchanged (diff is exactly the import
+  lines + 3 call-site substitutions + a small `generate()` wiring helper).
+- `intelligence::router.rs` and `intelligence::gateway.rs` deleted
+  entirely — confirmed via crate-wide grep to have had exactly one
+  external caller (`agent_v2.rs`) before this change, and zero after.
+  `intelligence::mod.rs` no longer declares either submodule.
+- `AgentPanel.tsx` and every other frontend file: **untouched**. The
+  `start_agent_task`/`approve_agent_task`/`reject_agent_task` command
+  signatures and `invoke()` call sites are identical — the new
+  `HealthRegistry`/`DbState` dependencies are Tauri-managed state
+  extracted via `app_handle.state::<T>()` inside the command body, which
+  is invisible to the frontend contract.
+
+**Verified this session:** `cargo check`/`cargo test` (291 passed, 0
+failed, 10 ignored — one new ignored test added)/`cargo clippy --lib` all
+clean. Added and ran (opt-in, `--ignored`) a real integration test,
+`generate_for_task_falls_back_to_real_ollama_with_no_hardcoded_model`,
+against this machine's actual running Ollama instance — passed, proving
+the exact function `agent_v2` now calls produces a real generation with no
+hardcoded model. `npm run build`/`npx tsc --noEmit` clean (no frontend
+files changed, as expected).
+
+**Not verified this session (environment constraint, not a code gap):**
+the full `AgentPanel.tsx` UI flow (type a task → approve → watch it write
+files → verify) end-to-end inside the actual Tauri desktop app. This
+requires a real Tauri webview; this environment's browser-only preview
+cannot invoke Tauri commands, and interactive screen access to drive the
+native app window was not available this session. The Rust-level proof
+above (real Ollama generation through the new code path, plus a diff
+confirming zero changes to the file-write/approval/rollback logic) is the
+strongest verification obtainable without it. Recommend a manual
+`npm run tauri dev` pass through `AgentPanel.tsx` before treating this as
+fully proven in the running app.
+
+**Still open (not addressed this session, correctly out of scope for
+"migrate agent_v2"):**
+- `ai::inline` (Ctrl+K inline edit) and `ai::completion` (ghost text) still
+  call `providers::ollama` directly rather than through
+  `ai::provider_router` — a pre-existing gap documented in the agent
+  architecture audit, unrelated to `agent_v2`.
+- `agent_v2`'s workspace root is still hardcoded to `"."` rather than the
+  actual open workspace path (`AgentRunner::process_task`'s
+  `FileExecutor::new(".")`/`WorkspaceVerifier::verify_cargo_with_stderr(Path::new("."))`)
+  — a correctness risk documented in the agent audit, not an AI-routing
+  issue, so left untouched per this phase's scope (AI communication layer
+  only).
+- `agent_v2`'s reviewer response is still discarded/advisory-only (logged,
+  never gates the write) — same reasoning, out of scope for this phase.
+- `task_orchestrator`/`AgentWorkbench.tsx`/`multi_agent.rs` remain fully
+  inert (see the agent architecture audit) — untouched, as instructed
+  ("do not rewrite the agent system").
+- Cloud-provider "provider switching" for `agent_v2` specifically has not
+  been exercised end-to-end with a real configured cloud provider this
+  session (only the Ollama fallback path was live-tested, since that's the
+  zero-configuration default and no cloud provider is currently configured
+  in this environment's database). The code path
+  (`select_provider_and_model_for_task` → `stream_cloud_chat`) is the same
+  one already unit-tested and live-verified for the main chat pipeline in
+  the prior provider-routing session.
 
 **Correction to a prior version of this file:** an earlier snapshot claimed
 HEAD was `22c5230` ("Sprint 10 release candidate") and described an

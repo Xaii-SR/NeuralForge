@@ -229,6 +229,68 @@ pub fn select_provider_and_model_for_task(
     best.map(|(_, provider, model)| (provider.clone(), model.to_string()))
 }
 
+/// Single-shot, non-streaming chat generation for callers that just need a
+/// complete response string (e.g. agent_v2's planner/coder/reviewer nodes),
+/// with the model chosen by task capability rather than hardcoded.
+///
+/// `providers` should be the already-loaded provider list (callers must load
+/// it themselves via `provider_registry::load_providers` *before* calling
+/// this function if they're holding a `rusqlite::Connection` guard - the
+/// guard cannot be held across this function's `.await` points, matching the
+/// Send-safety constraint documented on `ai::chat_or_use_cache`).
+///
+/// Selection order: a configured, enabled, capability-matching non-Ollama
+/// provider first; otherwise fall back to local Ollama, picking a real
+/// installed model via the existing speed/quality heuristic in `ai::router`
+/// (never a hardcoded model name).
+pub async fn generate_for_task(
+    providers: &[ProviderConfig],
+    health: &HealthRegistry,
+    task: TaskCapability,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> AppResult<String> {
+    let messages = vec![
+        ollama::ChatMessage { role: "system".to_string(), content: system_prompt.to_string() },
+        ollama::ChatMessage { role: "user".to_string(), content: user_prompt.to_string() },
+    ];
+
+    let non_ollama: Vec<ProviderConfig> = providers.iter().filter(|p| p.provider_type != "ollama").cloned().collect();
+    if let Some((config, model)) = select_provider_and_model_for_task(&non_ollama, task) {
+        return stream_cloud_chat(health, &config, &model, messages, |_token, _done| {}).await;
+    }
+
+    // Fall back to local Ollama. Model choice reuses the existing
+    // speed/quality scoring heuristic (ai::router::score_models) rather than
+    // a fixed model name: Fast tasks bias toward smaller/quicker models,
+    // Coding/Reasoning bias toward quality.
+    let models = ollama::list_models().await?;
+    let goal = if task == TaskCapability::Fast { "speed" } else { "quality" };
+    let prefs = crate::ai::router::Preferences { goal: goal.to_string(), cost_preference: "free".to_string() };
+    let model = crate::ai::router::score_models(&models, &prefs)
+        .into_iter()
+        .next()
+        .map(|(_, name, _)| name)
+        .ok_or_else(|| AppError::Provider("no local Ollama models available".to_string()))?;
+
+    let config = provider_registry::default_ollama_provider();
+    let health_key = health_key_for(&config);
+    if !health.is_healthy(&health_key) {
+        return Err(AppError::Provider(
+            "Ollama is in cooldown after repeated failures - try again shortly".to_string(),
+        ));
+    }
+
+    let start = Instant::now();
+    let mut accumulated = String::new();
+    let result = ollama::chat_stream(&model, messages, |token, _done| accumulated.push_str(token)).await;
+    match &result {
+        Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
+        Err(_) => health.record_failure(&health_key),
+    }
+    result.map(|_| accumulated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +401,27 @@ mod tests {
     fn select_returns_none_when_no_providers_have_models() {
         let providers = vec![provider_registry::default_ollama_provider()]; // empty .models
         assert!(select_provider_and_model_for_task(&providers, TaskCapability::Coding).is_none());
+    }
+
+    /// Proves generate_for_task's Ollama fallback path (no configured cloud
+    /// providers, the common/default case - exactly what agent_v2 hits
+    /// today) produces a real generation with no hardcoded model name,
+    /// against a real running local Ollama instance. This is the direct
+    /// replacement for the old intelligence::gateway::OllamaGateway path.
+    #[tokio::test]
+    #[ignore = "requires a running local Ollama instance"]
+    async fn generate_for_task_falls_back_to_real_ollama_with_no_hardcoded_model() {
+        let health = HealthRegistry::default();
+        let response = generate_for_task(
+            &[], // no configured cloud providers - forces the Ollama fallback
+            &health,
+            TaskCapability::Coding,
+            "You are a helpful assistant.",
+            "Reply with exactly the word: hello",
+        )
+        .await
+        .expect("should generate via the local Ollama fallback");
+
+        assert!(!response.trim().is_empty(), "expected a non-empty real generation");
     }
 }

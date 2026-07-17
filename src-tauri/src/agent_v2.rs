@@ -4,10 +4,45 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
-use crate::intelligence::router;
+use tauri::{AppHandle, Emitter, Manager, State};
+use crate::ai::health::HealthRegistry;
+use crate::ai::provider_registry;
+use crate::ai::provider_router::{self, TaskCapability};
+use crate::database::DbState;
 
 const MAX_RETRIES: u8 = 3;
+
+/// System prompt for the planning/architect call - unchanged from the prior
+/// direct-Ollama implementation (see git history for `intelligence::router::
+/// route_through_gateway`, now removed). Only the AI transport changed.
+const ARCHITECT_SYSTEM_PROMPT: &str = "You are an expert software engineer embedded in the NeuralForge IDE. Provide concise, accurate code solutions.";
+
+/// Generates a complete response for one agent node (architect/coder/
+/// reviewer), routed through `ai::provider_router::generate_for_task` -
+/// Neural Forge's single sanctioned AI entry point. No direct HTTP client,
+/// no hardcoded model: the router picks a real installed/configured model
+/// by task capability. This replaces the old `intelligence::gateway::
+/// OllamaGateway` pathway, which duplicated the Ollama adapter and always
+/// hardcoded "deepseek-coder:latest".
+async fn generate(
+    app_handle: &AppHandle,
+    task: TaskCapability,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, String> {
+    let health = app_handle.state::<HealthRegistry>();
+    let providers = {
+        let db = app_handle.state::<DbState>();
+        let guard = db.conn.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
+        // guard dropped here, before the .await below - a held MutexGuard
+        // can't cross an await point (rusqlite::Connection is Send, not Sync)
+    };
+
+    provider_router::generate_for_task(&providers, &health, task, system_prompt, user_prompt)
+        .await
+        .map_err(|e| e.to_string())
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum AgentState {
@@ -202,7 +237,7 @@ impl AgentRunner {
             task.description
         );
 
-        match router::route_through_gateway(prompt).await {
+        match generate(&app_handle, TaskCapability::Reasoning, ARCHITECT_SYSTEM_PROMPT, &prompt).await {
             Ok(response) => {
                 println!("[AGENT:{}] Planning successful.", task.id);
                 task.plan_output = Some(response);
@@ -245,7 +280,7 @@ impl AgentRunner {
             task.transition_to(AgentState::ExecutingCoder, Some(&app_handle));
             println!("[AGENT:{}] Dispatching instruction set to Coder Agent Node (retry {}/{})...", task.id, task.retries, MAX_RETRIES);
 
-            let coder_response = match router::route_with_system(WorkerPrompts::coder_system(), &coder_prompt).await {
+            let coder_response = match generate(&app_handle, TaskCapability::Coding, WorkerPrompts::coder_system(), &coder_prompt).await {
                 Ok(res) => res,
                 Err(e) => {
                     let err_msg = format!("Coder node failed: {}", e);
@@ -268,7 +303,7 @@ impl AgentRunner {
                 review_payload.push_str(&format!("--- TARGET: {} ---\n{}\n", path, code));
             }
 
-            match router::route_with_system(WorkerPrompts::reviewer_system(), &review_payload).await {
+            match generate(&app_handle, TaskCapability::Coding, WorkerPrompts::reviewer_system(), &review_payload).await {
                 Ok(_) => println!("[AGENT:{}] Review complete.", task.id),
                 Err(e) => {
                     let err_msg = format!("Reviewer node failed: {}", e);
