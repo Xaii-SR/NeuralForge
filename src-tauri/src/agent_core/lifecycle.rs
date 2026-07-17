@@ -62,7 +62,11 @@ pub enum AgentLifecycleState {
     Planning,
     AwaitingApproval,
     Approved,
+    Executing,
+    Verifying,
+    Completed,
     Failed,
+    Cancelled,
 }
 
 #[cfg(test)]
