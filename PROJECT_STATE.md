@@ -9,12 +9,91 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-b9e7315 — "Consolidate autocomplete and ghost text FIM into unified provider router"
+397c75e — "Harden provider architecture with capability/adapter alignment enforcement"
 
 Current branch:
 
 master
 
+## AgentCore Scaffold (Phase 6A)
+
+**Mission:** stand up `agent_core` as a real, compiling, tested coordination
+shell above the two existing execution authorities (`agent::`, `agent_v2`)
+found by the Phase 6 audit (`docs/architecture/NEURALFORGE_AGENT_ARCHITECTURE_AUDIT.md`
+is now stale on this point - update superseded by this session's findings,
+not that doc). No lifecycle migration, no absorption of provider/filesystem/
+rollback/verification logic, no frontend or frozen-file changes.
+
+**What was added:** `src-tauri/src/agent_core/{mod.rs, lifecycle.rs,
+orchestrator.rs, commands.rs}`.
+- `lifecycle.rs` — `ExecutionBackend { Governed, V2 }` only. Explicitly NOT
+  a unified task-lifecycle model (`agent::status`/`agent_v2::AgentState`/
+  `task_orchestrator::TaskLifecycle` remain three separate, untouched
+  representations - merging them is deferred, per this phase's scope).
+- `orchestrator.rs` — pure forwarding functions, one per existing
+  `agent::`/`agent_v2` command, each calling the existing public function
+  directly and recording which backend handled the task id into
+  `AgentCoreState`. Owns zero execution logic.
+- `commands.rs` — the future Tauri command bodies, calling `orchestrator::`.
+  **Not yet `#[tauri::command]`-annotated and not registered in `lib.rs`**
+  - adding new IPC surface is a distinct, reviewable change deferred to
+    whenever Phase 6B is approved, per the phase's explicit stop condition.
+- `mod.rs` — `AgentCoreState { task_backends: Mutex<HashMap<String,
+  ExecutionBackend>> }`. Minimal by design: no natural slot existed in
+  `AppState` (confirmed by inspection - it holds only `workspace_root`),
+  so this is a new, separate managed-state candidate, not merged into
+  `AppState`. **Not yet `.manage()`d** - `lib.rs`'s only change this phase
+  is the `mod agent_core;` declaration itself.
+
+**Confirmed before writing any code (per the directive's checklist):**
+1. All 5 `agent::` commands and all 3 `agent_v2` commands are `#[tauri::command]`
+   attributes directly inline on `pub async fn`/`pub fn` - confirmed by
+   grep, no separate command-definition layer existed to relocate.
+2. Because of #1, "introduce wrappers" meant **only adding new forwarding
+   functions** - zero attribute moves, zero source changes to `agent/mod.rs`
+   or `agent_v2.rs` were needed. Both remain byte-for-byte unchanged this
+   phase (confirmed: not in the diff).
+3. `AppState` has no natural AgentCore slot (verified by reading
+   `core/state.rs` in full - one field, `workspace_root`).
+4. `lib.rs`'s only change is the `mod agent_core;` declaration (plus an
+   `#[allow(dead_code)]` on that line, since nothing invokes this code yet
+   - an honest, temporary allow, not a hidden warning suppression; remove
+   it when Phase 6B wires registration).
+
+**Verified this session:** `cargo check`/`cargo clippy --lib` clean.
+`cargo test`: **306 passed, 0 failed, 13 ignored** (3 new: `ExecutionBackend`
+naming stability, `AgentCoreState` backend-recording, empty-state
+construction). `npm run build`/`npx tsc --noEmit` clean (zero frontend
+files touched, zero new IPC surface exposed to touch them with).
+
+**Actual diff, confirmed against the phase's own predicted diff:**
+```
+NEW:   src-tauri/src/agent_core/{mod.rs,lifecycle.rs,orchestrator.rs,commands.rs}
+CHANGED: src-tauri/src/lib.rs  (+6 lines: mod declaration + comment)
+UNCHANGED: agent/mod.rs, agent/planner.rs, agent/executor.rs, agent_v2.rs,
+           provider_router.rs, providers/, task_orchestrator.rs,
+           multi_agent.rs, every frontend file
+```
+Even more minimal than anticipated — the "POSSIBLE WRAPPER CHANGES" to
+`agent/mod.rs`/`agent_v2.rs` the directive flagged as conditionally
+necessary turned out not to be needed at all, since every function being
+forwarded to was already `pub`.
+
+**Stop condition honored:** shell exists, compiles, is tested, and
+forwards correctly (proven by `record_backend_is_queryable_after_recording`
+and the fact that `orchestrator::*` functions type-check against the real
+`agent::`/`agent_v2` signatures). **Phase 6B (wiring `commands.rs` into
+`lib.rs`'s `generate_handler!`, actually pointing any frontend affordance
+at it) has not been started**, per the explicit instruction to stop after
+the shell compiles and await review of this diff.
+
+**Open questions carried into Phase 6B (from the Phase 6 audit, still
+unresolved):** whether AgentCore is meant to eventually unify Path A
+(`agent::`) and Path B (`agent_v2`) into one execution engine, or simply
+continue coordinating between two selectable backends indefinitely; the
+real Approval/Rollback/Verification duplication between the two backends
+(documented in the audit's Safety System Audit table) is untouched by this
+scaffold and remains exactly as fragmented as before.
 ## Provider Architecture Hardening (Phase 5)
 
 **Mission:** move from implicit, scattered name-based provider dispatch to

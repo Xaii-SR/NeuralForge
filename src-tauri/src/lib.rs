@@ -1,5 +1,11 @@
 mod agent;
 mod agent_controller;
+// Phase 6A scaffold: real, tested coordination code with no invoke() entry
+// point wired to it yet (see agent_core::commands's doc comment for why).
+// dead_code is expected and honest here, not swept under the rug - remove
+// this allow in the phase that registers agent_core's commands.
+#[allow(dead_code)]
+mod agent_core;
 mod agent_v2;
 mod change_executor;
 mod context_retrieval;
