@@ -9,12 +9,114 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-cfa5a00 — "Migrate inline edit and ghost text to unified AI provider router"
+b9e7315 — "Consolidate autocomplete and ghost text FIM into unified provider router"
 
 Current branch:
 
 master
 
+## Provider Architecture Hardening (Phase 5)
+
+**Mission:** move from implicit, scattered name-based provider dispatch to
+a strictly capability-driven architecture where `provider_router` cares
+only about *what* a provider can do, never *which* provider it is by
+string comparison - and close a real capability/adapter mismatch the audit
+found (providers could declare `chat: true` while having no working
+adapter at all).
+
+**What changed:**
+- `AdapterKind` + `adapter_kind_for` moved from `provider_router.rs` to
+  `provider_registry.rs` (the single, canonical definition now - confirmed
+  via crate-wide grep there is exactly one `pub enum AdapterKind` and one
+  `pub fn adapter_kind_for`). This is registry-level data classification
+  ("what can this persisted `provider_type` do?"), and living there lets
+  the registry enforce capability clamping at construction time without
+  depending on the router module.
+- `ProviderConfig::adapter_kind(&self) -> AdapterKind` added - the one
+  method every routing decision now calls instead of re-deriving
+  `provider_type == "ollama"` independently.
+- **New enforcement point**: `max_capabilities_for(kind: AdapterKind) ->
+  ProviderCapabilities` (the ceiling each adapter kind can ever truthfully
+  support) and `clamp_capabilities(provider_type, requested) ->
+  ProviderCapabilities` (ANDs requested capabilities against that ceiling,
+  mins `context_length` against it). Every `ProviderConfig` construction
+  path now routes through this: `ProviderConfig::default()`,
+  `default_ollama_provider()`, and a new `build_provider_config` helper
+  extracted from `add_provider_config` specifically so it's directly
+  unit-testable without a Tauri runtime.
+- **Real bug fixed**: before this phase, `add_provider_config` with
+  `provider_type: "anthropic"` or `"gemini"` produced a config with
+  `chat: true, streaming: true, coding: true` (from
+  `ProviderCapabilities::default()`), despite `adapter_kind_for` already
+  classifying those as `Unimplemented` (no working adapter). Nothing
+  enforced the two staying consistent. `Unimplemented` now rejects every
+  capability unconditionally via `max_capabilities_for`.
+- **Consolidated** the 5 previously-scattered `provider_type == "ollama"` /
+  `!= "ollama"` checks (4 in `provider_router.rs`, 1 in `ai/mod.rs::chat_or_use_cache`)
+  into `config.adapter_kind() == AdapterKind::Ollama` calls against the one
+  canonical classification. `ai/mod.rs` required a one-line touch for
+  this - outside the directive's literal file list, but explicitly required
+  by "Consolidate Decisions," and the audit had already identified that
+  exact site as one of the scattered checks. Flagged here rather than
+  silently included.
+- **Routing transparency**: `tracing::debug!` added at every resolution
+  decision point - `resolve_provider_for_model` (which provider/type was
+  picked for a model), `select_provider_and_model_for_task` (candidate
+  count + selection), `select_fim_provider` (rejected provider names +
+  selection), `complete_fim` (adapter-missing rejection / Ollama
+  fallback), and `stream_cloud_chat` (final adapter dispatch decision).
+- `AdapterKind::OpenAiCompatible`'s `max_capabilities_for` entry
+  explicitly caps `fim: false` - documents in one place, structurally
+  (not just in a comment), that no OpenAI-compatible FIM adapter exists
+  yet, consistent with Phase 4's `complete_fim` rejection behavior.
+
+**Verified this session:** `cargo check`/`cargo clippy --lib` clean.
+`cargo test`: **303 passed, 0 failed, 13 ignored** (7 new tests: capability
+clamping for the Mismatch/Unimplemented/Ollama-regression cases required
+by this phase, plus adapter-kind classification tests). `npm run build`/
+`npx tsc --noEmit` clean (zero frontend files touched). Live verification
+against this machine's real running Ollama instance: reran every
+`--ignored` Ollama-dependent test in the suite (chat, FIM, agent_v2's
+planner, inline edit, cache) - all passed, proving zero regression in the
+one fully-functional path. Two unrelated pre-existing failures observed
+and confirmed not caused by this phase: `openai_compatible::tests::local_openai_compatible_chat`
+(requires a real LM Studio server on `localhost:1234`, not running in this
+environment - same as every prior session) and
+`bootstrap::suggest::tests::choose_target_proposes_a_real_target_from_local_model`
+(live-model-output-format flake, unrelated file, not touched this phase).
+
+**Test-requirement mapping (as specified):**
+- *Test 1 (Mismatch)*: `clamp_capabilities_sanitizes_unsupported_capability_for_openai_compatible`
+  + `build_provider_config_never_produces_a_capability_adapter_mismatch` -
+  requesting `fim: true` on an `openai_compatible` config is silently
+  sanitized to `false`; genuinely-supported capabilities pass through
+  unchanged.
+- *Test 2 (Adapter Enforcement)*: `unimplemented_adapter_rejects_every_requested_capability`
+  + `build_provider_config_gives_unimplemented_adapter_zero_capabilities` -
+  `anthropic`/`gemini` configs reject all 8 capability flags and
+  `context_length`, both via the pure clamp function and the real
+  construction path.
+- *Test 3 (Ollama Regression)*: `default_ollama_provider_capabilities_unaffected_by_clamping`
+  (unit) + full live-Ollama test suite rerun (integration, see above) -
+  Ollama's `chat/streaming/coding/fim: true` survive clamping unchanged,
+  and every real Ollama code path still functions end to end.
+
+**Still open (not addressed this session, correctly out of scope):**
+- `providers/mod.rs`'s legacy `ProviderId`/`registry()`/`has_api_key()`
+  system and `router::estimate_cost`'s hardcoded `&ProviderId::Ollama`
+  bug (found in this phase's audit) remain **untouched**, per explicit
+  "No Legacy Cleanup" instruction.
+- `update_provider_config` still has no way to change `provider_type` or
+  request capability changes post-creation - not a live risk today (can't
+  introduce a mismatch that doesn't already get clamped at creation), but
+  worth a follow-up if capability editing is ever exposed to the frontend.
+- API key plaintext storage (flagged Phase 4) remains unaddressed.
+- Everything previously flagged out of scope in Phases 3-4 (`docs.rs`/
+  `web.rs`'s unrelated `reqwest`, `bootstrap/environment.rs`'s boot ping,
+  `agent_v2`'s hardcoded workspace root/advisory reviewer, the inert
+  `task_orchestrator`/`AgentWorkbench.tsx`/`multi_agent.rs` stack) remains
+  unaddressed and was out of scope again this phase (explicitly forbidden:
+  `agent_v2`, `task_orchestrator`, `multi_agent`, `AgentCore`).
 ## Autocomplete + Ghost Text FIM Consolidation (Phase 4)
 
 **Mission:** eliminate the last confirmed AI-provider bypass

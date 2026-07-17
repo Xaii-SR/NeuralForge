@@ -8,41 +8,19 @@
 //! persisted provider configs this module reads.
 
 use crate::ai::health::HealthRegistry;
-use crate::ai::provider_registry::{self, ProviderConfig};
+use crate::ai::provider_registry::{self, AdapterKind, ProviderConfig};
 use crate::ai::providers::{ollama, openai_compatible};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::Connection;
 use std::time::Instant;
 
-/// Which HTTP client a provider_type routes through. OpenAiCompatible is
-/// deliberately the default for everything that isn't Ollama or a protocol
-/// that genuinely differs from the OpenAI chat-completions shape - see the
-/// module doc on `openai_compatible` for the full list of services this
-/// covers (OpenAI, OpenRouter, DeepSeek, Groq, Together, Fireworks,
-/// DeepInfra, LM Studio, vLLM, llama.cpp, user-defined custom endpoints).
-/// Do not add a new arm here per-company; only add one when a provider's
-/// wire format genuinely cannot be expressed as OpenAI-compatible chat
-/// completions (Anthropic and Gemini's native APIs are the known cases).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdapterKind {
-    Ollama,
-    OpenAiCompatible,
-    /// Provider type is recognized but has no working adapter yet
-    /// (Anthropic/Gemini native APIs). Fails loudly rather than
-    /// mis-routing through the OpenAI-compatible client, which would
-    /// silently produce wrong requests against those APIs.
-    Unimplemented,
-}
-
-pub fn adapter_kind_for(provider_type: &str) -> AdapterKind {
-    match provider_type {
-        "ollama" => AdapterKind::Ollama,
-        "anthropic" | "gemini" => AdapterKind::Unimplemented,
-        // openai, openai_compatible, openrouter, deepseek, groq, together,
-        // fireworks, deepinfra, lmstudio, vllm, llamacpp, custom, mistral, ...
-        _ => AdapterKind::OpenAiCompatible,
-    }
-}
+// AdapterKind and its classification (`adapter_kind_for` / `ProviderConfig::
+// adapter_kind()`) live in `provider_registry` now - it's registry-level
+// data classification (what can this persisted provider_type do?), and
+// keeping it there lets `provider_registry` enforce capability clamping at
+// construction time without depending on this module. `provider_router`
+// re-exports `AdapterKind` (via the `use` above) since it's still the type
+// every dispatch decision in this file is written against.
 
 /// Health/cooldown key for a provider. Ollama keeps its historical "ollama"
 /// key unchanged (existing UI and tests read this key directly); every other
@@ -50,7 +28,7 @@ pub fn adapter_kind_for(provider_type: &str) -> AdapterKind {
 /// degraded cloud provider never affects Ollama's or another provider's
 /// health state.
 pub fn health_key_for(config: &ProviderConfig) -> String {
-    if config.provider_type == "ollama" {
+    if config.adapter_kind() == AdapterKind::Ollama {
         "ollama".to_string()
     } else {
         format!("provider:{}", config.id)
@@ -67,10 +45,18 @@ pub fn resolve_provider_for_model(conn: Option<&Connection>, model: &str) -> Pro
         Some(conn) => provider_registry::load_providers(conn),
         None => vec![provider_registry::default_ollama_provider()],
     };
-    providers
+    let resolved = providers
         .into_iter()
         .find(|p| p.enabled && p.models.iter().any(|m| m == model))
-        .unwrap_or_else(provider_registry::default_ollama_provider)
+        .unwrap_or_else(provider_registry::default_ollama_provider);
+    tracing::debug!(
+        target: "ai",
+        event = "provider_resolved_for_model",
+        model = %model,
+        provider = %resolved.name,
+        provider_type = %resolved.provider_type,
+    );
+    resolved
 }
 
 /// Fast-path streaming entry point for latency-sensitive, already-resolved
@@ -94,7 +80,7 @@ pub async fn stream_chat<F>(
 where
     F: FnMut(&str, bool),
 {
-    if config.provider_type != "ollama" {
+    if config.adapter_kind() != AdapterKind::Ollama {
         return stream_cloud_chat(health, config, model, messages, on_token).await;
     }
 
@@ -147,7 +133,8 @@ where
         )));
     }
 
-    let kind = adapter_kind_for(&config.provider_type);
+    let kind = config.adapter_kind();
+    tracing::debug!(target: "ai", event = "provider_dispatch_decision", provider = %config.name, provider_type = %config.provider_type, adapter_kind = ?kind);
     let start = Instant::now();
 
     let result: AppResult<String> = match kind {
@@ -276,6 +263,14 @@ pub fn select_provider_and_model_for_task(
         }
     }
 
+    tracing::debug!(
+        target: "ai",
+        event = "task_capability_selection",
+        task = ?task,
+        candidates = providers.iter().filter(|p| p.enabled).count(),
+        selected = best.as_ref().map(|(_, p, m)| format!("{}/{}", p.name, m)),
+    );
+
     best.map(|(_, provider, model)| (provider.clone(), model.to_string()))
 }
 
@@ -291,11 +286,26 @@ pub fn select_provider_and_model_for_task(
 /// Returns `None` in the common/default case where no configured provider
 /// advertises FIM (`ProviderCapabilities::default()` sets `fim: false`).
 pub fn select_fim_provider(providers: &[ProviderConfig]) -> Option<ProviderConfig> {
-    providers
+    let rejected: Vec<&str> = providers
         .iter()
-        .filter(|p| p.enabled && p.provider_type != "ollama" && p.capabilities.fim)
+        .filter(|p| p.adapter_kind() != AdapterKind::Ollama && !(p.enabled && p.capabilities.fim))
+        .map(|p| p.name.as_str())
+        .collect();
+
+    let selected = providers
+        .iter()
+        .filter(|p| p.enabled && p.adapter_kind() != AdapterKind::Ollama && p.capabilities.fim)
         .min_by_key(|p| p.capabilities.context_length)
-        .cloned()
+        .cloned();
+
+    tracing::debug!(
+        target: "ai",
+        event = "fim_provider_selection",
+        rejected = ?rejected,
+        selected = selected.as_ref().map(|p| p.name.as_str()),
+    );
+
+    selected
 }
 
 /// Capability-gated FIM (fill-in-middle) raw-completion routing - the
@@ -323,11 +333,14 @@ pub async fn complete_fim(
     temperature: f32,
 ) -> AppResult<String> {
     if let Some(config) = select_fim_provider(providers) {
-        return Err(AppError::Provider(format!(
+        let msg = format!(
             "{} advertises FIM support but no FIM adapter exists yet for provider_type '{}'",
             config.name, config.provider_type
-        )));
+        );
+        tracing::debug!(target: "ai", event = "fim_rejected_no_adapter", provider = %config.name, provider_type = %config.provider_type);
+        return Err(AppError::Provider(msg));
     }
+    tracing::debug!(target: "ai", event = "fim_falling_back_to_ollama");
 
     let models = ollama::list_models().await?;
     let prefs = crate::ai::router::Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
@@ -381,7 +394,7 @@ pub async fn generate_for_task(
         ollama::ChatMessage { role: "user".to_string(), content: user_prompt.to_string() },
     ];
 
-    let non_ollama: Vec<ProviderConfig> = providers.iter().filter(|p| p.provider_type != "ollama").cloned().collect();
+    let non_ollama: Vec<ProviderConfig> = providers.iter().filter(|p| p.adapter_kind() != AdapterKind::Ollama).cloned().collect();
     if let Some((config, model)) = select_provider_and_model_for_task(&non_ollama, task) {
         return stream_cloud_chat(health, &config, &model, messages, |_token, _done| {}).await;
     }
@@ -444,7 +457,7 @@ mod tests {
             "together", "fireworks", "deepinfra", "lmstudio", "vllm", "llamacpp", "custom",
         ] {
             assert_eq!(
-                adapter_kind_for(provider_type),
+                provider_registry::adapter_kind_for(provider_type),
                 AdapterKind::OpenAiCompatible,
                 "{provider_type} should route through the shared OpenAI-compatible adapter"
             );
@@ -453,13 +466,13 @@ mod tests {
 
     #[test]
     fn adapter_kind_keeps_ollama_on_its_own_path() {
-        assert_eq!(adapter_kind_for("ollama"), AdapterKind::Ollama);
+        assert_eq!(provider_registry::adapter_kind_for("ollama"), AdapterKind::Ollama);
     }
 
     #[test]
     fn adapter_kind_marks_native_only_providers_unimplemented() {
-        assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Unimplemented);
-        assert_eq!(adapter_kind_for("gemini"), AdapterKind::Unimplemented);
+        assert_eq!(provider_registry::adapter_kind_for("anthropic"), AdapterKind::Unimplemented);
+        assert_eq!(provider_registry::adapter_kind_for("gemini"), AdapterKind::Unimplemented);
     }
 
     #[test]

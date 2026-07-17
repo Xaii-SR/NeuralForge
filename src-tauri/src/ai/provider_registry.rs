@@ -3,6 +3,111 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Which HTTP client a `provider_type` routes through. This is the ONE
+/// place a provider's execution mechanics are classified from its
+/// persisted `provider_type` string - every other module (routing,
+/// capability clamping) consumes this classification rather than
+/// re-deriving `provider_type == "ollama"`-style checks of its own.
+/// OpenAiCompatible is deliberately the default for everything that isn't
+/// Ollama or a protocol that genuinely differs from the OpenAI
+/// chat-completions shape (OpenAI, OpenRouter, DeepSeek, Groq, Together,
+/// Fireworks, DeepInfra, LM Studio, vLLM, llama.cpp, user-defined custom
+/// endpoints). Do not add a new arm here per-company; only add one when a
+/// provider's wire format genuinely cannot be expressed as OpenAI-compatible
+/// chat completions (Anthropic and Gemini's native APIs are the known
+/// cases).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterKind {
+    Ollama,
+    OpenAiCompatible,
+    /// Provider type is recognized but has no working adapter yet
+    /// (Anthropic/Gemini native APIs). Fails loudly rather than
+    /// mis-routing through the OpenAI-compatible client, which would
+    /// silently produce wrong requests against those APIs.
+    Unimplemented,
+}
+
+pub fn adapter_kind_for(provider_type: &str) -> AdapterKind {
+    match provider_type {
+        "ollama" => AdapterKind::Ollama,
+        "anthropic" | "gemini" => AdapterKind::Unimplemented,
+        // openai, openai_compatible, openrouter, deepseek, groq, together,
+        // fireworks, deepinfra, lmstudio, vllm, llamacpp, custom, mistral, ...
+        _ => AdapterKind::OpenAiCompatible,
+    }
+}
+
+/// The maximum capabilities a given adapter kind can ever truthfully
+/// support, independent of what any individual `ProviderConfig` declares.
+/// This is the single enforcement point behind `clamp_capabilities` - an
+/// adapter kind can never be made to support more than what's listed here
+/// without a real implementation backing it. `Unimplemented` permits
+/// nothing: it has no working adapter, so no capability claim about it can
+/// ever be true.
+pub fn max_capabilities_for(kind: AdapterKind) -> ProviderCapabilities {
+    match kind {
+        AdapterKind::Ollama => ProviderCapabilities {
+            chat: true,
+            streaming: true,
+            coding: true,
+            vision: false,
+            tool_calling: false,
+            function_calling: false,
+            embeddings: false,
+            fim: true,
+            context_length: u64::MAX,
+        },
+        AdapterKind::OpenAiCompatible => ProviderCapabilities {
+            chat: true,
+            streaming: true,
+            coding: true,
+            vision: false,
+            tool_calling: false,
+            function_calling: false,
+            embeddings: false,
+            // No adapter implements raw/FIM completion for OpenAI-compatible
+            // endpoints yet (see ai::provider_router::complete_fim) - so no
+            // provider of this kind may ever declare fim: true, regardless
+            // of what's requested.
+            fim: false,
+            context_length: u64::MAX,
+        },
+        AdapterKind::Unimplemented => ProviderCapabilities {
+            chat: false,
+            streaming: false,
+            coding: false,
+            vision: false,
+            tool_calling: false,
+            function_calling: false,
+            embeddings: false,
+            fim: false,
+            context_length: 0,
+        },
+    }
+}
+
+/// Clamps `requested` capabilities to what `provider_type`'s adapter can
+/// actually execute. This is the single enforcement point every
+/// `ProviderConfig` construction path must call - a capability flag can
+/// only ever come out `true` if both the caller requested it AND the
+/// resolved adapter kind permits it. Silent sanitization, not a hard
+/// error: a request for an unsupported capability degrades to "not
+/// granted" rather than failing config creation outright.
+pub fn clamp_capabilities(provider_type: &str, requested: ProviderCapabilities) -> ProviderCapabilities {
+    let max = max_capabilities_for(adapter_kind_for(provider_type));
+    ProviderCapabilities {
+        chat: requested.chat && max.chat,
+        streaming: requested.streaming && max.streaming,
+        coding: requested.coding && max.coding,
+        vision: requested.vision && max.vision,
+        tool_calling: requested.tool_calling && max.tool_calling,
+        function_calling: requested.function_calling && max.function_calling,
+        embeddings: requested.embeddings && max.embeddings,
+        fim: requested.fim && max.fim,
+        context_length: requested.context_length.min(max.context_length),
+    }
+}
+
 /// Persistent provider configuration stored in SQLite.
 ///
 /// SECURITY NOTE (audited, not yet remediated - flagged per engineering
@@ -35,18 +140,28 @@ pub struct ProviderConfig {
 
 impl Default for ProviderConfig {
     fn default() -> Self {
+        let provider_type = "openai_compatible".to_string();
         Self {
             id: Uuid::new_v4().to_string(),
             name: "New Provider".to_string(),
-            provider_type: "openai_compatible".to_string(),
+            capabilities: clamp_capabilities(&provider_type, ProviderCapabilities::default()),
+            provider_type,
             base_url: "http://localhost:1234/v1".to_string(),
             api_key: String::new(),
             models: Vec::new(),
             enabled: true,
             is_default: false,
-            capabilities: ProviderCapabilities::default(),
             created_at: epoch_secs(),
         }
+    }
+}
+
+impl ProviderConfig {
+    /// Classifies this config's execution mechanics from its persisted
+    /// `provider_type`. The single point every routing decision should use
+    /// instead of re-deriving `provider_type == "ollama"`-style checks.
+    pub fn adapter_kind(&self) -> AdapterKind {
+        adapter_kind_for(&self.provider_type)
     }
 }
 
@@ -117,19 +232,23 @@ fn epoch_secs() -> i64 {
 pub const DEFAULT_OLLAMA_ID: &str = "default-ollama";
 
 pub fn default_ollama_provider() -> ProviderConfig {
+    let provider_type = "ollama".to_string();
     ProviderConfig {
         id: DEFAULT_OLLAMA_ID.to_string(),
         name: "Ollama (Local)".to_string(),
-        provider_type: "ollama".to_string(),
+        // Ollama is the only provider with a real, working FIM adapter
+        // today (providers::ollama::generate_raw) - see
+        // ai::provider_router::complete_fim. Routed through clamp_capabilities
+        // like every other construction path, even though Ollama's max
+        // capabilities already happen to permit fim: true - this keeps
+        // there being exactly one place capability truth is decided.
+        capabilities: clamp_capabilities(&provider_type, ProviderCapabilities { fim: true, ..ProviderCapabilities::default() }),
+        provider_type,
         base_url: "http://localhost:11434".to_string(),
         api_key: String::new(),
         models: Vec::new(),
         enabled: true,
         is_default: true,
-        // Ollama is the only provider with a real, working FIM adapter
-        // today (providers::ollama::generate_raw) - see
-        // ai::provider_router::complete_fim.
-        capabilities: ProviderCapabilities { fim: true, ..ProviderCapabilities::default() },
         created_at: 0,
     }
 }
@@ -197,6 +316,27 @@ pub fn list_provider_configs(db: tauri::State<'_, crate::database::DbState>) -> 
     Ok(load_providers_raw(conn))
 }
 
+/// Builds a new `ProviderConfig` with capabilities clamped to what
+/// `provider_type`'s adapter can actually execute - extracted from
+/// `add_provider_config` so it's directly unit-testable without a Tauri
+/// runtime/State. This is the "creating a config with an unsupported
+/// capability" enforcement point: a caller cannot end up with, say,
+/// `chat: true` on a `provider_type` that resolves to `AdapterKind::Unimplemented`.
+fn build_provider_config(name: String, provider_type: String, base_url: String, api_key: String, is_default: bool) -> ProviderConfig {
+    ProviderConfig {
+        id: Uuid::new_v4().to_string(),
+        name,
+        capabilities: clamp_capabilities(&provider_type, ProviderCapabilities::default()),
+        provider_type,
+        base_url,
+        api_key,
+        models: Vec::new(),
+        enabled: true,
+        is_default,
+        created_at: epoch_secs(),
+    }
+}
+
 #[tauri::command]
 pub fn add_provider_config(
     db: tauri::State<'_, crate::database::DbState>,
@@ -209,18 +349,7 @@ pub fn add_provider_config(
     let conn = guard.as_ref().ok_or("no workspace open")?;
     let mut providers = load_providers_raw(conn);
 
-    let new = ProviderConfig {
-        id: Uuid::new_v4().to_string(),
-        name,
-        provider_type,
-        base_url,
-        api_key,
-        models: Vec::new(),
-        enabled: true,
-        is_default: providers.is_empty(),
-        capabilities: ProviderCapabilities::default(),
-        created_at: epoch_secs(),
-    };
+    let new = build_provider_config(name, provider_type, base_url, api_key, providers.is_empty());
 
     providers.push(new.clone());
     save_providers_raw(conn, &providers).map_err(|e| e.to_string())?;
@@ -355,5 +484,115 @@ mod tests {
         save_model_config(&conn, SETTINGS_KEY_ACTIVE_CHAT, &config).unwrap();
         let loaded = load_model_config(&conn, SETTINGS_KEY_ACTIVE_CHAT).unwrap();
         assert_eq!(loaded.model, "deepseek-coder");
+    }
+
+    // ── Capability clamping (Phase 5 hardening) ─────────────────────────
+
+    fn all_true_capabilities() -> ProviderCapabilities {
+        ProviderCapabilities {
+            chat: true,
+            streaming: true,
+            coding: true,
+            vision: true,
+            tool_calling: true,
+            function_calling: true,
+            embeddings: true,
+            fim: true,
+            context_length: 1_000_000,
+        }
+    }
+
+    /// Test 1 (Mismatch): a config requesting a capability its adapter
+    /// doesn't support must be auto-corrected (sanitized to false), not
+    /// stored as requested. OpenAI-compatible has no working FIM adapter,
+    /// so `fim: true` on an openai_compatible provider must not survive
+    /// clamping even though every other requested capability is real.
+    #[test]
+    fn clamp_capabilities_sanitizes_unsupported_capability_for_openai_compatible() {
+        let clamped = clamp_capabilities("openai_compatible", all_true_capabilities());
+        assert!(clamped.chat, "chat is genuinely supported and must pass through");
+        assert!(clamped.streaming, "streaming is genuinely supported and must pass through");
+        assert!(clamped.coding, "coding is genuinely supported and must pass through");
+        assert!(!clamped.fim, "fim must be sanitized to false - no OpenAI-compatible FIM adapter exists");
+    }
+
+    /// Test 1 (Mismatch), end-to-end through the real construction path:
+    /// `build_provider_config` (what `add_provider_config` calls) must
+    /// never produce a mismatched config, even if a future caller starts
+    /// passing attacker-controlled or just-wrong capability data in.
+    #[test]
+    fn build_provider_config_never_produces_a_capability_adapter_mismatch() {
+        let config = build_provider_config(
+            "Custom".into(),
+            "openai_compatible".into(),
+            "http://localhost:1234/v1".into(),
+            String::new(),
+            false,
+        );
+        assert!(!config.capabilities.fim, "a freshly built openai_compatible config must not claim fim support");
+    }
+
+    /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` (Anthropic/
+    /// Gemini today) must reject every single capability, regardless of what
+    /// was requested - this is the exact bug the Phase 5 audit found: a
+    /// config with `provider_type: "anthropic"` previously kept
+    /// `chat: true`/`streaming: true`/`coding: true` from
+    /// `ProviderCapabilities::default()` despite having no working adapter.
+    #[test]
+    fn unimplemented_adapter_rejects_every_requested_capability() {
+        for provider_type in ["anthropic", "gemini"] {
+            let clamped = clamp_capabilities(provider_type, all_true_capabilities());
+            assert!(!clamped.chat, "{provider_type} must not claim chat support");
+            assert!(!clamped.streaming, "{provider_type} must not claim streaming support");
+            assert!(!clamped.coding, "{provider_type} must not claim coding support");
+            assert!(!clamped.vision, "{provider_type} must not claim vision support");
+            assert!(!clamped.tool_calling, "{provider_type} must not claim tool_calling support");
+            assert!(!clamped.function_calling, "{provider_type} must not claim function_calling support");
+            assert!(!clamped.embeddings, "{provider_type} must not claim embeddings support");
+            assert!(!clamped.fim, "{provider_type} must not claim fim support");
+            assert_eq!(clamped.context_length, 0, "{provider_type} must not claim any usable context length");
+        }
+    }
+
+    /// Test 2, via the real construction path: creating a provider with
+    /// `provider_type: "anthropic"` through `build_provider_config` must
+    /// come out with every capability false, not the old
+    /// `ProviderCapabilities::default()` (chat/streaming/coding: true).
+    #[test]
+    fn build_provider_config_gives_unimplemented_adapter_zero_capabilities() {
+        let config = build_provider_config("Claude".into(), "anthropic".into(), "https://api.anthropic.com".into(), "sk-test".into(), false);
+        assert!(!config.capabilities.chat);
+        assert!(!config.capabilities.streaming);
+        assert!(!config.capabilities.coding);
+    }
+
+    /// Test 3 (Ollama Regression): the default Ollama provider's existing
+    /// capabilities (chat/streaming/coding: true, fim: true - set
+    /// explicitly because Ollama really does have a working FIM adapter)
+    /// must survive clamping unchanged. This is the regression guard that
+    /// the hardening pass didn't break the one fully-functional path.
+    #[test]
+    fn default_ollama_provider_capabilities_unaffected_by_clamping() {
+        let ollama = default_ollama_provider();
+        assert!(ollama.capabilities.chat);
+        assert!(ollama.capabilities.streaming);
+        assert!(ollama.capabilities.coding);
+        assert!(ollama.capabilities.fim, "Ollama genuinely has a working FIM adapter and must keep declaring it");
+        assert_eq!(ollama.adapter_kind(), AdapterKind::Ollama);
+    }
+
+    #[test]
+    fn adapter_kind_classification_matches_expected_routing() {
+        assert_eq!(adapter_kind_for("ollama"), AdapterKind::Ollama);
+        assert_eq!(adapter_kind_for("openai_compatible"), AdapterKind::OpenAiCompatible);
+        assert_eq!(adapter_kind_for("openai"), AdapterKind::OpenAiCompatible);
+        assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Unimplemented);
+        assert_eq!(adapter_kind_for("gemini"), AdapterKind::Unimplemented);
+    }
+
+    #[test]
+    fn provider_config_adapter_kind_method_matches_free_function() {
+        let ollama = default_ollama_provider();
+        assert_eq!(ollama.adapter_kind(), adapter_kind_for(&ollama.provider_type));
     }
 }

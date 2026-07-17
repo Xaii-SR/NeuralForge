@@ -276,7 +276,7 @@ where
     // provider routes through provider_router, which owns adapter selection
     // for anything non-Ollama - see its module doc for why the two paths
     // aren't merged into one generic function.
-    let response = if config.provider_type == "ollama" {
+    let response = if config.adapter_kind() == provider_registry::AdapterKind::Ollama {
         let (response, _stats) = chat_with_model_core(health, model, messages, &mut on_token).await?;
         response
     } else {
