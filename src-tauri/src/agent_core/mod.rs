@@ -50,6 +50,7 @@ pub mod commands;
 pub mod lifecycle;
 pub mod orchestrator;
 pub mod reducer;
+pub mod service;
 pub mod types;
 
 use lifecycle::ExecutionBackend;
