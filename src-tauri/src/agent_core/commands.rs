@@ -1,24 +1,41 @@
-//! Future Tauri command bodies for AgentCore.
+//! Tauri command bodies for AgentCore.
 //!
-//! Deliberately NOT `#[tauri::command]`-annotated and NOT registered in
-//! `lib.rs`'s `generate_handler!` yet. Phase 6A's only sanctioned `lib.rs`
-//! change is the `mod agent_core;` declaration - adding these to the
-//! invoke handler is a real, reviewable change to the app's IPC surface
-//! (even though additive, not breaking) and belongs in a later phase after
-//! this shell's integration diff has been reviewed, per the stated stop
-//! condition. Until then, these are plain, real, callable, tested
-//! functions - not placeholders - that simply have no `invoke()` entry
-//! point wired to them yet. `AgentPanel.tsx` continues to call
-//! `agent::*`/`agent_v2::*` commands directly and is completely unaffected
-//! by this file's existence.
+//! Most functions here are deliberately NOT `#[tauri::command]`-annotated
+//! and NOT registered in `lib.rs`'s `generate_handler!` yet - adding them
+//! to the invoke handler is a real, reviewable change to the app's IPC
+//! surface and belongs in a later phase after this shell's integration
+//! diff has been reviewed, per the stated stop condition. Until then,
+//! they are plain, real, callable, tested functions - not placeholders -
+//! that simply have no `invoke()` entry point wired to them yet.
+//! `AgentPanel.tsx` continues to call `agent::*`/`agent_v2::*` commands
+//! directly and is unaffected by this file's existence.
+//!
+//! `agent_lifecycle_transition` (Phase 6B Phase 2) is the sole exception:
+//! it is registered in `lib.rs`, narrowly scoped to `AgentService`'s
+//! advisory lifecycle view only. It does not touch `agent::*`/`agent_v2::*`
+//! execution and has no frontend caller yet.
 
 use crate::agent_core::orchestrator;
+use crate::agent_core::service::{AgentError, AgentService};
+use crate::agent_core::types::AgentEventType;
+use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
 use crate::core::errors::AppResult;
 use crate::core::state::AppState;
 use crate::database::DbState;
 use tauri::{AppHandle, State};
+
+/// Advances AgentCore's advisory lifecycle view by one event. Purely
+/// in-memory bookkeeping via `AgentService` - does not touch `agent::` or
+/// `agent_v2::` execution, persistence, or approval state.
+#[tauri::command]
+pub fn agent_lifecycle_transition(
+    service: State<'_, AgentService>,
+    event: AgentEventType,
+) -> Result<AgentLifecycleState, String> {
+    service.transition(event).map_err(|e: AgentError| format!("{e:?}"))
+}
 
 pub async fn create_and_plan_task(
     core: State<'_, AgentCoreState>,

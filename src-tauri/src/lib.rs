@@ -1,9 +1,9 @@
 mod agent;
 mod agent_controller;
-// Phase 6A scaffold: real, tested coordination code with no invoke() entry
-// point wired to it yet (see agent_core::commands's doc comment for why).
-// dead_code is expected and honest here, not swept under the rug - remove
-// this allow in the phase that registers agent_core's commands.
+// Phase 6A scaffold: most coordination code here still has no invoke()
+// entry point wired to it (see agent_core::commands's doc comment for why).
+// dead_code is expected and honest here for the unwired parts, not swept
+// under the rug. Phase 6B Phase 2 wires agent_lifecycle_transition only.
 #[allow(dead_code)]
 mod agent_core;
 mod agent_v2;
@@ -61,6 +61,7 @@ pub fn run() {
     .manage(agent_v2::ApprovalRegistry::new())
     .manage(SandboxState::default())
     .manage(OrchestratorState::default())
+    .manage(agent_core::service::AgentService::new(agent_core::lifecycle::AgentLifecycleState::Created))
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
@@ -123,6 +124,7 @@ pub fn run() {
       agent_v2::start_agent_task,
       agent_v2::approve_agent_task,
       agent_v2::reject_agent_task,
+      agent_core::commands::agent_lifecycle_transition,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,
