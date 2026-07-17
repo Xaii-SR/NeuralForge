@@ -194,6 +194,21 @@ export default function ProviderManager() {
                     </div>
                   )}
 
+                  {/* Capability metadata - provider-level, used by capability-based
+                      task routing (see provider_router::select_provider_and_model_for_task
+                      on the backend). Per-model speed/cost/reasoning scores don't exist
+                      yet - these badges reflect what the provider actually declares. */}
+                  <div className="rounded bg-neutral-50 p-1.5 dark:bg-neutral-800/50">
+                    <div className="text-[10px] text-neutral-400 mb-1">Capabilities</div>
+                    <div className="flex flex-wrap gap-1">
+                      <span className="rounded bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300">{cfg.capabilities.context_length.toLocaleString()} ctx</span>
+                      {cfg.capabilities.coding && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">Coding</span>}
+                      {cfg.capabilities.vision && <span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">Vision</span>}
+                      {(cfg.capabilities.tool_calling || cfg.capabilities.function_calling) && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">Tools</span>}
+                      {cfg.capabilities.streaming && <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-600 dark:bg-green-900/30 dark:text-green-400">Streaming</span>}
+                    </div>
+                  </div>
+
                   {/* Task model assignment */}
                   <div className="space-y-1.5">
                     <div className="text-[10px] text-neutral-400">Assign to tasks</div>

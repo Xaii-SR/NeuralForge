@@ -4,13 +4,17 @@ import { useEffect, useState } from "react";
 import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
 import { getAppConfig, saveAppConfig } from "@/lib/store";
+import ProviderManager from "@/components/ProviderManager";
 
 export interface SettingsPanelProps { onClose: () => void; }
 
 /**
- * Ollama is the only provider with a real, working client end to end.
- * Cloud providers are intentionally not listed here until their Rust
- * adapters exist - unfinished providers must never appear as options.
+ * Ollama is always available with zero configuration and is the fallback
+ * used whenever a chat model isn't found in any configured cloud/custom
+ * provider (see provider_router::resolve_provider_for_model on the backend).
+ * These are its known-good defaults for when Ollama itself is unreachable
+ * (so the dropdown is never empty) - not a list of "the only providers",
+ * which now also includes whatever is configured below via ProviderManager.
  */
 const FALLBACK_MODELS = ["qwen2.5-coder:7b", "deepseek-coder:latest", "llama3.1:latest"];
 
@@ -78,20 +82,14 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[1px]" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-[520px] overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 text-sm text-neutral-800 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-[640px] overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 text-sm text-neutral-800 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-base font-semibold">Settings</h2>
           <button onClick={onClose} aria-label="Close settings" className="rounded px-1.5 py-0.5 text-neutral-400 transition-colors hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
         </div>
         {loading ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-neutral-500"><Spinner /> Loading...</div> : (<>
           <div className="mb-5 space-y-3">
-            <div>
-              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">Provider</div>
-              <div className="flex items-center justify-between rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-800">
-                <span>Ollama</span>
-                <span className="text-xs text-neutral-400 dark:text-neutral-500">Local</span>
-              </div>
-            </div>
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Default (Ollama)</div>
             <div>
               <div className="mb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">Model</div>
               <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
@@ -112,6 +110,13 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
               <option value="High">High</option>
               <option value="Extra High">Extra High</option>
             </select>
+          </div>
+          <div className="mb-5 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Cloud &amp; Custom Providers</div>
+            <div className="mb-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+              Any model added here becomes selectable across the app; chat automatically routes to whichever provider owns the model. Ollama remains the default when a model isn&apos;t found below.
+            </div>
+            <ProviderManager />
           </div>
           <div className="mb-5"><div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Response Cache</div><div className="flex items-center gap-2"><button onClick={handleClearCache} className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">Clear Cache</button>{cacheStatus && <span className="text-xs text-neutral-500">{cacheStatus}</span>}</div></div>
         </>)}

@@ -4,6 +4,21 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Persistent provider configuration stored in SQLite.
+///
+/// SECURITY NOTE (audited, not yet remediated - flagged per engineering
+/// constitution rather than silently shipped): `api_key` is stored as plain
+/// text JSON in the `settings` table, the same table used for UI
+/// preferences. No OS keychain / encrypted-at-rest layer exists anywhere in
+/// this codebase (`Cargo.toml` has no `keyring` or equivalent dependency).
+/// This is acceptable for local Ollama (no key) but is a real exposure for
+/// any user who adds a cloud provider API key: the key is readable by
+/// anything that can read the workspace's `index.db` file. Required
+/// migration before cloud providers ship to non-technical users: move
+/// `api_key` into the OS credential store (e.g. the `keyring` crate) and
+/// store only a reference/id in this struct, mirroring how Windows
+/// Credential Manager / macOS Keychain / libsecret are normally used from
+/// Rust. Deliberately NOT done in this change per the "no large unrelated
+/// refactor" constraint - this is a Level 3+ change of its own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
@@ -88,16 +103,14 @@ fn epoch_secs() -> i64 {
 // Persistence
 // ═══════════════════════════════════════════════════════════════
 
-fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        params![SETTINGS_KEY_PROVIDERS],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
-    .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
-    .unwrap_or_else(|| vec![ProviderConfig {
-        id: "default-ollama".to_string(),
+/// The built-in local provider. Always present even with an empty/missing
+/// `settings` row, and always present in `load_providers_raw`'s output (see
+/// below) so model resolution always has a safe local fallback.
+pub const DEFAULT_OLLAMA_ID: &str = "default-ollama";
+
+pub fn default_ollama_provider() -> ProviderConfig {
+    ProviderConfig {
+        id: DEFAULT_OLLAMA_ID.to_string(),
         name: "Ollama (Local)".to_string(),
         provider_type: "ollama".to_string(),
         base_url: "http://localhost:11434".to_string(),
@@ -107,7 +120,25 @@ fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
         is_default: true,
         capabilities: ProviderCapabilities::default(),
         created_at: 0,
-    }])
+    }
+}
+
+fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![SETTINGS_KEY_PROVIDERS],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
+    .unwrap_or_else(|| vec![default_ollama_provider()])
+}
+
+/// Public read accessor for other `ai::` modules (routing, capability-based
+/// model selection) - `load_providers_raw` stays private so persistence
+/// details (the `settings` table encoding) aren't leaked beyond this file.
+pub fn load_providers(conn: &Connection) -> Vec<ProviderConfig> {
+    load_providers_raw(conn)
 }
 
 fn save_providers_raw(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {

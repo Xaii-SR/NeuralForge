@@ -10,6 +10,7 @@ pub mod inline;
 pub mod web;
 pub mod model_manager;
 pub mod provider_registry;
+pub mod provider_router;
 pub mod providers;
 pub mod router;
 
@@ -254,6 +255,7 @@ where
 async fn chat_or_use_cache<F>(
     health: &HealthRegistry,
     cached: Option<String>,
+    config: &provider_registry::ProviderConfig,
     model: &str,
     messages: Vec<ollama::ChatMessage>,
     mut on_token: F,
@@ -268,7 +270,18 @@ where
     }
     tracing::info!(target: "ai", event = "cache_miss", model = %model);
 
-    let (response, _stats) = chat_with_model_core(health, model, messages, &mut on_token).await?;
+    // The Ollama path goes through chat_with_model_core exactly as it
+    // always has (VRAM gating, "ollama" health key, existing log lines and
+    // tests are all pinned to this function). Every other configured
+    // provider routes through provider_router, which owns adapter selection
+    // for anything non-Ollama - see its module doc for why the two paths
+    // aren't merged into one generic function.
+    let response = if config.provider_type == "ollama" {
+        let (response, _stats) = chat_with_model_core(health, model, messages, &mut on_token).await?;
+        response
+    } else {
+        provider_router::stream_cloud_chat(health, config, model, messages, &mut on_token).await?
+    };
     Ok(Some(response))
 }
 
@@ -281,13 +294,16 @@ pub async fn chat_with_model(
     model: String,
     messages: Vec<ollama::ChatMessage>,
 ) -> AppResult<()> {
-    let cached = {
+    let (cached, config) = {
         let guard = db.conn.lock().unwrap();
-        guard.as_ref().and_then(|conn| cache::get_cached(conn, &model, &messages))
+        let conn = guard.as_ref();
+        let cached = conn.and_then(|conn| cache::get_cached(conn, &model, &messages));
+        let config = provider_router::resolve_provider_for_model(conn, &model);
+        (cached, config)
     };
     let was_cached = cached.is_some();
 
-    let fresh = chat_or_use_cache(&health, cached, &model, messages.clone(), move |token, done| {
+    let fresh = chat_or_use_cache(&health, cached, &config, &model, messages.clone(), move |token, done| {
         let _ = app.emit(
             crate::core::events::AI_RESPONSE_TOKEN,
             serde_json::json!({
@@ -395,6 +411,7 @@ mod tests {
         let conn = crate::database::open_for_workspace(&dir).unwrap();
 
         let health = HealthRegistry::default();
+        let config = provider_registry::default_ollama_provider();
         let model = "deepseek-coder:latest";
         let messages = vec![ollama::ChatMessage {
             role: "user".to_string(),
@@ -405,7 +422,7 @@ mod tests {
         assert!(cache::get_cached(&conn, model, &messages).is_none());
         let start1 = std::time::Instant::now();
         let mut streamed1 = String::new();
-        let fresh1 = chat_or_use_cache(&health, None, model, messages.clone(), |t, _d| streamed1.push_str(t))
+        let fresh1 = chat_or_use_cache(&health, None, &config, model, messages.clone(), |t, _d| streamed1.push_str(t))
             .await
             .unwrap();
         let elapsed1 = start1.elapsed();
@@ -417,7 +434,7 @@ mod tests {
         assert!(cached2.is_some());
         let start2 = std::time::Instant::now();
         let mut streamed2 = String::new();
-        let fresh2 = chat_or_use_cache(&health, cached2, model, messages.clone(), |t, _d| streamed2.push_str(t))
+        let fresh2 = chat_or_use_cache(&health, cached2, &config, model, messages.clone(), |t, _d| streamed2.push_str(t))
             .await
             .unwrap();
         let elapsed2 = start2.elapsed();
