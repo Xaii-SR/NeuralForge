@@ -1,3 +1,5 @@
+use crate::ai::providers::ollama;
+use crate::ai::router::{score_models, Preferences};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use specta::Type;
@@ -166,27 +168,23 @@ pub async fn async_stream_completion(app: AppHandle, request_id: String, file_pa
     }
 }
 
-/// Calls Ollama's `/api/generate` with a FIM prompt and returns the raw completion text.
+/// Calls Ollama's `/api/generate` (FIM/raw completion) via the shared
+/// `providers::ollama` adapter - no separate HTTP client. Model is picked
+/// from real installed models via the same speed-biased heuristic
+/// `provider_router::generate_for_task` uses for latency-sensitive tasks
+/// (`ai::router::score_models` with a "speed" goal), never hardcoded: ghost
+/// text fires on nearly every keystroke, so a small/fast model matters here
+/// more than anywhere else in the app.
 async fn call_ollama_fim(fim_prompt: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post("http://localhost:11434/api/generate")
-        .json(&serde_json::json!({
-            "model": "qwen2.5-coder:1.5b",
-            "prompt": fim_prompt,
-            "stream": false,
-            "raw": true,
-            "options": { "num_predict": 64, "temperature": 0.1 }
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Ollama connection failed: {e}"))?;
+    let models = ollama::list_models().await.map_err(|e| e.to_string())?;
+    let prefs = Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
+    let model = score_models(&models, &prefs)
+        .into_iter()
+        .next()
+        .map(|(_, name, _)| name)
+        .ok_or_else(|| "no local Ollama models available".to_string())?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse: {e}"))?;
-    if let Some(err) = body.get("error").and_then(|v| v.as_str()) {
-        return Err(err.to_string());
-    }
-    Ok(body.get("response").and_then(|v| v.as_str()).unwrap_or("").to_string())
+    ollama::generate_raw(&model, fim_prompt, 64, 0.1).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

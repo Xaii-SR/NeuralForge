@@ -91,6 +91,44 @@ pub async fn list_models() -> AppResult<Vec<OllamaModel>> {
         .collect())
 }
 
+/// Raw (non-chat) completion via `/api/generate`, used for fill-in-middle
+/// (FIM) ghost-text prompting. This is a genuinely different Ollama API
+/// shape than `chat_stream`'s `/api/chat` (a raw prompt string in, not a
+/// message list), so it can't be expressed through `chat_stream` - this
+/// completes this adapter's own surface rather than introducing a second
+/// HTTP client elsewhere. `raw: true` tells Ollama to use the prompt
+/// verbatim without applying the model's chat template, required for FIM
+/// tokens like `<|fim_prefix|>` to reach the model unmodified.
+pub async fn generate_raw(model: &str, prompt: &str, num_predict: u32, temperature: f32) -> AppResult<String> {
+    let resp = client()
+        .post(format!("{BASE_URL}/api/generate"))
+        .json(&serde_json::json!({
+            "model": model,
+            "prompt": prompt,
+            "stream": false,
+            "raw": true,
+            "options": { "num_predict": num_predict, "temperature": temperature }
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::Provider(format!("Ollama unreachable: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(AppError::Provider(format!("Ollama returned status {}", resp.status())));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Provider(format!("bad /api/generate response: {e}")))?;
+
+    if let Some(err) = body.get("error").and_then(|v| v.as_str()) {
+        return Err(AppError::Provider(err.to_string()));
+    }
+
+    Ok(body.get("response").and_then(|v| v.as_str()).unwrap_or("").to_string())
+}
+
 pub async fn remove_model(name: &str) -> AppResult<()> {
     let resp = client()
         .delete(format!("{BASE_URL}/api/delete"))
@@ -267,5 +305,18 @@ mod tests {
         assert!(!accumulated.trim().is_empty(), "expected non-empty streamed content");
         assert!(stats.eval_count.is_some(), "expected Ollama to report eval_count");
         assert!(stats.tokens_per_second().is_some(), "expected a computable TPS from real stats");
+    }
+
+    /// Real round trip for the FIM/raw completion path used by ghost text
+    /// (`ai::completion::call_ollama_fim`), now routed through this adapter
+    /// instead of a separate hand-rolled HTTP client.
+    #[tokio::test]
+    #[ignore = "requires a running local Ollama instance"]
+    async fn generate_raw_produces_real_fim_completion() {
+        let response = generate_raw("deepseek-coder:latest", "<|fim_prefix|>fn add(a: i32, b: i32) -> i32 {\n    <|fim_suffix|>\n}<|fim_middle|>", 32, 0.1)
+            .await
+            .expect("generate_raw should succeed against a running Ollama instance");
+
+        assert!(!response.trim().is_empty(), "expected a non-empty real completion");
     }
 }

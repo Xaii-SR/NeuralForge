@@ -73,6 +73,56 @@ pub fn resolve_provider_for_model(conn: Option<&Connection>, model: &str) -> Pro
         .unwrap_or_else(provider_registry::default_ollama_provider)
 }
 
+/// Fast-path streaming entry point for latency-sensitive, already-resolved
+/// callers (inline edit, ghost text) that just need "stream this exact
+/// model, whichever adapter it belongs to" without the full chat pipeline's
+/// cache/VRAM-gate/request-id bookkeeping. Takes an already-resolved
+/// `ProviderConfig` (resolve it synchronously via `resolve_provider_for_model`
+/// before calling this - see that function's doc comment on why a
+/// `Connection` guard can't cross this function's await points) so this
+/// stays a single dispatch decision, not a second routing system: Ollama
+/// goes straight to the same `providers::ollama::chat_stream` adapter
+/// `ai::chat_with_model_core` uses, everything else delegates to
+/// `stream_cloud_chat` below.
+pub async fn stream_chat<F>(
+    health: &HealthRegistry,
+    config: &ProviderConfig,
+    model: &str,
+    messages: Vec<ollama::ChatMessage>,
+    mut on_token: F,
+) -> AppResult<String>
+where
+    F: FnMut(&str, bool),
+{
+    if config.provider_type != "ollama" {
+        return stream_cloud_chat(health, config, model, messages, on_token).await;
+    }
+
+    let health_key = health_key_for(config);
+    if !health.is_healthy(&health_key) {
+        return Err(AppError::Provider(format!(
+            "{} is in cooldown after repeated failures - try again shortly",
+            config.name
+        )));
+    }
+
+    let start = Instant::now();
+    let mut accumulated = String::new();
+    let result = ollama::chat_stream(model, messages, |token, done| {
+        if !token.is_empty() {
+            accumulated.push_str(token);
+        }
+        on_token(token, done);
+    })
+    .await;
+
+    match &result {
+        Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
+        Err(_) => health.record_failure(&health_key),
+    }
+    result.map(|_| accumulated)
+}
+
 /// Streams a chat completion through whichever adapter `config.provider_type`
 /// maps to. Ollama's own request path (VRAM gating, model discovery) is
 /// intentionally NOT duplicated here - see `ai::chat_with_model_core` in
@@ -423,5 +473,33 @@ mod tests {
         .expect("should generate via the local Ollama fallback");
 
         assert!(!response.trim().is_empty(), "expected a non-empty real generation");
+    }
+
+    /// Proves the new fast-path `stream_chat` entry point (what
+    /// `inline.rs::stream_inline_edit` now calls) produces a real,
+    /// token-streamed generation via the resolved Ollama config, against a
+    /// real running local Ollama instance.
+    #[tokio::test]
+    #[ignore = "requires a running local Ollama instance"]
+    async fn stream_chat_streams_real_tokens_for_resolved_ollama_config() {
+        let health = HealthRegistry::default();
+        let models = ollama::list_models().await.expect("Ollama must be reachable for this test");
+        let model = models.first().expect("expected at least one local model").name.clone();
+        let config = resolve_provider_for_model(None, &model);
+        assert_eq!(config.provider_type, "ollama");
+
+        let mut streamed = String::new();
+        let response = stream_chat(
+            &health,
+            &config,
+            &model,
+            vec![ollama::ChatMessage { role: "user".to_string(), content: "Reply with exactly the word: hello".to_string() }],
+            |token, _done| streamed.push_str(token),
+        )
+        .await
+        .expect("should stream a real response");
+
+        assert!(!response.trim().is_empty());
+        assert_eq!(response, streamed, "accumulated response should match what was streamed token-by-token");
     }
 }

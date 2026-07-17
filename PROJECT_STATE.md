@@ -9,11 +9,85 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-ee66607 — "fix: correct architecture audit file extensions to .md"
+fb61134 — "Migrate agent_v2 to unified AI provider router"
 
 Current branch:
 
 master
+
+## Inline Edit / Ghost Text Provider Migration (Phase 3)
+
+**Mission:** the agent architecture audit flagged `ai::inline` (Ctrl+K
+inline edit) and `ai::completion` (ghost text) as the two remaining
+AI-generation paths bypassing `ai::provider_router`. This phase migrated
+both — audit-first, confirmed via grep and full file reads that both
+genuinely bypassed the router before touching anything.
+
+**What changed:**
+- `ai::provider_router` gained `stream_chat(health, config, model, messages,
+  on_token) -> AppResult<String>` — a fast-path streaming dispatcher for
+  callers that already have a resolved `ProviderConfig` (via
+  `resolve_provider_for_model`, called synchronously before this, same
+  Connection-across-await constraint as `generate_for_task`). Ollama goes
+  straight to `providers::ollama::chat_stream`; everything else delegates
+  to the existing `stream_cloud_chat`. No second routing system, per the
+  phase's fast-path requirement.
+- `providers::ollama` (the sanctioned Ollama adapter) gained `generate_raw`,
+  covering `/api/generate` (raw/FIM completion) — a genuinely different API
+  shape than `/api/chat`, needed for ghost text's fill-in-middle prompting,
+  which isn't expressible as a chat message list. This completes the
+  existing adapter's surface; it is not a new adapter or a new HTTP client.
+- `ai::inline::stream_inline_edit` now resolves its provider via
+  `provider_router::resolve_provider_for_model` and streams via the new
+  `stream_chat`, removing its manual `health.is_healthy("ollama")`/
+  `record_success`/`record_failure` duplication and its manual
+  `Arc<Mutex<String>>` accumulation (both now handled inside
+  `provider_router`). Gained a `db: State<'_, DbState>` parameter
+  (Tauri-managed, invisible to the frontend `invoke()` call, same pattern
+  as the `agent_v2` migration).
+- `ai::completion::call_ollama_fim` now calls `ollama::generate_raw`
+  instead of constructing its own `reqwest::Client` against a hardcoded
+  `http://localhost:11434/api/generate`. The previously-hardcoded
+  `"qwen2.5-coder:1.5b"` model is replaced by a live `ollama::list_models()`
+  lookup scored with `ai::router::score_models`'s existing "speed" goal
+  heuristic (the same one `provider_router::generate_for_task` already uses
+  for Fast-classified tasks) — reused, not duplicated.
+- Frontend: **untouched**. `Editor.tsx`'s Ctrl+K flow and ghost-text
+  trigger logic, and every Tauri command's public signature/`invoke()` call
+  site, are unchanged.
+
+**Verified this session:** `cargo check`/`cargo test` (291 passed, 0
+failed, 12 ignored — 2 new ignored tests added)/`cargo clippy --lib`/
+`npm run build`/`npx tsc --noEmit` all clean. Added and ran (opt-in,
+`--ignored`) two real integration tests against this machine's actual
+running Ollama instance:
+`provider_router::stream_chat_streams_real_tokens_for_resolved_ollama_config`
+(proves the exact path `inline.rs` now calls streams real tokens) and
+`providers::ollama::generate_raw_produces_real_fim_completion` (proves the
+exact path `completion.rs` now calls produces a real FIM completion) — both
+passed.
+
+**Additional provider-bypass module discovered, not modified this
+phase:** `ai::autocomplete.rs` also constructs its own `reqwest::Client`
+against a hardcoded `http://localhost:11434/api/generate` — the same
+pattern `completion.rs` had. It was not named in this phase's scope (only
+`inline.rs`/`completion.rs` were), so it was left untouched per "smallest
+safe change" discipline and is flagged here for a future phase rather than
+folded in opportunistically.
+
+**Still open (unrelated to this phase, correctly out of scope):**
+- `ai::docs.rs`/`ai::web.rs` construct their own `reqwest::Client`s, but
+  for fetching documentation pages / web search results — not AI-provider
+  chat calls, so not a "provider bypass" in the sense this phase (or the
+  provider-routing mission generally) is concerned with.
+- `bootstrap/environment.rs` pings a hardcoded `127.0.0.1:11434` at boot as
+  an environment-readiness gate (not a generation call) — same reasoning,
+  not in scope.
+- `agent_v2`'s hardcoded `"."` workspace root and discarded/advisory-only
+  reviewer step (documented in the agent architecture audit) remain
+  unaddressed — orthogonal to AI routing.
+- `task_orchestrator`/`AgentWorkbench.tsx`/`multi_agent.rs` remain fully
+  inert (documented in the agent architecture audit) — untouched.
 
 ## Agent Architecture (this session — Phase 2)
 
