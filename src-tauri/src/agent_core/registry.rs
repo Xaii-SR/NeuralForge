@@ -54,6 +54,24 @@ impl AgentRegistry {
         let service = services.get(task_id).ok_or(AgentError::TaskNotFound)?;
         service.current_state()
     }
+
+    /// Evicts `task_id`'s `AgentService`, e.g. after its internal lock has
+    /// been poisoned by a panic mid-`transition`. A poisoned `AgentService`
+    /// cannot be un-poisoned in place; the only recovery is to drop it and
+    /// let a future `register` create a fresh one, which resets that task's
+    /// advisory view to whatever `initial_state` the caller passes next -
+    /// callers should treat that as a real gap in this task's history, not
+    /// a seamless recovery. Only recovers this registry's own `services`
+    /// lock is unaffected; if that outer lock is itself poisoned, this call
+    /// fails with `LockPoisoned` too, same as every other method here.
+    pub fn recover_task(&self, task_id: &str) -> Result<(), AgentError> {
+        let mut services = self.services.write().map_err(|_| AgentError::LockPoisoned)?;
+        if services.remove(task_id).is_some() {
+            Ok(())
+        } else {
+            Err(AgentError::TaskNotFound)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +107,34 @@ mod tests {
     fn current_state_on_an_unregistered_task_returns_task_not_found() {
         let registry = AgentRegistry::new();
         assert_eq!(registry.current_state("missing"), Err(AgentError::TaskNotFound));
+    }
+
+    #[test]
+    fn recover_task_evicts_a_registered_task() {
+        let registry = AgentRegistry::new();
+        registry.register("task-1".to_string(), AgentLifecycleState::Created).unwrap();
+
+        registry.recover_task("task-1").unwrap();
+
+        assert_eq!(registry.current_state("task-1"), Err(AgentError::TaskNotFound));
+    }
+
+    #[test]
+    fn recover_task_on_an_unregistered_task_returns_task_not_found() {
+        let registry = AgentRegistry::new();
+        assert_eq!(registry.recover_task("missing"), Err(AgentError::TaskNotFound));
+    }
+
+    #[test]
+    fn re_registering_after_recover_task_starts_fresh() {
+        let registry = AgentRegistry::new();
+        registry.register("task-1".to_string(), AgentLifecycleState::Created).unwrap();
+        registry.transition("task-1", AgentEventType::PlanningStarted).unwrap();
+
+        registry.recover_task("task-1").unwrap();
+        let result = registry.register("task-1".to_string(), AgentLifecycleState::Created).unwrap();
+
+        assert_eq!(result, AgentLifecycleState::Created, "recovered task must not retain pre-recovery state");
     }
 
     #[test]
