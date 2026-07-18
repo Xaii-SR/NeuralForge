@@ -2,6 +2,7 @@ pub mod autocomplete;
 pub mod cache;
 pub mod completion;
 pub mod composer;
+pub mod credential_store;
 pub mod docs;
 pub mod git;
 pub mod context;

@@ -1,3 +1,4 @@
+use crate::ai::credential_store;
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -110,20 +111,16 @@ pub fn clamp_capabilities(provider_type: &str, requested: ProviderCapabilities) 
 
 /// Persistent provider configuration stored in SQLite.
 ///
-/// SECURITY NOTE (audited, not yet remediated - flagged per engineering
-/// constitution rather than silently shipped): `api_key` is stored as plain
-/// text JSON in the `settings` table, the same table used for UI
-/// preferences. No OS keychain / encrypted-at-rest layer exists anywhere in
-/// this codebase (`Cargo.toml` has no `keyring` or equivalent dependency).
-/// This is acceptable for local Ollama (no key) but is a real exposure for
-/// any user who adds a cloud provider API key: the key is readable by
-/// anything that can read the workspace's `index.db` file. Required
-/// migration before cloud providers ship to non-technical users: move
-/// `api_key` into the OS credential store (e.g. the `keyring` crate) and
-/// store only a reference/id in this struct, mirroring how Windows
-/// Credential Manager / macOS Keychain / libsecret are normally used from
-/// Rust. Deliberately NOT done in this change per the "no large unrelated
-/// refactor" constraint - this is a Level 3+ change of its own.
+/// SECURITY NOTE (remediated): `api_key` here is the in-memory/IPC-facing
+/// value only. The `settings` table row for `SETTINGS_KEY_PROVIDERS` never
+/// contains a real key - `save_providers_raw` blanks `api_key` on every
+/// provider before serializing, and `load_providers_raw` fills it back in
+/// from the OS credential store (`ai::credential_store`, backed by the
+/// `keyring` crate: Windows Credential Manager / macOS Keychain / Linux
+/// libsecret) keyed by provider `id`. `add_provider_config`/
+/// `update_provider_config` write the real key to the keychain before it
+/// ever reaches `save_providers_raw`; `delete_provider_config` removes the
+/// keychain entry alongside the config row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
@@ -254,14 +251,20 @@ pub fn default_ollama_provider() -> ProviderConfig {
 }
 
 fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        params![SETTINGS_KEY_PROVIDERS],
-        |r| r.get::<_, String>(0),
-    )
-    .ok()
-    .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
-    .unwrap_or_else(|| vec![default_ollama_provider()])
+    let mut providers = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![SETTINGS_KEY_PROVIDERS],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
+        .unwrap_or_else(|| vec![default_ollama_provider()]);
+
+    for provider in &mut providers {
+        provider.api_key = credential_store::load_api_key(&provider.id);
+    }
+    providers
 }
 
 /// Public read accessor for other `ai::` modules (routing, capability-based
@@ -272,7 +275,17 @@ pub fn load_providers(conn: &Connection) -> Vec<ProviderConfig> {
 }
 
 fn save_providers_raw(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {
-    let json = serde_json::to_string(providers)
+    // Never persist a real api_key to disk - it lives only in the OS
+    // keychain (see this struct's SECURITY NOTE doc comment above).
+    let redacted: Vec<ProviderConfig> = providers
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            p.api_key = String::new();
+            p
+        })
+        .collect();
+    let json = serde_json::to_string(&redacted)
         .map_err(|e| AppError::Provider(format!("serialize providers: {e}")))?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
@@ -349,7 +362,8 @@ pub fn add_provider_config(
     let conn = guard.as_ref().ok_or("no workspace open")?;
     let mut providers = load_providers_raw(conn);
 
-    let new = build_provider_config(name, provider_type, base_url, api_key, providers.is_empty());
+    let new = build_provider_config(name, provider_type, base_url, api_key.clone(), providers.is_empty());
+    credential_store::store_api_key(&new.id, &api_key)?;
 
     providers.push(new.clone());
     save_providers_raw(conn, &providers).map_err(|e| e.to_string())?;
@@ -373,7 +387,10 @@ pub fn update_provider_config(
     let provider = providers.iter_mut().find(|p| p.id == id).ok_or("provider not found")?;
     if let Some(n) = name { provider.name = n; }
     if let Some(u) = base_url { provider.base_url = u; }
-    if let Some(k) = api_key { provider.api_key = k; }
+    if let Some(k) = api_key {
+        credential_store::store_api_key(&provider.id, &k)?;
+        provider.api_key = k;
+    }
     if let Some(e) = enabled { provider.enabled = e; }
     if let Some(m) = models { provider.models = m; }
 
@@ -394,6 +411,7 @@ pub fn delete_provider_config(
         return Err("cannot delete the last provider".to_string());
     }
     providers.retain(|p| p.id != id);
+    credential_store::delete_api_key(&id);
     save_providers_raw(conn, &providers).map_err(|e| e.to_string())
 }
 

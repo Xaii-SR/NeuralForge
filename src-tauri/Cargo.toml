@@ -42,6 +42,7 @@ scraper = "0.27.0"
 crossbeam-utils = "0.8"
 thiserror = "1.0"
 url = "2.5.8"
+keyring = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
