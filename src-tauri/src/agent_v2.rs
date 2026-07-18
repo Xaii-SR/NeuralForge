@@ -313,7 +313,19 @@ impl AgentRunner {
             }
 
             task.transition_to(AgentState::Verifying, Some(&app_handle));
-            let executor = FileExecutor::new(".");
+            let workspace_root = {
+                let app_state = app_handle.state::<crate::core::state::AppState>();
+                let root = app_state.workspace_root.lock().unwrap().clone();
+                match root {
+                    Some(r) => r,
+                    None => {
+                        let err_msg = "no workspace open - cannot execute changes without a real workspace root".to_string();
+                        task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
+                        return Err(err_msg);
+                    }
+                }
+            };
+            let executor = FileExecutor::new(&workspace_root.to_string_lossy());
             let mut backups: Vec<(String, Option<String>)> = Vec::new();
 
             println!("[AGENT:{}] Committing {} files to workspace...", task.id, payloads.len());
@@ -330,7 +342,7 @@ impl AgentRunner {
             }
 
             let verifier = WorkspaceVerifier;
-            match verifier.verify_cargo_with_stderr(Path::new(".")) {
+            match verifier.verify_cargo_with_stderr(&workspace_root) {
                 Ok(()) => {
                     println!("[AGENT:{}] Verification passed for {} files.", task.id, payloads.len());
                     task.transition_to(AgentState::Completed, Some(&app_handle));

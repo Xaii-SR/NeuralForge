@@ -282,8 +282,19 @@ fn emit_state(app: &AppHandle, task: &OrchestratorTask) {
 }
 
 #[tauri::command]
-pub fn orchestrator_create_task(app: AppHandle, state: State<'_, OrchestratorState>, goal: String) -> Result<OrchestratorTask, String> {
-    let task = TaskOrchestrator::create_task(&goal, PathBuf::from("."));
+pub fn orchestrator_create_task(
+    app: AppHandle,
+    state: State<'_, OrchestratorState>,
+    app_state: State<'_, crate::core::state::AppState>,
+    goal: String,
+) -> Result<OrchestratorTask, String> {
+    let workspace_root = app_state
+        .workspace_root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no workspace open - cannot start a task without a real workspace root".to_string())?;
+    let task = TaskOrchestrator::create_task(&goal, workspace_root);
     let result = task.clone();
     *state.active_task.lock().unwrap() = Some(task.clone());
     emit_state(&app, &task);
@@ -377,6 +388,20 @@ mod tests {
     use crate::context_retrieval::RankedFile;
     use crate::terminal_executor::{ExecutionRequest, ExecutionResult};
     #[test] fn task_creation() { let t = TaskOrchestrator::create_task("Fix auth bug", PathBuf::from("/tmp")); assert_eq!(t.phase, TaskLifecycle::Created); assert_eq!(t.max_recovery_attempts, 3); }
+    /// orchestrator_create_task now resolves this argument from AppState's
+    /// real workspace_root instead of hardcoding PathBuf::from(".") - this
+    /// pins the underlying contract that create_task stores whatever root
+    /// it's given verbatim, so a real configured workspace root actually
+    /// takes effect rather than being silently discarded. The Tauri command
+    /// itself (State<AppState> extraction) isn't unit-testable without a
+    /// live app context, same constraint every other #[tauri::command] in
+    /// this codebase already has - see orchestrator_create_task's real
+    /// State<AppState> wiring in this file for the fix itself.
+    #[test] fn create_task_preserves_the_given_workspace_root_verbatim() {
+        let root = PathBuf::from("/some/real/workspace");
+        let t = TaskOrchestrator::create_task("goal", root.clone());
+        assert_eq!(t.workspace_root, root, "must propagate the real workspace root, not silently substitute \".\"");
+    }
     #[test] fn state_transitions() { let mut t = TaskOrchestrator::create_task("Test", PathBuf::from("/tmp")); TaskOrchestrator::transition(&mut t, TaskLifecycle::Analyzing); assert_eq!(t.phase, TaskLifecycle::Analyzing); TaskOrchestrator::transition(&mut t, TaskLifecycle::Planning); assert!(t.execution_history.len() >= 2); }
     #[test] fn analyze_and_plan() { let mut t = TaskOrchestrator::create_task("Add logging", PathBuf::from("/tmp")); let ranked = vec![RankedFile { path:"src/main.rs".into(),language:"Rust".into(),priority:100,reason:"match".into(),matched_symbols:vec![],snippet:String::new()}]; TaskOrchestrator::analyze(&mut t, ranked); assert_eq!(t.phase, TaskLifecycle::Planning); assert!(t.agent_context.is_some()); assert!(TaskOrchestrator::plan(&mut t).is_ok()); }
     #[test] fn execute_and_observe() { let mut t = TaskOrchestrator::create_task("Test", PathBuf::from("/tmp")); let ranked = vec![RankedFile { path:"a.rs".into(),language:"Rust".into(),priority:100,reason:"m".into(),matched_symbols:vec![],snippet:String::new()}]; TaskOrchestrator::analyze(&mut t, ranked); TaskOrchestrator::plan(&mut t).unwrap(); TaskOrchestrator::execute_step(&mut t, 0, &PathBuf::from("/tmp")).unwrap(); let r = ExecutionResult { request:ExecutionRequest{command:"cargo".into(),arguments:vec!["check".into()],working_directory:".".into(),timeout_seconds:30}, exit_code:0,stdout:"ok".into(),stderr:String::new(),started_at:0,finished_at:1000,duration_ms:1000,was_cancelled:false }; TaskOrchestrator::observe(&mut t, &r); assert_eq!(t.phase, TaskLifecycle::Verifying); }
