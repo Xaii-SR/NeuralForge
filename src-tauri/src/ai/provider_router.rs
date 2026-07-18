@@ -9,7 +9,7 @@
 
 use crate::ai::health::HealthRegistry;
 use crate::ai::provider_registry::{self, AdapterKind, ProviderConfig};
-use crate::ai::providers::{anthropic, ollama, openai_compatible};
+use crate::ai::providers::{anthropic, gemini, ollama, openai_compatible};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::Connection;
 use std::time::Instant;
@@ -183,6 +183,27 @@ where
             let mut accumulated = String::new();
             client
                 .chat_stream(model, anthropic_messages, |token, done| {
+                    if !token.is_empty() {
+                        accumulated.push_str(token);
+                    }
+                    on_token(token, done);
+                })
+                .await
+                .map(|_stats| accumulated)
+        }
+        AdapterKind::Gemini => {
+            let client = gemini::GeminiProvider::new(
+                config.base_url.clone(),
+                config.api_key.clone(),
+            );
+            let gemini_messages: Vec<gemini::ChatMessage> = messages
+                .into_iter()
+                .map(|m| gemini::ChatMessage { role: m.role, content: m.content })
+                .collect();
+
+            let mut accumulated = String::new();
+            client
+                .chat_stream(model, gemini_messages, |token, done| {
                     if !token.is_empty() {
                         accumulated.push_str(token);
                     }
@@ -491,13 +512,13 @@ mod tests {
     }
 
     #[test]
-    fn adapter_kind_marks_native_only_providers_unimplemented() {
-        assert_eq!(provider_registry::adapter_kind_for("gemini"), AdapterKind::Unimplemented);
+    fn adapter_kind_routes_anthropic_through_its_own_native_adapter() {
+        assert_eq!(provider_registry::adapter_kind_for("anthropic"), AdapterKind::Anthropic);
     }
 
     #[test]
-    fn adapter_kind_routes_anthropic_through_its_own_native_adapter() {
-        assert_eq!(provider_registry::adapter_kind_for("anthropic"), AdapterKind::Anthropic);
+    fn adapter_kind_routes_gemini_through_its_own_native_adapter() {
+        assert_eq!(provider_registry::adapter_kind_for("gemini"), AdapterKind::Gemini);
     }
 
     #[test]

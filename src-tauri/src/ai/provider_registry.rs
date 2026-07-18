@@ -15,8 +15,10 @@ use uuid::Uuid;
 /// Fireworks, DeepInfra, LM Studio, vLLM, llama.cpp, user-defined custom
 /// endpoints). Do not add a new arm here per-company; only add one when a
 /// provider's wire format genuinely cannot be expressed as OpenAI-compatible
-/// chat completions (Gemini's native API is the remaining known case;
-/// Anthropic had this problem too until `providers::anthropic` was added).
+/// chat completions. `Unimplemented` is currently empty - kept as a variant
+/// (rather than removed) because it's the documented fail-loudly landing
+/// spot for the next native-API provider that needs one, same as Anthropic
+/// and Gemini both used it in turn before getting real adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterKind {
     Ollama,
@@ -27,10 +29,17 @@ pub enum AdapterKind {
     /// of `Authorization: Bearer`, a top-level `system` field instead of a
     /// `system` role in `messages`, and Anthropic-specific SSE event types.
     Anthropic,
-    /// Provider type is recognized but has no working adapter yet (Gemini's
-    /// native API today). Fails loudly rather than mis-routing through the
-    /// OpenAI-compatible client, which would silently produce wrong
-    /// requests against that API.
+    /// Google's native Gemini API - see `providers::gemini`. Its own
+    /// variant because the wire format differs from both OpenAiCompatible
+    /// and Anthropic: the API key is a `?key=` query parameter, the
+    /// endpoint path embeds `models/{model}:streamGenerateContent`, and the
+    /// body uses `contents: [{role, parts: [{text}]}]` with role names
+    /// "user"/"model" rather than "user"/"assistant".
+    Gemini,
+    /// Provider type is recognized but has no working adapter yet. Fails
+    /// loudly rather than mis-routing through the OpenAI-compatible client,
+    /// which would silently produce wrong requests against a genuinely
+    /// different native API.
     Unimplemented,
 }
 
@@ -38,7 +47,7 @@ pub fn adapter_kind_for(provider_type: &str) -> AdapterKind {
     match provider_type {
         "ollama" => AdapterKind::Ollama,
         "anthropic" => AdapterKind::Anthropic,
-        "gemini" => AdapterKind::Unimplemented,
+        "gemini" => AdapterKind::Gemini,
         // openai, openai_compatible, openrouter, deepseek, groq, together,
         // fireworks, deepinfra, lmstudio, vllm, llamacpp, custom, mistral, ...
         _ => AdapterKind::OpenAiCompatible,
@@ -90,6 +99,18 @@ pub fn max_capabilities_for(kind: AdapterKind) -> ProviderCapabilities {
             embeddings: false,
             // providers::anthropic has no raw/FIM completion adapter -
             // Anthropic's API has no equivalent endpoint to claim this for.
+            fim: false,
+            context_length: u64::MAX,
+        },
+        AdapterKind::Gemini => ProviderCapabilities {
+            chat: true,
+            streaming: true,
+            coding: true,
+            vision: false,
+            tool_calling: false,
+            function_calling: false,
+            embeddings: false,
+            // providers::gemini has no raw/FIM completion adapter.
             fim: false,
             context_length: u64::MAX,
         },
@@ -570,40 +591,42 @@ mod tests {
         assert!(!config.capabilities.fim, "a freshly built openai_compatible config must not claim fim support");
     }
 
-    /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` (Gemini
-    /// today) must reject every single capability, regardless of what was
-    /// requested - this is the exact bug the Phase 5 audit found: a config
-    /// with `provider_type: "gemini"` previously kept `chat: true`/
+    /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` must
+    /// reject every single capability, regardless of what was requested -
+    /// this is the exact bug the Phase 5 audit found (a config for a
+    /// no-adapter provider type previously kept `chat: true`/
     /// `streaming: true`/`coding: true` from `ProviderCapabilities::default()`
-    /// despite having no working adapter. Anthropic used to be in this list
-    /// too, until `providers::anthropic` gave it a real adapter - see
-    /// `anthropic_adapter_gets_real_capabilities_not_zeroed_out` below.
+    /// despite having no working adapter). No live `provider_type` string
+    /// maps to `Unimplemented` any more - Anthropic and Gemini both used to,
+    /// until `providers::anthropic`/`providers::gemini` gave them real
+    /// adapters (see the `*_adapter_gets_real_capabilities_not_zeroed_out`
+    /// tests below) - so this exercises `max_capabilities_for` directly to
+    /// keep covering the contract for whatever provider lands here next.
     #[test]
     fn unimplemented_adapter_rejects_every_requested_capability() {
-        for provider_type in ["gemini"] {
-            let clamped = clamp_capabilities(provider_type, all_true_capabilities());
-            assert!(!clamped.chat, "{provider_type} must not claim chat support");
-            assert!(!clamped.streaming, "{provider_type} must not claim streaming support");
-            assert!(!clamped.coding, "{provider_type} must not claim coding support");
-            assert!(!clamped.vision, "{provider_type} must not claim vision support");
-            assert!(!clamped.tool_calling, "{provider_type} must not claim tool_calling support");
-            assert!(!clamped.function_calling, "{provider_type} must not claim function_calling support");
-            assert!(!clamped.embeddings, "{provider_type} must not claim embeddings support");
-            assert!(!clamped.fim, "{provider_type} must not claim fim support");
-            assert_eq!(clamped.context_length, 0, "{provider_type} must not claim any usable context length");
-        }
+        let max = max_capabilities_for(AdapterKind::Unimplemented);
+        assert!(!max.chat, "Unimplemented must not claim chat support");
+        assert!(!max.streaming, "Unimplemented must not claim streaming support");
+        assert!(!max.coding, "Unimplemented must not claim coding support");
+        assert!(!max.vision, "Unimplemented must not claim vision support");
+        assert!(!max.tool_calling, "Unimplemented must not claim tool_calling support");
+        assert!(!max.function_calling, "Unimplemented must not claim function_calling support");
+        assert!(!max.embeddings, "Unimplemented must not claim embeddings support");
+        assert!(!max.fim, "Unimplemented must not claim fim support");
+        assert_eq!(max.context_length, 0, "Unimplemented must not claim any usable context length");
     }
 
-    /// Test 2, via the real construction path: creating a provider with
-    /// `provider_type: "gemini"` through `build_provider_config` must come
-    /// out with every capability false, not the old
-    /// `ProviderCapabilities::default()` (chat/streaming/coding: true).
+    /// Gemini now has a real adapter (`providers::gemini`) - a config built
+    /// with `provider_type: "gemini"` must get real capabilities, not the
+    /// zeroed-out `Unimplemented` treatment it used to get.
     #[test]
-    fn build_provider_config_gives_unimplemented_adapter_zero_capabilities() {
-        let config = build_provider_config("Gemini".into(), "gemini".into(), "https://generativelanguage.googleapis.com".into(), "test".into(), false);
-        assert!(!config.capabilities.chat);
-        assert!(!config.capabilities.streaming);
-        assert!(!config.capabilities.coding);
+    fn gemini_adapter_gets_real_capabilities_not_zeroed_out() {
+        let config = build_provider_config("Gemini".into(), "gemini".into(), "https://generativelanguage.googleapis.com/v1beta".into(), "test-key".into(), false);
+        assert!(config.capabilities.chat);
+        assert!(config.capabilities.streaming);
+        assert!(config.capabilities.coding);
+        assert!(!config.capabilities.fim, "Gemini has no raw/FIM completion adapter");
+        assert_eq!(config.adapter_kind(), AdapterKind::Gemini);
     }
 
     /// Anthropic now has a real adapter (`providers::anthropic`) - a config
@@ -640,7 +663,7 @@ mod tests {
         assert_eq!(adapter_kind_for("openai_compatible"), AdapterKind::OpenAiCompatible);
         assert_eq!(adapter_kind_for("openai"), AdapterKind::OpenAiCompatible);
         assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Anthropic);
-        assert_eq!(adapter_kind_for("gemini"), AdapterKind::Unimplemented);
+        assert_eq!(adapter_kind_for("gemini"), AdapterKind::Gemini);
     }
 
     #[test]
