@@ -225,6 +225,41 @@ where
     result
 }
 
+/// Tests connectivity for `provider_type` by dispatching to that adapter's
+/// real `health_check()` - the single place connection testing decides
+/// which adapter to use, mirroring `stream_cloud_chat`'s `AdapterKind`
+/// dispatch above. `base_url`/`api_key` are ignored for `Ollama` (it has no
+/// concept of either - always localhost, no auth) the same way
+/// `stream_chat` already treats Ollama as its own path. `Unimplemented`
+/// fails loudly with an `Err` rather than silently reporting success or
+/// running the wrong adapter's check against it.
+pub async fn test_connection(provider_type: &str, base_url: String, api_key: String) -> Result<bool, String> {
+    let kind = provider_registry::adapter_kind_for(provider_type);
+    test_connection_for_kind(kind, provider_type, base_url, api_key).await
+}
+
+/// The actual per-`AdapterKind` dispatch behind `test_connection`, split out
+/// so `AdapterKind::Unimplemented`'s branch is directly testable - no live
+/// `provider_type` string maps to `Unimplemented` today (see
+/// `provider_registry::adapter_kind_for`'s unmatched-string fallback to
+/// `OpenAiCompatible`), the same reachability gap `provider_registry`'s own
+/// tests hit and worked around by testing `max_capabilities_for` directly.
+async fn test_connection_for_kind(kind: AdapterKind, provider_type: &str, base_url: String, api_key: String) -> Result<bool, String> {
+    match kind {
+        AdapterKind::Ollama => Ok(ollama::health_check().await),
+        AdapterKind::OpenAiCompatible => {
+            Ok(openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key).health_check().await)
+        }
+        AdapterKind::Anthropic => {
+            Ok(anthropic::AnthropicProvider::new(base_url, api_key).health_check().await)
+        }
+        AdapterKind::Gemini => Ok(gemini::GeminiProvider::new(base_url, api_key).health_check().await),
+        AdapterKind::Unimplemented => Err(format!(
+            "{provider_type} does not have a native adapter yet - cannot test connection"
+        )),
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Capability-aware task routing
 // ═══════════════════════════════════════════════════════════════
@@ -489,6 +524,33 @@ mod tests {
             is_default: false,
             capabilities: ProviderCapabilities { coding, context_length, ..ProviderCapabilities::default() },
             created_at: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connection_fails_clearly_for_unimplemented_adapter() {
+        // No provider_type string currently maps to Unimplemented (see
+        // provider_registry::adapter_kind_for's fallback to
+        // OpenAiCompatible for anything unrecognized) - exercise the
+        // Unimplemented branch directly via test_connection_for_kind,
+        // same workaround provider_registry's own tests use for the same
+        // reachability gap.
+        let result = test_connection_for_kind(AdapterKind::Unimplemented, "some-future-provider", String::new(), String::new()).await;
+        assert!(result.is_err(), "an unimplemented adapter must fail the connection test loudly, not report false silently");
+    }
+
+    #[tokio::test]
+    async fn test_connection_dispatches_to_the_real_adapter_for_each_implemented_kind() {
+        // A closed local port - connection refused immediately, no DNS
+        // lookup delay, deterministic Ok(false) rather than a hang.
+        let unreachable = "http://127.0.0.1:1".to_string();
+        for provider_type in ["openai_compatible", "anthropic", "gemini"] {
+            let result = test_connection(provider_type, unreachable.clone(), String::new()).await;
+            assert_eq!(
+                result,
+                Ok(false),
+                "{provider_type} must dispatch to its real adapter and report Ok(false) for an unreachable endpoint, not error out"
+            );
         }
     }
 

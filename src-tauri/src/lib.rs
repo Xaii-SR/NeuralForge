@@ -88,6 +88,7 @@ pub fn run() {
       ai::check_vram_for_model,
       ai::chat_with_model,
       ai::test_openai_compatible_connection,
+      ai::test_provider_connection,
       ai::list_openai_compatible_models,
       ai::provider_registry::list_provider_configs,
       ai::provider_registry::add_provider_config,

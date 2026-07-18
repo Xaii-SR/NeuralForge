@@ -91,7 +91,7 @@ export default function ProviderManager() {
   async function handleTestConnection(config: ProviderConfig) {
     setTesting(true); setTestResult(null);
     try {
-      const ok = await providers.testOpenAiConnection(config.base_url, config.api_key);
+      const ok = await providers.testProviderConnection(config.provider_type, config.base_url, config.api_key);
       setTestResult(ok ? "✓ Connection successful" : "✗ Connection failed");
     } catch (e: any) { setTestResult(`✗ ${e}`); }
     setTesting(false);

@@ -159,6 +159,21 @@ pub async fn test_openai_compatible_connection(
     Ok(provider.health_check().await)
 }
 
+/// Tests connectivity for any configured provider by dispatching to its
+/// real adapter's `health_check()` - see `provider_router::test_connection`
+/// for the dispatch logic. Supersedes always testing via
+/// `test_openai_compatible_connection` regardless of the provider's actual
+/// `provider_type` (that command is kept, unremoved, for any other caller
+/// that specifically wants the OpenAI-compatible check).
+#[tauri::command]
+pub async fn test_provider_connection(
+    provider_type: String,
+    base_url: String,
+    api_key: String,
+) -> Result<bool, String> {
+    provider_router::test_connection(&provider_type, base_url, api_key).await
+}
+
 #[tauri::command]
 pub async fn list_openai_compatible_models(
     base_url: String,

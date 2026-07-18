@@ -88,6 +88,13 @@ export function testOpenAiConnection(baseUrl: string, apiKey: string): Promise<b
   return invoke("test_openai_compatible_connection", { baseUrl, apiKey });
 }
 
+// Dispatches to the correct adapter's real health check based on
+// providerType (ollama/openai_compatible/anthropic/gemini/...), instead of
+// always testing via the OpenAI-compatible client regardless of provider.
+export function testProviderConnection(providerType: string, baseUrl: string, apiKey: string): Promise<boolean> {
+  return invoke("test_provider_connection", { providerType, baseUrl, apiKey });
+}
+
 export function listOpenAiModels(baseUrl: string, apiKey: string): Promise<OpenAiModel[]> {
   return invoke("list_openai_compatible_models", { baseUrl, apiKey });
 }
