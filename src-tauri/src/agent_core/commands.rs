@@ -17,7 +17,7 @@
 
 use crate::agent_core::orchestrator;
 use crate::agent_core::service::AgentError;
-use crate::agent_core::types::AgentEventType;
+use crate::agent_core::types::{AgentEventType, AgentRole};
 use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
@@ -26,18 +26,20 @@ use crate::core::state::AppState;
 use crate::database::DbState;
 use tauri::{AppHandle, State};
 
-/// Advances the named task's advisory lifecycle view by one event. Purely
-/// in-memory bookkeeping via `core.agent_registry` - does not touch
-/// `agent::` or `agent_v2::` execution, persistence, or approval state.
-/// Fails if `task_id` was never registered (see `orchestrator::
-/// register_lifecycle`, called from task creation).
+/// Advances the named `(task_id, role)` pair's advisory lifecycle view by
+/// one event. Purely in-memory bookkeeping via `core.agent_registry` - does
+/// not touch `agent::` or `agent_v2::` execution, persistence, or approval
+/// state. Fails if that exact `(task_id, role)` pair was never registered
+/// (see `orchestrator::register_lifecycle`, called from task creation with
+/// `AgentRole::Architect` today).
 #[tauri::command]
 pub fn agent_lifecycle_transition(
     core: State<'_, AgentCoreState>,
     task_id: String,
+    role: AgentRole,
     event: AgentEventType,
 ) -> Result<AgentLifecycleState, String> {
-    core.agent_registry.transition(&task_id, event).map_err(|e: AgentError| format!("{e:?}"))
+    core.agent_registry.transition(&task_id, role, event).map_err(|e: AgentError| format!("{e:?}"))
 }
 
 pub async fn create_and_plan_task(

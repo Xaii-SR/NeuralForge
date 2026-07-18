@@ -7,6 +7,7 @@
 //! inside the execution authorities being forwarded to.
 
 use crate::agent_core::lifecycle::{AgentLifecycleState, ExecutionBackend};
+use crate::agent_core::types::AgentRole;
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
 use crate::core::errors::AppResult;
@@ -24,12 +25,15 @@ fn record_backend(core: &AgentCoreState, task_id: &str, backend: ExecutionBacken
     }
 }
 
-/// Gives `task_id` its own advisory lifecycle instance in `core.agent_registry`
-/// (see `registry::AgentRegistry`'s doc comment for why per-task isolation
-/// matters). Best-effort like `record_backend` - a poisoned registry lock
-/// must not fail task creation over advisory bookkeeping.
+/// Gives `task_id` its own advisory lifecycle instance in `core.agent_registry`,
+/// under the `Architect` role (see `registry::AgentRegistry`'s doc comment
+/// for why per-(task, role) isolation matters). `Architect` is the default
+/// single-agent role until a real multi-role Council pass registers other
+/// roles under the same task_id too (see `types::AgentRole`'s doc comment).
+/// Best-effort like `record_backend` - a poisoned registry lock must not
+/// fail task creation over advisory bookkeeping.
 fn register_lifecycle(core: &AgentCoreState, task_id: &str) {
-    let _ = core.agent_registry.register(task_id.to_string(), AgentLifecycleState::Created);
+    let _ = core.agent_registry.register(task_id.to_string(), AgentRole::Architect, AgentLifecycleState::Created);
 }
 
 // ── Governed pipeline (agent::) forwarding ──────────────────────────────
@@ -128,6 +132,9 @@ mod tests {
     fn register_lifecycle_gives_the_task_its_own_advisory_state() {
         let core = AgentCoreState::default();
         register_lifecycle(&core, "task-1");
-        assert_eq!(core.agent_registry.current_state("task-1").unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 }
