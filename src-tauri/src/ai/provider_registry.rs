@@ -15,23 +15,30 @@ use uuid::Uuid;
 /// Fireworks, DeepInfra, LM Studio, vLLM, llama.cpp, user-defined custom
 /// endpoints). Do not add a new arm here per-company; only add one when a
 /// provider's wire format genuinely cannot be expressed as OpenAI-compatible
-/// chat completions (Anthropic and Gemini's native APIs are the known
-/// cases).
+/// chat completions (Gemini's native API is the remaining known case;
+/// Anthropic had this problem too until `providers::anthropic` was added).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterKind {
     Ollama,
     OpenAiCompatible,
-    /// Provider type is recognized but has no working adapter yet
-    /// (Anthropic/Gemini native APIs). Fails loudly rather than
-    /// mis-routing through the OpenAI-compatible client, which would
-    /// silently produce wrong requests against those APIs.
+    /// Anthropic's native `/v1/messages` API - see `providers::anthropic`.
+    /// Its own variant (not OpenAiCompatible) because the wire format
+    /// genuinely differs: `x-api-key`/`anthropic-version` headers instead
+    /// of `Authorization: Bearer`, a top-level `system` field instead of a
+    /// `system` role in `messages`, and Anthropic-specific SSE event types.
+    Anthropic,
+    /// Provider type is recognized but has no working adapter yet (Gemini's
+    /// native API today). Fails loudly rather than mis-routing through the
+    /// OpenAI-compatible client, which would silently produce wrong
+    /// requests against that API.
     Unimplemented,
 }
 
 pub fn adapter_kind_for(provider_type: &str) -> AdapterKind {
     match provider_type {
         "ollama" => AdapterKind::Ollama,
-        "anthropic" | "gemini" => AdapterKind::Unimplemented,
+        "anthropic" => AdapterKind::Anthropic,
+        "gemini" => AdapterKind::Unimplemented,
         // openai, openai_compatible, openrouter, deepseek, groq, together,
         // fireworks, deepinfra, lmstudio, vllm, llamacpp, custom, mistral, ...
         _ => AdapterKind::OpenAiCompatible,
@@ -70,6 +77,19 @@ pub fn max_capabilities_for(kind: AdapterKind) -> ProviderCapabilities {
             // endpoints yet (see ai::provider_router::complete_fim) - so no
             // provider of this kind may ever declare fim: true, regardless
             // of what's requested.
+            fim: false,
+            context_length: u64::MAX,
+        },
+        AdapterKind::Anthropic => ProviderCapabilities {
+            chat: true,
+            streaming: true,
+            coding: true,
+            vision: false,
+            tool_calling: false,
+            function_calling: false,
+            embeddings: false,
+            // providers::anthropic has no raw/FIM completion adapter -
+            // Anthropic's API has no equivalent endpoint to claim this for.
             fim: false,
             context_length: u64::MAX,
         },
@@ -550,15 +570,17 @@ mod tests {
         assert!(!config.capabilities.fim, "a freshly built openai_compatible config must not claim fim support");
     }
 
-    /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` (Anthropic/
-    /// Gemini today) must reject every single capability, regardless of what
-    /// was requested - this is the exact bug the Phase 5 audit found: a
-    /// config with `provider_type: "anthropic"` previously kept
-    /// `chat: true`/`streaming: true`/`coding: true` from
-    /// `ProviderCapabilities::default()` despite having no working adapter.
+    /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` (Gemini
+    /// today) must reject every single capability, regardless of what was
+    /// requested - this is the exact bug the Phase 5 audit found: a config
+    /// with `provider_type: "gemini"` previously kept `chat: true`/
+    /// `streaming: true`/`coding: true` from `ProviderCapabilities::default()`
+    /// despite having no working adapter. Anthropic used to be in this list
+    /// too, until `providers::anthropic` gave it a real adapter - see
+    /// `anthropic_adapter_gets_real_capabilities_not_zeroed_out` below.
     #[test]
     fn unimplemented_adapter_rejects_every_requested_capability() {
-        for provider_type in ["anthropic", "gemini"] {
+        for provider_type in ["gemini"] {
             let clamped = clamp_capabilities(provider_type, all_true_capabilities());
             assert!(!clamped.chat, "{provider_type} must not claim chat support");
             assert!(!clamped.streaming, "{provider_type} must not claim streaming support");
@@ -573,15 +595,28 @@ mod tests {
     }
 
     /// Test 2, via the real construction path: creating a provider with
-    /// `provider_type: "anthropic"` through `build_provider_config` must
-    /// come out with every capability false, not the old
+    /// `provider_type: "gemini"` through `build_provider_config` must come
+    /// out with every capability false, not the old
     /// `ProviderCapabilities::default()` (chat/streaming/coding: true).
     #[test]
     fn build_provider_config_gives_unimplemented_adapter_zero_capabilities() {
-        let config = build_provider_config("Claude".into(), "anthropic".into(), "https://api.anthropic.com".into(), "sk-test".into(), false);
+        let config = build_provider_config("Gemini".into(), "gemini".into(), "https://generativelanguage.googleapis.com".into(), "test".into(), false);
         assert!(!config.capabilities.chat);
         assert!(!config.capabilities.streaming);
         assert!(!config.capabilities.coding);
+    }
+
+    /// Anthropic now has a real adapter (`providers::anthropic`) - a config
+    /// built with `provider_type: "anthropic"` must get real capabilities,
+    /// not the zeroed-out `Unimplemented` treatment Gemini still gets.
+    #[test]
+    fn anthropic_adapter_gets_real_capabilities_not_zeroed_out() {
+        let config = build_provider_config("Claude".into(), "anthropic".into(), "https://api.anthropic.com".into(), "sk-test".into(), false);
+        assert!(config.capabilities.chat);
+        assert!(config.capabilities.streaming);
+        assert!(config.capabilities.coding);
+        assert!(!config.capabilities.fim, "Anthropic has no raw/FIM completion adapter");
+        assert_eq!(config.adapter_kind(), AdapterKind::Anthropic);
     }
 
     /// Test 3 (Ollama Regression): the default Ollama provider's existing
@@ -604,7 +639,7 @@ mod tests {
         assert_eq!(adapter_kind_for("ollama"), AdapterKind::Ollama);
         assert_eq!(adapter_kind_for("openai_compatible"), AdapterKind::OpenAiCompatible);
         assert_eq!(adapter_kind_for("openai"), AdapterKind::OpenAiCompatible);
-        assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Unimplemented);
+        assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Anthropic);
         assert_eq!(adapter_kind_for("gemini"), AdapterKind::Unimplemented);
     }
 
