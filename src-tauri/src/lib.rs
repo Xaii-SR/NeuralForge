@@ -61,7 +61,7 @@ pub fn run() {
     .manage(agent_v2::ApprovalRegistry::new())
     .manage(SandboxState::default())
     .manage(OrchestratorState::default())
-    .manage(agent_core::service::AgentService::new(agent_core::lifecycle::AgentLifecycleState::Created))
+    .manage(agent_core::AgentCoreState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,

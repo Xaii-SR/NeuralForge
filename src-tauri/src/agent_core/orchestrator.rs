@@ -6,7 +6,7 @@
 //! `std::fs`, rollback, or verification directly; those remain entirely
 //! inside the execution authorities being forwarded to.
 
-use crate::agent_core::lifecycle::ExecutionBackend;
+use crate::agent_core::lifecycle::{AgentLifecycleState, ExecutionBackend};
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
 use crate::core::errors::AppResult;
@@ -24,6 +24,14 @@ fn record_backend(core: &AgentCoreState, task_id: &str, backend: ExecutionBacken
     }
 }
 
+/// Gives `task_id` its own advisory lifecycle instance in `core.agent_registry`
+/// (see `registry::AgentRegistry`'s doc comment for why per-task isolation
+/// matters). Best-effort like `record_backend` - a poisoned registry lock
+/// must not fail task creation over advisory bookkeeping.
+fn register_lifecycle(core: &AgentCoreState, task_id: &str) {
+    let _ = core.agent_registry.register(task_id.to_string(), AgentLifecycleState::Created);
+}
+
 // ── Governed pipeline (agent::) forwarding ──────────────────────────────
 
 /// Forwards to `agent::create_and_plan_task` unchanged. AgentCore does not
@@ -38,6 +46,7 @@ pub async fn create_and_plan_task(
 ) -> AppResult<crate::agent::AgentTask> {
     let task = crate::agent::create_and_plan_task(state, db, requirement_id, file_path).await?;
     record_backend(core, &task.id, ExecutionBackend::Governed);
+    register_lifecycle(core, &task.id);
     Ok(task)
 }
 
@@ -49,6 +58,7 @@ pub async fn create_and_plan_code_task(
 ) -> AppResult<crate::agent::AgentTask> {
     let task = crate::agent::create_and_plan_code_task(db, objective).await?;
     record_backend(core, &task.id, ExecutionBackend::Governed);
+    register_lifecycle(core, &task.id);
     Ok(task)
 }
 
@@ -85,6 +95,7 @@ pub async fn start_v2_task(
 ) -> Result<String, String> {
     let task_id = crate::agent_v2::start_agent_task(app_handle, registry, description).await?;
     record_backend(core, &task_id, ExecutionBackend::V2);
+    register_lifecycle(core, &task_id);
     Ok(task_id)
 }
 
@@ -111,5 +122,12 @@ mod tests {
         let map = core.task_backends.lock().unwrap();
         assert_eq!(map.get("task-1"), Some(&ExecutionBackend::Governed));
         assert_eq!(map.get("task-2"), Some(&ExecutionBackend::V2));
+    }
+
+    #[test]
+    fn register_lifecycle_gives_the_task_its_own_advisory_state() {
+        let core = AgentCoreState::default();
+        register_lifecycle(&core, "task-1");
+        assert_eq!(core.agent_registry.current_state("task-1").unwrap(), AgentLifecycleState::Created);
     }
 }

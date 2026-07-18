@@ -14,6 +14,7 @@ use crate::agent_core::types::AgentEventType;
 #[derive(Debug, PartialEq, Eq)]
 pub enum AgentError {
     LockPoisoned,
+    TaskNotFound,
 }
 
 pub struct AgentService {

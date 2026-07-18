@@ -50,25 +50,28 @@ pub mod commands;
 pub mod lifecycle;
 pub mod orchestrator;
 pub mod reducer;
+pub mod registry;
 pub mod service;
 pub mod types;
 
 use lifecycle::ExecutionBackend;
+use registry::AgentRegistry;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// AgentCore's own coordination state. Intentionally minimal: the only
-/// thing AgentCore tracks today is which execution backend handled each
-/// task id, for future cross-backend observability (e.g. a unified task
-/// list). It owns no task content, no approval channels, no file state -
-/// those remain in `agent`'s SQLite-backed rows and `agent_v2::
-/// ApprovalRegistry` respectively.
+/// AgentCore's own coordination state. Tracks which execution backend
+/// handled each task id (for future cross-backend observability, e.g. a
+/// unified task list) and, per task, an advisory lifecycle view via
+/// `agent_registry`. It owns no task content, no approval channels, no
+/// file state - those remain in `agent`'s SQLite-backed rows and
+/// `agent_v2::ApprovalRegistry` respectively.
 ///
-/// Not yet `.manage()`-registered in `lib.rs` - see `commands.rs`'s doc
-/// comment for why. Constructible and directly testable regardless.
+/// `.manage()`-registered in `lib.rs`. Constructible and directly testable
+/// regardless.
 #[derive(Default)]
 pub struct AgentCoreState {
     pub(crate) task_backends: Mutex<HashMap<String, ExecutionBackend>>,
+    pub(crate) agent_registry: AgentRegistry,
 }
 
 #[cfg(test)]

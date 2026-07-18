@@ -11,12 +11,12 @@
 //! directly and is unaffected by this file's existence.
 //!
 //! `agent_lifecycle_transition` (Phase 6B Phase 2) is the sole exception:
-//! it is registered in `lib.rs`, narrowly scoped to `AgentService`'s
-//! advisory lifecycle view only. It does not touch `agent::*`/`agent_v2::*`
-//! execution and has no frontend caller yet.
+//! it is registered in `lib.rs`, narrowly scoped to `AgentCoreState::
+//! agent_registry`'s per-task advisory lifecycle view only. It does not
+//! touch `agent::*`/`agent_v2::*` execution and has no frontend caller yet.
 
 use crate::agent_core::orchestrator;
-use crate::agent_core::service::{AgentError, AgentService};
+use crate::agent_core::service::AgentError;
 use crate::agent_core::types::AgentEventType;
 use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::AgentCoreState;
@@ -26,15 +26,18 @@ use crate::core::state::AppState;
 use crate::database::DbState;
 use tauri::{AppHandle, State};
 
-/// Advances AgentCore's advisory lifecycle view by one event. Purely
-/// in-memory bookkeeping via `AgentService` - does not touch `agent::` or
-/// `agent_v2::` execution, persistence, or approval state.
+/// Advances the named task's advisory lifecycle view by one event. Purely
+/// in-memory bookkeeping via `core.agent_registry` - does not touch
+/// `agent::` or `agent_v2::` execution, persistence, or approval state.
+/// Fails if `task_id` was never registered (see `orchestrator::
+/// register_lifecycle`, called from task creation).
 #[tauri::command]
 pub fn agent_lifecycle_transition(
-    service: State<'_, AgentService>,
+    core: State<'_, AgentCoreState>,
+    task_id: String,
     event: AgentEventType,
 ) -> Result<AgentLifecycleState, String> {
-    service.transition(event).map_err(|e: AgentError| format!("{e:?}"))
+    core.agent_registry.transition(&task_id, event).map_err(|e: AgentError| format!("{e:?}"))
 }
 
 pub async fn create_and_plan_task(
