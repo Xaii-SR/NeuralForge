@@ -9,6 +9,7 @@ import ChatPane from "@/components/ChatPane";
 import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
 import AgentWorkbench from "@/components/AgentWorkbench";
+import CouncilPanel from "@/components/CouncilPanel";
 import ExtensionsPanel from "@/components/ExtensionsPanel";
 import BootstrapPanel from "@/components/BootstrapPanel";
 import GovernancePanel from "@/components/GovernancePanel";
@@ -33,7 +34,7 @@ export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const layout = usePanelLayout();
   const [lastEvent, setLastEvent] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions" | "bootstrap" | "governance" | "workers">("terminal");
+  const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "council" | "extensions" | "bootstrap" | "governance" | "workers">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promptMakerOpen, setPromptMakerOpen] = useState(false);
 
@@ -62,14 +63,15 @@ export default function Home() {
           <ResizeHandle orientation="horizontal" label="Resize bottom panel" onPointerDown={layout.startDrag("bottom")} onDoubleClick={() => layout.resetPanel("bottom")} onNudge={(d) => layout.nudgePanel("bottom", d)} />
           <div style={{ height: "var(--nf-bottom-h, 288px)" }} className="flex shrink-0 flex-col border-t border-neutral-200 dark:border-neutral-800">
             <div className="flex h-9 shrink-0 gap-1 border-b border-neutral-200 bg-neutral-50 px-2 dark:border-neutral-800 dark:bg-neutral-900">
-              {(["terminal","logs","agent","extensions","bootstrap","governance","workers"] as const).map((t) => (
-                <button key={t} onClick={() => setBottomTab(t)} className={`${TAB_BUTTON} ${bottomTab === t ? TAB_ACTIVE : TAB_INACTIVE}`}>{t === "terminal" ? "Terminal" : t === "logs" ? "Logs" : t === "agent" ? "Agent" : t === "extensions" ? "Extensions" : t === "bootstrap" ? "Bootstrap" : t === "governance" ? "Governance" : "Workers"}</button>
+              {(["terminal","logs","agent","council","extensions","bootstrap","governance","workers"] as const).map((t) => (
+                <button key={t} onClick={() => setBottomTab(t)} className={`${TAB_BUTTON} ${bottomTab === t ? TAB_ACTIVE : TAB_INACTIVE}`}>{t === "terminal" ? "Terminal" : t === "logs" ? "Logs" : t === "agent" ? "Agent" : t === "council" ? "Council" : t === "extensions" ? "Extensions" : t === "bootstrap" ? "Bootstrap" : t === "governance" ? "Governance" : "Workers"}</button>
               ))}
             </div>
             <div className="min-h-0 flex-1">
               {bottomTab === "terminal" && <div className="h-full"><Terminal /></div>}
               {bottomTab === "logs" && <div className="h-full"><LogViewer /></div>}
               {bottomTab === "agent" && <div className="h-full"><AgentPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
+              {bottomTab === "council" && <div className="h-full"><CouncilPanel /></div>}
               {bottomTab === "extensions" && <div className="h-full"><ExtensionsPanel /></div>}
               {bottomTab === "bootstrap" && <div className="h-full"><BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
               {bottomTab === "governance" && <div className="h-full"><GovernancePanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
