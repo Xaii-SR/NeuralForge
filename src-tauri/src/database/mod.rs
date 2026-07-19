@@ -1,6 +1,7 @@
 pub mod indexer;
 pub mod resolver;
 pub mod search;
+pub mod sessions;
 
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::Connection;
@@ -213,6 +214,35 @@ CREATE TABLE IF NOT EXISTS worker_profiles (
     tasks_completed INTEGER NOT NULL DEFAULT 0,
     tasks_failed INTEGER NOT NULL DEFAULT 0
 );
+
+-- Session persistence (v1.3.0 Phase 1 - database foundation only; no IPC,
+-- no indexing, no frontend yet - see database::sessions).
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    workspace_path TEXT NOT NULL,
+    title TEXT NOT NULL,
+    provider TEXT,
+    active_model TEXT,
+    last_message_preview TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_path);
+
+-- ON DELETE CASCADE mirrors this schema's existing chunks/files precedent
+-- (see chunks.file_id above) - deleting a session must not orphan its
+-- messages.
+CREATE TABLE IF NOT EXISTS session_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL,
+    timestamp INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id);
 "#;
 
 pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
