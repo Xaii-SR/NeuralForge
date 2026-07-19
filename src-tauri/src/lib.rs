@@ -126,6 +126,7 @@ pub fn run() {
       agent_v2::approve_agent_task,
       agent_v2::reject_agent_task,
       agent_core::commands::agent_lifecycle_transition,
+      agent_core::commands::run_council_pass,
       database::index_workspace,
       database::search_workspace,
       database::resolve_file_reference,

@@ -10,14 +10,19 @@
 //! `AgentPanel.tsx` continues to call `agent::*`/`agent_v2::*` commands
 //! directly and is unaffected by this file's existence.
 //!
-//! `agent_lifecycle_transition` (Phase 6B Phase 2) is the sole exception:
-//! it is registered in `lib.rs`, narrowly scoped to `AgentCoreState::
-//! agent_registry`'s per-task advisory lifecycle view only. It does not
-//! touch `agent::*`/`agent_v2::*` execution and has no frontend caller yet.
+//! `agent_lifecycle_transition` (Phase 6B Phase 2) and `run_council_pass`
+//! (Council v1) are the two exceptions: both are registered in `lib.rs`.
+//! `agent_lifecycle_transition` is narrowly scoped to `AgentCoreState::
+//! agent_registry`'s per-`(task, role)` advisory lifecycle view only and
+//! does not touch `agent::*`/`agent_v2::*` execution. `run_council_pass`
+//! genuinely calls `ai::provider_router::generate_for_task` (see
+//! `orchestrator::run_council_pass`'s doc comment) but still does not touch
+//! `agent::*`/`agent_v2::*` execution, persistence, or approval state.
+//! Neither has a frontend caller yet.
 
 use crate::agent_core::orchestrator;
 use crate::agent_core::service::AgentError;
-use crate::agent_core::types::{AgentEventType, AgentRole};
+use crate::agent_core::types::{AgentEventType, AgentRole, CouncilError, CouncilPassResult};
 use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
@@ -40,6 +45,25 @@ pub fn agent_lifecycle_transition(
     event: AgentEventType,
 ) -> Result<AgentLifecycleState, String> {
     core.agent_registry.transition(&task_id, role, event).map_err(|e: AgentError| format!("{e:?}"))
+}
+
+/// Runs one real, sequential Architect -> Critic -> Judge Council v1 pass
+/// against `objective`, under `task_id` (caller-supplied - AgentCore does
+/// not own or require a `task_orchestrator::OrchestratorTask`; pass its
+/// `.id` if one exists, or any fresh id). See `orchestrator::
+/// run_council_pass`/`run_council_pass_with` for the real sequencing and
+/// failure-handling contract. No frontend caller yet - proving the backend
+/// pass works is this mission's whole scope.
+#[tauri::command]
+pub async fn run_council_pass(
+    core: State<'_, AgentCoreState>,
+    app_handle: AppHandle,
+    task_id: String,
+    objective: String,
+) -> Result<CouncilPassResult, String> {
+    orchestrator::run_council_pass(&core, app_handle, &task_id, &objective)
+        .await
+        .map_err(|e: CouncilError| e.to_string())
 }
 
 pub async fn create_and_plan_task(
