@@ -9,11 +9,217 @@ C:\Users\saiah\NeuralForge
 
 Current commit (about to be superseded by this session's commit):
 
-397c75e — "Harden provider architecture with capability/adapter alignment enforcement"
+981d0f8 — "fix: guard SettingsPanel's model-load effect against a non-array response"
+(pushed to `origin/master`; this file's own update commit will supersede it further)
 
 Current branch:
 
 master
+
+## Credential Storage, Cloud Providers, AI Council v1, UI Refinement (this session)
+
+Ten commits, `944cbf7`..`981d0f8`, each independently reviewed and verified
+before the next started. Closes the three release priorities this file's
+"Next Recommended Actions" (below) had left open: secure credential
+storage, real cloud providers, and AI Council — plus two UI fixes found by
+a dedicated audit pass. Summarized here in landing order; see each
+commit's own message for full rationale/diff detail.
+
+**1. `944cbf7`/`dee5f03` — Role-keyed `AgentRegistry` + `recover_task`.**
+Fixed a real bug an audit surfaced in `agent_core`'s advisory lifecycle
+tracker: `AgentService` was a single Tauri-managed instance shared across
+*all* tasks, so concurrent tasks would interleave transitions into one
+meaningless state machine. `AgentRegistry` (`agent_core/registry.rs`) now
+keys by `(task_id, role)` - nested `HashMap<String, HashMap<AgentRole,
+AgentService>>` - so tasks and, later, multiple named roles on the same
+task cannot corrupt each other's state. `recover_task` added for evicting
+a poisoned per-role entry. **This makes `AgentRegistry` a 4th in-memory
+advisory state machine**, alongside the three `lifecycle.rs` already
+named as deliberately separate (`agent::status`, `agent_v2::AgentState`,
+`task_orchestrator::TaskLifecycle`) - still explicitly advisory-only,
+never consulted for real routing decisions, and (as of this session) never
+observing the same task IDs `task_orchestrator::OrchestratorTask` tracks,
+since `task_orchestrator` remains a separate, inert path with no shared
+entry point into `agent_core::orchestrator`'s forwarding functions. No
+live drift risk today; becomes a real one only if something later wires
+Council/AgentCore onto `task_orchestrator`-managed tasks - not scheduled,
+but worth remembering before that happens.
+
+**2. `8c6d7ab` — API keys moved from plaintext SQLite to the OS keychain.**
+Adds `ai::credential_store` (the `keyring` crate: Windows Credential
+Manager / macOS Keychain / libsecret), keyed by provider id.
+`provider_registry::save_providers_raw` now redacts `api_key` to `""`
+before writing to the `settings` table; `load_providers_raw` fills it back
+in from the keychain. `add_provider_config`/`update_provider_config` write
+the real key to the keychain; `delete_provider_config` removes it.
+Verified for real against the actual Windows Credential Manager on this
+machine (`cargo test credential_store -- --ignored`, all 3 keychain tests
+passing: store→load round trip, missing-key-returns-empty, delete-is-
+idempotent) - not just written, genuinely run.
+**Standing disclosed gap, still open:** pre-existing plaintext `api_key`
+rows from before this commit are **not migrated** - they read back as
+`""` after upgrading, requiring a one-time re-entry per provider. Bounded,
+non-silent, self-healing (re-entering the key fixes it permanently and
+moves it into the keychain) - not a security hole, not data loss, but a
+real one-time UX cost on upgrade that has no automated migration path.
+
+**3. `6e1afa4` / `ae48bee` — Real Anthropic and Gemini adapters.**
+`providers::anthropic`/`providers::gemini` (real `reqwest` clients:
+`health_check`/`list_models`/`chat_stream`) replace their prior
+`AdapterKind::Unimplemented` classification with `AdapterKind::Anthropic`/
+`AdapterKind::Gemini`, each with real, adapter-appropriate capabilities
+(chat/streaming/coding; no FIM - neither has a raw/FIM completion
+adapter). Anthropic's wire format (`x-api-key`/`anthropic-version`
+headers, top-level `system` field, Anthropic SSE event types) and
+Gemini's (`?key=` query-param auth, `models/{model}:streamGenerateContent`
+path, `contents`/`parts` body shape, `user`/`model` role names) are both
+genuinely distinct from the OpenAI-compatible shape and from each other -
+neither was forced through the shared client. `AdapterKind::Unimplemented`
+is now unreachable from any live `provider_type` string (Gemini was the
+last one still mapped to it) but kept as a variant for whatever native
+provider needs it next.
+
+**4. `25a580e` — Provider connection testing dispatches by `AdapterKind`.**
+"Test connection" previously always ran the OpenAI-compatible health
+check regardless of the configured provider - testing an Anthropic or
+Gemini config silently validated the wrong endpoint. New
+`provider_router::test_connection`/`test_connection_for_kind` dispatch to
+each adapter's real `health_check()`; `Unimplemented` fails loudly with an
+`Err` instead of a false positive/negative. New `test_provider_connection`
+Tauri command; `ProviderManager.tsx` now calls it with the config's real
+`provider_type` instead of always calling the OpenAI-compatible-specific
+command (which is kept, unremoved, for any other caller).
+
+**5. `4eec335` — Fixed the hardcoded `"."` workspace root.**
+`task_orchestrator::orchestrator_create_task` and `agent_v2::AgentRunner::
+process_task` both hardcoded `PathBuf::from(".")`/`FileExecutor::new(".")`
+/`Path::new(".")` instead of the real open workspace - meaning orchestrated
+tasks and the HITL retry loop were reading/writing relative to the Tauri
+process's cwd, not the user's workspace. Both now read `AppState.
+workspace_root` (the same `Mutex<Option<PathBuf>>` `filesystem::` already
+uses) and fail clearly (`"no workspace open..."`) rather than silently
+defaulting to `.` if none is open. This was a prerequisite fixed
+deliberately *before* Council v1 (item 6) was built on top of the same
+registry, so Council wouldn't inherit the same class of bug.
+
+**6. `95f500b`/`d3735c2` — AI Council v1: real sequential Architect→Critic→Judge pass.**
+`agent_core::orchestrator::run_council_pass_with` is the testable
+sequencing core - generic over how a role's response is obtained, so
+ordering and failure-halting are unit tested without a live model or
+`AppHandle` (this codebase already can't construct a live `AppHandle` in
+tests - see the "MockRuntime decision" referenced in `agent/mod.rs`).
+`run_council_pass` is the thin real wrapper, resolving `providers`/
+`health` from `AppHandle` the same way `agent_v2`'s private `generate()`
+does, then calling real `ai::provider_router::generate_for_task` per role
+- no mocked LLM response in the production path. Each role
+(`AgentRole::Architect`/`Critic`/`Judge`, added to `agent_core::types`,
+distinct from `multi_agent::AgentRole`'s differently-named dead-code enum)
+registers in `AgentRegistry` only once the previous role has genuinely
+succeeded; any role's failure halts immediately with `CouncilError`
+naming exactly which role and why - later roles are never called or
+registered. **Live-verified against a real local Ollama instance**
+(`live_council_pass_produces_a_real_verdict_from_ollama`, `#[ignore]` by
+default, actually run: real sequential pass, real non-`Unclear` verdict,
+~9s). New `run_council_pass` Tauri command registered in `lib.rs`.
+
+**7. `4011bf9` — Minimal frontend wiring for Council v1.**
+`lib/council.ts` (typed `invoke()` wrapper, mirrors `lib/orchestrator.ts`'s
+pattern) + `components/CouncilPanel.tsx` (task_id + objective inputs, Run
+Council button, Architect/Critic/Judge output display with a verdict
+badge, using the existing `Spinner`/`ErrorBanner` primitives - no new UI
+components invented). Wired into `app/page.tsx`'s existing bottom-tab
+pattern as a new "Council" tab. Verified in a real dev-server browser
+session: tab renders, inputs work, clicking "Run Council" without a live
+Tauri backend correctly shows the expected `invoke`-undefined error via
+`ErrorBanner` (not a crash) - proving the UI wiring itself is correct.
+**Standing disclosed gap, still open:** the actual real-Tauri-app,
+real-IPC, real-Ollama, real-verdict-rendered click-through has **never
+been human-observed**. Desktop-control access was explicitly requested and
+denied mid-session (user declined the permission dialog - the correct
+outcome to respect, not retried). Everything *around* this specific path
+is proven (backend live against Ollama in item 6; frontend render/
+interaction/error-handling in-browser; the real Tauri app confirmed
+booting with `run_council_pass` registered via server logs; the IPC
+payload contract statically cross-checked field-by-field against the
+JS↔Rust naming/serde conventions) - but the one hop connecting all of it
+in the real running app has not been clicked. Whoever has desktop access
+should do this once before treating Council v1 as fully proven, not just
+soundly engineered.
+
+**8. `be611cb` — Wired the dead `AgentWorkbench.tsx`, added the missing FIM badge.**
+Audit found `AgentWorkbench` imported in `app/page.tsx` but never rendered
+anywhere in the file (dead code, not broken code - its own internals call
+real, registered `task_orchestrator::*` commands). Further audit found it
+offers real, unique capability - a live event-driven (`listenOrchestratorState`)
+phase timeline plus HITL approve/reject/cancel over `task_orchestrator`'s
+task lifecycle - that neither `AgentPanel` (governed `agent::`/`agent_v2`)
+nor `CouncilPanel` (stateless single-shot) expose. Wired in as a new
+"Workbench" tab rather than deleted; its `streamOutput`/`knowledgeResults`
+state is confirmed genuinely inert (declared, never set by any handler)
+but harmless, left as-is per "don't redesign it." Separately,
+`ProviderManager.tsx`'s capability badges (context length, Coding, Vision,
+Tools, Streaming) were found to omit `fim` entirely despite the backend
+enforcing it strictly (Ollama `true`; every other adapter `false`) - one
+badge added, plus the missing `fim` field added to `lib/providers.ts`'s
+`ProviderCapabilities` TS interface (it didn't exist there at all -
+compile-blocking, not scope creep). Verified by mocking
+`window.__TAURI_INTERNALS__.invoke` in a real browser session with
+controlled fake provider data: a `fim:true` Ollama config renders the
+badge, a `fim:false` Anthropic config doesn't - real component logic
+exercised, not just a static code read.
+
+**9. `981d0f8` — Guarded `SettingsPanel`'s model-load effect.**
+Found while building the FIM-badge mock above: `SettingsPanel.tsx`'s
+`ai.listModels()`-driven effect had no guard against an unexpected
+resolved shape - `models.map(...)` on a non-array would throw inside
+`.then()` with no catch, hanging the panel on "Loading..." forever with
+no visible signal. (Audited and confirmed: the real backend `list_models`
+command always resolves to a real array or rejects, so this specific
+shape was never reachable via today's real IPC - it surfaced only because
+of the mock - but the missing guard was real regardless, for future
+backend changes or IPC drift.) Fix distinguishes a genuine rejection
+(Ollama not running - expected, still falls back silently to
+`FALLBACK_MODELS`, unchanged) from a resolved non-array value (now a real,
+retryable error via the existing `ErrorBanner`). Verified both directions
+with the exact reproduction: mocking `list_models` to resolve `null` now
+shows the error banner instead of hanging; mocking it to reject still
+falls back silently with no regression.
+
+**Verified across this session as a whole:** every commit's own
+`cargo test`/`cargo check`/`npx tsc --noEmit`/`npm run build` output is
+recorded in its commit message or the review that approved it. Backend
+test count grew from a 311-passed baseline (start of this session) to
+**353 passed / 0 failed / 19 ignored** by commit `d3735c2`, holding
+through `981d0f8`. One pre-existing parallel-test flake
+(`database::indexer::tests::index_workspace_reindexes_after_file_change`,
+same root cause already documented below in "Current Issues") and one
+new flake of the same class
+(`ai::completion::tests::cache_miss_diff_file`) were both observed,
+reproduced, and confirmed unrelated to this session's changes via
+isolation + clean rerun.
+
+**Still open after this session (disclosed, not blocking, cheap to close):**
+- The two standing gaps named above: credential migration (item 2) and
+  the Council desktop click-through (item 7).
+- Provider ecosystem: `openrouter`/`groq`/`mistral`/`together`/
+  `fireworks`/`deepseek`/`huggingface` still route generically through
+  `AdapterKind::OpenAiCompatible`. The protocol choice
+  (`Authorization: Bearer`, `/v1/chat/completions`,
+  `choices[].delta.content` SSE) is the correct, standard OpenAI-SDK-
+  compatible convention these vendors deliberately implement - not a
+  defect - but it has **zero live testing** against any of them this
+  session (only LM Studio, via the pre-existing `#[ignore]`d
+  `local_openai_compatible_chat` test, itself never run in this
+  environment for lack of a local LM Studio server). `huggingface`
+  specifically is a real footgun if pointed at HF's classic (non-OpenAI-
+  shaped) Inference API rather than their newer OpenAI-compatible router -
+  fails loudly with a clear status error, not silently, but still worth a
+  user-facing note eventually.
+- This file itself: earlier phase sections below (`AI Provider
+  Architecture`, `AgentCore Scaffold`) contain claims this session's work
+  supersedes - corrected in place below rather than left stale, but their
+  original "as of that session" wording is preserved for history where it
+  doesn't actively mislead.
 
 ## AgentCore Scaffold (Phase 6A)
 
@@ -511,11 +717,18 @@ Frontend (ChatPane, unchanged) → chat_with_model (unchanged public signature)
                                           → providers::openai_compatible
                                           (ONE shared adapter for all of these
                                           — no per-company Rust files)
-      - anthropic/gemini               → explicit "not yet implemented" error
-                                          (no native adapter exists; the code
-                                          refuses to silently mis-route these
-                                          through the OpenAI-compatible client)
+      - anthropic                      → providers::anthropic (real native
+                                          /v1/messages adapter, added this
+                                          session - see top section item 3)
+      - gemini                         → providers::gemini (real native
+                                          streamGenerateContent adapter,
+                                          added this session - see top
+                                          section item 3)
 ```
+**[Corrected - superseded by this session]** The diagram above reflects
+this file's original point in time, when neither adapter existed and both
+failed loudly by design. As of this session, both are real; see the top
+section.
 
 - **Files added:** `src-tauri/src/ai/provider_router.rs` (the router itself:
   adapter selection, health-key isolation per provider, and an honest
@@ -536,22 +749,26 @@ Frontend (ChatPane, unchanged) → chat_with_model (unchanged public signature)
   same health key, same VRAM gate, same log lines, same passing test suite.
 
 **Known limitations, disclosed not hidden:**
-- `ProviderConfig.api_key` is stored as plain-text JSON in the `settings`
-  table (audited this session, documented in a doc comment in
-  `provider_registry.rs`). No OS keychain integration exists in the crate
-  yet (`Cargo.toml` has no `keyring` dependency). Flagged as a required
-  follow-up before shipping cloud-provider API keys to non-technical users;
-  deliberately not implemented this session (would be its own Level 3+
-  change, out of scope for "finish the routing integration").
+- **[Corrected - superseded by this session, see the top section]**
+  `ProviderConfig.api_key` was plain-text JSON in the `settings` table
+  when this section was originally written. As of commit `8c6d7ab` (this
+  session), it is stored in the OS keychain via the `keyring` crate
+  (`Cargo.toml` now has the dependency) - `settings` only ever holds a
+  redacted `""`. Pre-existing plaintext rows from before that commit are
+  not auto-migrated (see the top section's item 2) - the only part of
+  this original bullet still true.
 - Capability metadata (context length, coding/vision/tools/streaming) is
   provider-level, not per-model. There's no per-model speed/cost/reasoning
   score yet — `select_provider_and_model_for_task`'s heuristic uses
   provider-declared capabilities and context length as proxies, which is
   honest but coarse.
-- Anthropic and Gemini native adapters are not implemented — any provider
-  configured with those types will fail with a clear error at chat time,
-  by design, rather than silently routing through the OpenAI-compatible
-  client (which would produce wrong requests against their real APIs).
+- **[Corrected - superseded by this session, see the top section]**
+  Anthropic and Gemini native adapters did not exist when this section was
+  originally written. As of commits `6e1afa4`/`ae48bee` (this session),
+  both have real adapters (`AdapterKind::Anthropic`/`AdapterKind::Gemini`).
+  `AdapterKind::Unimplemented` is now unreachable from any live
+  `provider_type` string, kept only as a variant for whatever native
+  provider needs it next.
 - Full interactive verification (add provider → test connection → discover
   models → chat routes through it) could only be proven through Rust unit
   tests plus browser-level UI/error-path checks this session — the actual
@@ -600,18 +817,29 @@ list.)
 
 ## Next Recommended Actions
 
-1. Real Tauri-runtime verification of the provider CRUD → chat routing flow
-   (add a real OpenAI-compatible endpoint, e.g. a local LM Studio instance,
-   confirm chat actually streams through it) — could not be done from this
-   environment's browser-only preview.
-2. Secure credential storage migration for `ProviderConfig.api_key` (OS
-   keychain via the `keyring` crate) before any cloud provider ships to
-   non-technical users.
-3. Per-model capability/cost/speed metadata (currently provider-level only)
-   if capability-based routing needs to get more precise than the current
-   heuristic.
-4. Investigate the intermittent parallel-test flake noted above.
-5. AI Council — explicitly deferred by this session's mission until the
-   provider routing foundation (this work) was complete. Any AI Council
-   work must consume `provider_router`, not talk to providers directly, per
-   `.clinerules`' adapter-reuse rule.
+**[Corrected - this list is stale relative to this session's work; see the
+top section for what actually landed.]**
+
+1. ~~Secure credential storage migration for `ProviderConfig.api_key`~~ -
+   **done** (commit `8c6d7ab`, OS keychain via `keyring`). One real gap
+   remains: pre-existing plaintext rows aren't auto-migrated (top section,
+   item 2) - a one-time re-entry cost, not a missing feature.
+2. ~~AI Council~~ - **done** (commits `95f500b`/`d3735c2`/`4011bf9`,
+   real sequential Architect→Critic→Judge pass, live-verified against
+   Ollama, minimal frontend wiring). One real gap remains: the actual
+   desktop-app click-through has never been human-observed (top section,
+   item 7) - a manual verification step, not a development task.
+3. Real Tauri-runtime verification of the provider CRUD → chat routing
+   flow for a genuine third-party OpenAI-compatible vendor (OpenRouter/
+   Groq/Mistral/etc., not just LM Studio) - still not done; see top
+   section's "Still open" for the specific risk.
+4. Per-model capability/cost/speed metadata (currently provider-level
+   only) if capability-based routing needs to get more precise than the
+   current heuristic - unchanged, still open.
+5. Investigate the intermittent parallel-test flake noted above (now
+   observed recurring across two more sessions with a different specific
+   test each time - same root cause, still not investigated).
+6. UI refinement - largely closed this session (dead `AgentWorkbench` tab
+   wired in, FIM capability badge added, `SettingsPanel` load-guard fixed
+   - see top section items 8-9). No further gaps found by the dedicated
+   audit pass that produced those fixes.
