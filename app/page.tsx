@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
@@ -37,8 +37,19 @@ export default function Home() {
   const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "workbench" | "council" | "extensions" | "bootstrap" | "governance" | "workers">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promptMakerOpen, setPromptMakerOpen] = useState(false);
+  const [councilOpen, setCouncilOpen] = useState(false);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => { setLastEvent(`${payload.kind}: ${payload.path}`); });
+
+  // Mirrors PromptMaker's own internal Escape handling - CouncilPanel has
+  // no onClose/Escape logic of its own (it's reused as-is, unmodified),
+  // so the floating wrapper here owns it instead, scoped to councilOpen.
+  useEffect(() => {
+    if (!councilOpen) return;
+    function onKeyDown(e: KeyboardEvent) { if (e.key === "Escape") setCouncilOpen(false); }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [councilOpen]);
 
   return (
     <main className="flex h-screen w-screen flex-col bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
@@ -47,13 +58,29 @@ export default function Home() {
         {workspace.workspaceRoot && <span className="truncate text-xs text-neutral-500 dark:text-neutral-500">{workspace.workspaceRoot}</span>}
         <div className="ml-auto flex items-center gap-1">
           <button onClick={() => setPromptMakerOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-purple-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500"><span>🛠️</span><span>Prompt Maker</span></button>
-          <button onClick={() => setBottomTab("council")} className="mr-1 flex items-center gap-1.5 rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500"><span>⚖️</span><span>Council</span></button>
+          <button onClick={() => setCouncilOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500"><span>⚖️</span><span>Council</span></button>
           <button onClick={toggleTheme} aria-label="Toggle theme" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} className="rounded px-2 py-1 text-xs text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">{theme === "dark" ? "☀" : "🌙"}</button>
           <button onClick={() => setSettingsOpen(true)} className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">Settings</button>
         </div>
       </div>
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {promptMakerOpen && <PromptMaker onClose={() => setPromptMakerOpen(false)} />}
+      {councilOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[1px]" onClick={() => setCouncilOpen(false)}>
+          <div onClick={(e) => e.stopPropagation()} className="max-h-[85vh] w-[640px] overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 text-sm text-neutral-800 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-base font-semibold">⚖️ AI Council</h2>
+              <button onClick={() => setCouncilOpen(false)} className="rounded px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
+            </div>
+            <div className="h-[500px]">
+              <CouncilPanel />
+            </div>
+            <div className="mt-4 flex justify-end border-t border-neutral-100 pt-3 dark:border-neutral-800">
+              <button onClick={() => setCouncilOpen(false)} className="rounded px-4 py-1.5 text-xs font-medium text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div ref={layout.rootRef} className="flex min-h-0 flex-1">
         <div style={{ width: "var(--nf-sidebar-w, 256px)" }} className="shrink-0 border-r border-neutral-200 dark:border-neutral-800">
           {workspace.workspaceRoot ? <FileExplorer workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} /> : <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />}
