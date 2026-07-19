@@ -22,9 +22,12 @@ fn main() {
     .unwrap_or_else(|_| "unknown".to_string());
   println!("cargo:rustc-env=NF_BUILD_TIME={build_time}");
 
-  // Re-run this script (and thus refresh the commit hash) whenever HEAD
-  // moves, not just when build.rs itself changes.
-  println!("cargo:rerun-if-changed=../.git/HEAD");
+  // Re-run this script (and thus refresh the commit hash) whenever a new
+  // commit lands on the current branch. `.git/HEAD` only changes on branch
+  // checkout (it just holds `ref: refs/heads/<branch>`), not on ordinary
+  // commits - `.git/logs/HEAD` (the reflog) gets a new line on every
+  // commit/checkout/merge, which is what actually needs watching here.
+  println!("cargo:rerun-if-changed=../.git/logs/HEAD");
 
   tauri_build::build()
 }
