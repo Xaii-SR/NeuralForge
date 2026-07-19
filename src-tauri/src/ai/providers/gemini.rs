@@ -48,6 +48,17 @@ impl GeminiProvider {
         }
     }
 
+    /// Gemini passes its API key as a `?key=` query parameter rather than a
+    /// header (unlike Anthropic/OpenAI-compatible), and `reqwest::Error`'s
+    /// `Display` impl can include the full request URL - including that
+    /// query string - for transport-level failures. Every error string built
+    /// from a `reqwest::Error` in this file must go through this first, so a
+    /// failed request never echoes the user's own live key back into a UI
+    /// error banner or an exported log file.
+    fn redact_key(&self, msg: impl std::fmt::Display) -> String {
+        msg.to_string().replace(&self.api_key, "[REDACTED]")
+    }
+
     fn default_base_url() -> String {
         "https://generativelanguage.googleapis.com/v1beta".to_string()
     }
@@ -77,7 +88,7 @@ impl GeminiProvider {
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .map_err(|e| AppError::Provider(format!("Gemini endpoint unreachable: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("Gemini endpoint unreachable: {}", self.redact_key(e))))?;
 
         if !resp.status().is_success() {
             return Err(AppError::Provider(format!("Gemini returned status {}", resp.status())));
@@ -162,7 +173,7 @@ impl GeminiProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Provider(format!("chat request failed: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("chat request failed: {}", self.redact_key(e))))?;
 
         if !resp.status().is_success() {
             return Err(AppError::Provider(format!(
@@ -252,6 +263,30 @@ mod tests {
     fn gemini_role_remaps_assistant_to_model_and_passes_user_through() {
         assert_eq!(GeminiProvider::gemini_role("assistant"), "model");
         assert_eq!(GeminiProvider::gemini_role("user"), "user");
+    }
+
+    /// Regression test for a real credential-leak bug found during the final
+    /// release audit: reqwest::Error's Display can include the full request
+    /// URL (query string and all) for transport-level failures, and Gemini's
+    /// API key rides in that query string (`?key=...`) rather than a header
+    /// like Anthropic/OpenAI-compatible use. A failed request must never echo
+    /// the live key back into an error string a user could see or export.
+    #[tokio::test]
+    async fn list_models_network_failure_never_echoes_the_api_key() {
+        let provider = GeminiProvider::new(
+            "http://127.0.0.1:1".to_string(),
+            "SECRET_TEST_VALUE_LEAK_CHECK_12345".to_string(),
+        );
+        let err = provider
+            .list_models()
+            .await
+            .expect_err("connecting to a closed local port must fail");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("SECRET_TEST_VALUE_LEAK_CHECK_12345"),
+            "error message leaked the raw API key: {msg}"
+        );
+        assert!(msg.contains("[REDACTED]"), "expected a redaction marker in: {msg}");
     }
 
     /// Requires a real Gemini API key with quota. Not run by default.
