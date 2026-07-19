@@ -21,6 +21,7 @@ export interface ProviderCapabilities {
   tool_calling: boolean;
   function_calling: boolean;
   embeddings: boolean;
+  fim: boolean;
   context_length: number;
 }
 

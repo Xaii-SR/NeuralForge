@@ -206,6 +206,7 @@ export default function ProviderManager() {
                       {cfg.capabilities.vision && <span className="rounded bg-purple-50 px-1.5 py-0.5 text-[10px] text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">Vision</span>}
                       {(cfg.capabilities.tool_calling || cfg.capabilities.function_calling) && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">Tools</span>}
                       {cfg.capabilities.streaming && <span className="rounded bg-green-50 px-1.5 py-0.5 text-[10px] text-green-600 dark:bg-green-900/30 dark:text-green-400">Streaming</span>}
+                      {cfg.capabilities.fim && <span className="rounded bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-600 dark:bg-teal-900/30 dark:text-teal-400">FIM</span>}
                     </div>
                   </div>
 
