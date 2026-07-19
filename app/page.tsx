@@ -47,6 +47,7 @@ export default function Home() {
         {workspace.workspaceRoot && <span className="truncate text-xs text-neutral-500 dark:text-neutral-500">{workspace.workspaceRoot}</span>}
         <div className="ml-auto flex items-center gap-1">
           <button onClick={() => setPromptMakerOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-purple-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500"><span>🛠️</span><span>Prompt Maker</span></button>
+          <button onClick={() => setBottomTab("council")} className="mr-1 flex items-center gap-1.5 rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500"><span>⚖️</span><span>Council</span></button>
           <button onClick={toggleTheme} aria-label="Toggle theme" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} className="rounded px-2 py-1 text-xs text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">{theme === "dark" ? "☀" : "🌙"}</button>
           <button onClick={() => setSettingsOpen(true)} className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">Settings</button>
         </div>

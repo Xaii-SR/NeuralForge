@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import CopyButton from "@/components/ui/CopyButton";
 import { runCouncilPass, type CouncilPassResult } from "@/lib/council";
 
 const VERDICT_BADGE: Record<string, string> = {
@@ -14,9 +15,10 @@ const VERDICT_BADGE: Record<string, string> = {
 
 function StageOutput({ label, output }: { label: string; output: string }) {
   return (
-    <div className="rounded border border-neutral-200 p-2 dark:border-neutral-800">
+    <div className="group relative rounded border border-neutral-200 p-2 dark:border-neutral-800">
       <div className="mb-1 text-[10px] font-medium uppercase text-neutral-500 dark:text-neutral-500">{label}</div>
       <div className="whitespace-pre-wrap text-xs text-neutral-800 dark:text-neutral-200">{output}</div>
+      <CopyButton text={output} className="absolute right-1 top-1 opacity-0 group-hover:opacity-100" />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import * as bootstrap from "@/lib/bootstrap";
 import Spinner from "@/components/ui/Spinner";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import CopyButton from "@/components/ui/CopyButton";
 
 export interface BootstrapPanelProps {
   workspaceOpen: boolean;
@@ -106,9 +107,12 @@ export default function BootstrapPanel({ workspaceOpen }: BootstrapPanelProps) {
           </div>
           <div>
             <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Diff</div>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 font-mono text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
-              {proposal.diff}
-            </pre>
+            <div className="group relative">
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 font-mono text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
+                {proposal.diff}
+              </pre>
+              <CopyButton text={proposal.diff} className="absolute right-1 top-1 opacity-0 group-hover:opacity-100" />
+            </div>
           </div>
 
           {!result && (
@@ -157,9 +161,12 @@ export default function BootstrapPanel({ workspaceOpen }: BootstrapPanelProps) {
               </div>
               <div>
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">PR summary</div>
-                <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 font-mono text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
-                  {result.pr_summary}
-                </pre>
+                <div className="group relative">
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 font-mono text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
+                    {result.pr_summary}
+                  </pre>
+                  <CopyButton text={result.pr_summary} className="absolute right-1 top-1 opacity-0 group-hover:opacity-100" />
+                </div>
               </div>
             </div>
           )}
