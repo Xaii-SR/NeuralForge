@@ -78,6 +78,7 @@ pub fn run() {
       terminal::close_pty,
       core::logging::get_recent_logs,
       core::logging::export_logs,
+      core::build_info::get_build_info,
       hardware::get_hardware_info,
       ai::ollama_health_check,
       ai::list_models,

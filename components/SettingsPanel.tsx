@@ -6,6 +6,7 @@ import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAppConfig, saveAppConfig } from "@/lib/store";
 import ProviderManager from "@/components/ProviderManager";
+import { getBuildInfo, type BuildInfo } from "@/lib/buildInfo";
 
 export interface SettingsPanelProps { onClose: () => void; }
 
@@ -29,6 +30,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [endpoint, setEndpoint] = useState("http://localhost:11434");
   const [effort, setEffort] = useState<"Light" | "Medium" | "High" | "Extra High">("High");
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+
+  useEffect(() => {
+    getBuildInfo().then(setBuildInfo).catch(() => setBuildInfo(null));
+  }, []);
 
   useEffect(() => {
     getAppConfig().then((config) => {
@@ -148,6 +154,16 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             <ProviderManager />
           </div>
           <div className="mb-5"><div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Response Cache</div><div className="flex items-center gap-2"><button onClick={handleClearCache} className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">Clear Cache</button>{cacheStatus && <span className="text-xs text-neutral-500">{cacheStatus}</span>}</div></div>
+          {buildInfo && (
+            <div className="mb-5 border-t border-neutral-100 pt-4 dark:border-neutral-800">
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">About</div>
+              <div className="space-y-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                <div>Version: {buildInfo.version}</div>
+                <div>Commit: {buildInfo.commit}</div>
+                <div>Built: {buildInfo.build_time === "unknown" ? "unknown" : new Date(Number(buildInfo.build_time) * 1000).toLocaleString()}</div>
+              </div>
+            </div>
+          )}
         </>)}
         <div className="flex justify-end gap-2 border-t border-neutral-100 pt-4 dark:border-neutral-800"><button onClick={onClose} className="rounded px-4 py-1.5 text-xs font-medium text-neutral-500 transition-colors hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">Cancel</button><button onClick={handleSave} className="rounded bg-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow-lg transition-colors hover:bg-blue-500">Save</button></div>
       </div>
