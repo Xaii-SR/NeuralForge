@@ -19,6 +19,7 @@ use crate::agent_core::lifecycle::{AgentLifecycleState, ExecutionBackend};
 use crate::agent_core::types::{AgentEventType, AgentRole, CouncilError, CouncilPassResult, CouncilVerdict};
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
+use crate::ai::context;
 use crate::ai::health::HealthRegistry;
 use crate::ai::provider_registry;
 use crate::ai::provider_router::{self, TaskCapability};
@@ -267,6 +268,43 @@ where
     Ok(CouncilPassResult { architect_output, critic_output, judge_output, judge_verdict })
 }
 
+/// Resolves a repository-context prefix for the Architect's system prompt,
+/// reusing `ai::context::build_context_prompt` verbatim (same FTS5 search,
+/// memory-file reading, and truncation limits the chat path already uses -
+/// nothing about retrieval is reimplemented here). Fetched once per pass,
+/// entirely synchronously, before `run_council_pass_with` is ever called -
+/// this sidesteps the Send-safety constraint on holding a `rusqlite::
+/// Connection` guard across an `.await` point (the same constraint
+/// `generate_for_task`'s callers document elsewhere) by never needing to
+/// hold it across one in the first place. Returns `None` if no workspace is
+/// open or no DB connection exists - callers must treat that as "no
+/// context available", not an error; Council still runs with today's
+/// plain-objective prompt shape in that case.
+fn resolve_architect_context(app_handle: &AppHandle, objective: &str) -> Option<String> {
+    let app_state = app_handle.state::<AppState>();
+    let workspace_root = app_state.workspace_root.lock().ok()?.clone()?;
+
+    let db = app_handle.state::<DbState>();
+    let guard = db.conn.lock().ok()?;
+    let conn = guard.as_ref()?;
+
+    Some(context::build_context_prompt(&workspace_root, conn, objective))
+}
+
+/// Prepends `context` (if any) to the Architect's `system_prompt` - Critic
+/// and Judge never receive this (see the role check at the call site).
+/// Extracted as its own pure function so the merging behavior itself is
+/// directly unit-testable without a live `AppHandle`, separately from
+/// `ai::context::build_context_prompt`'s own retrieval tests. `None`
+/// (no workspace open / no DB) returns `system_prompt` completely
+/// unchanged - the graceful-fallback path this mission requires.
+fn architect_system_prompt_with_context(system_prompt: &str, context: Option<&str>) -> String {
+    match context {
+        Some(ctx) => format!("{ctx}\n\n{system_prompt}"),
+        None => system_prompt.to_string(),
+    }
+}
+
 /// The real Council v1 pass: resolves `providers`/`health` from `app_handle`
 /// exactly the way `agent_v2`'s private `generate()` helper does (mirrored,
 /// not imported - that helper isn't `pub` and lives in a file this mission
@@ -279,8 +317,21 @@ pub async fn run_council_pass(
     task_id: &str,
     objective: &str,
 ) -> Result<CouncilPassResult, CouncilError> {
-    run_council_pass_with(core, task_id, objective, move |_role, system_prompt, user_prompt| {
+    // Fetched once per pass (not once per role) - Critic and Judge continue
+    // to receive only the prior role(s)' real output plus the objective,
+    // exactly as before this change.
+    let architect_context = resolve_architect_context(&app_handle, objective);
+
+    run_council_pass_with(core, task_id, objective, move |role, system_prompt, user_prompt| {
         let app_handle = app_handle.clone();
+        // Prepended to the Architect's *system* prompt only - the
+        // "Objective: {objective}" user-prompt shape Critic/Judge already
+        // build (in run_council_pass_with, untouched by this change) stays
+        // exactly as it was.
+        let system_prompt = match role {
+            AgentRole::Architect => architect_system_prompt_with_context(&system_prompt, architect_context.as_deref()),
+            _ => system_prompt,
+        };
         async move {
             let health = app_handle.state::<HealthRegistry>();
             let providers = {
@@ -324,6 +375,51 @@ mod tests {
     }
 
     // ── Council v1 sequencing (no live model required) ──────────────────
+
+    #[test]
+    fn architect_system_prompt_with_context_prepends_real_repository_content() {
+        // Mirrors ai::context's own test fixtures (temp workspace, real
+        // index_workspace, real Connection) - proves the merge this
+        // orchestrator now does actually carries real repository-derived
+        // content into the Architect's system prompt, not just that
+        // build_context_prompt works in isolation (already covered by its
+        // own tests in ai/context.rs).
+        let mut dir = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_council_context_test_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::core::config::ensure_memory_scaffold(&dir).unwrap();
+        std::fs::write(
+            dir.join(".neuralforge").join("memory").join("architecture.md"),
+            "# Architecture\n\nBackend is Rust/Tauri.",
+        )
+        .unwrap();
+        std::fs::write(dir.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+
+        {
+            let conn = crate::database::open_for_workspace(&dir).unwrap();
+            crate::database::indexer::index_workspace(&conn, &dir).unwrap();
+            let real_context = context::build_context_prompt(&dir, &conn, "how does authentication work");
+
+            let base_system_prompt = "You are the Architect. Propose a concrete, specific solution to the user's objective.";
+            let merged = architect_system_prompt_with_context(base_system_prompt, Some(&real_context));
+
+            assert!(merged.contains("Rust/Tauri"), "merged prompt must carry real repository memory content");
+            assert!(merged.contains("authenticate_user"), "merged prompt must carry real indexed-file content");
+            assert!(merged.contains(base_system_prompt), "merged prompt must still contain the original Architect instructions");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn architect_system_prompt_with_context_falls_back_gracefully_with_no_context() {
+        // Proves the "no workspace open" path: None context must leave the
+        // system prompt completely unchanged (today's pre-context-injection
+        // behavior), never a hard error or a mutated/broken prompt.
+        let base_system_prompt = "You are the Architect. Propose a concrete, specific solution to the user's objective.";
+        let result = architect_system_prompt_with_context(base_system_prompt, None);
+        assert_eq!(result, base_system_prompt);
+    }
 
     #[test]
     fn parse_verdict_reads_the_first_word_case_insensitively() {
