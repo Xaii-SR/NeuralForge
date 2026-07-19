@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
+import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAppConfig, saveAppConfig } from "@/lib/store";
 import ProviderManager from "@/components/ProviderManager";
 
@@ -22,6 +23,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [prefs, setPrefs] = useState<ai.Preferences>({ goal: "speed", cost_preference: "free" });
   const [cacheStatus, setCacheStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [selectedModel, setSelectedModel] = useState("");
   const [installedModels, setInstalledModels] = useState<string[]>([]);
@@ -36,16 +38,38 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     });
   }, []);
 
-  useEffect(() => {
+  // A genuine listModels() rejection (e.g. Ollama isn't running) is expected
+  // and already handled gracefully below via FALLBACK_MODELS - that's not
+  // an error worth interrupting the user over. What this guards against is
+  // different: a *resolved* value that isn't the array listModels() is
+  // typed to return, which the old code fed straight into `.map()` with no
+  // check, silently hanging the panel on "Loading..." forever if it ever
+  // happened (reproduced by mocking the IPC layer to resolve with `null`).
+  // That specific case now surfaces as a real, retryable error instead.
+  const loadSettings = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
     Promise.all([
       ai.getPreferences().catch(() => ({ goal: "speed", cost_preference: "free" } as ai.Preferences)),
-      ai.listModels().catch(() => []),
-    ]).then(([loadedPrefs, models]) => {
-      setPrefs(loadedPrefs);
-      setInstalledModels(models.map((m) => m.name));
-      setLoading(false);
-    });
+      ai.listModels().catch(() => [] as ai.OllamaModel[]),
+    ])
+      .then(([loadedPrefs, models]) => {
+        if (!Array.isArray(models)) {
+          throw new Error("list_models returned an unexpected response");
+        }
+        setPrefs(loadedPrefs);
+        setInstalledModels(models.map((m) => m.name));
+        setLoading(false);
+      })
+      .catch((err: any) => {
+        setLoadError(err?.message ? String(err.message) : String(err));
+        setLoading(false);
+      });
   }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
@@ -88,6 +112,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
           <button onClick={onClose} aria-label="Close settings" className="rounded px-1.5 py-0.5 text-neutral-400 transition-colors hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
         </div>
         {loading ? <div className="flex items-center justify-center gap-2 py-12 text-xs text-neutral-500"><Spinner /> Loading...</div> : (<>
+          {loadError && (
+            <div className="mb-5">
+              <ErrorBanner message={`Could not load settings: ${loadError}`} onRetry={loadSettings} onDismiss={() => setLoadError(null)} />
+            </div>
+          )}
           <div className="mb-5 space-y-3">
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Default (Ollama)</div>
             <div>
