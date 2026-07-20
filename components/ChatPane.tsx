@@ -11,12 +11,14 @@ import CopyButton from "@/components/ui/CopyButton";
 
 interface DisplayMessage { role: "user" | "assistant"; content: string; fromCache?: boolean; timestamp: number; }
 interface TokenPayload { request_id: string; token: string; done: boolean; from_cache?: boolean; }
+type SessionState = "uninitialized" | "loading" | "ready" | "failed";
 
-export interface ChatPaneProps { workspaceOpen: boolean; }
+export interface ChatPaneProps { workspaceRoot: string | null; }
 
 function formatTime(ts: number): string { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 
-export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
+export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
+  const workspaceOpen = !!workspaceRoot;
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
@@ -28,18 +30,103 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
   const [error, setError] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexStatus, setIndexStatus] = useState<string | null>(null);
+  const [sessionState, setSessionState] = useState<SessionState>("uninitialized");
   const activeRequestId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Persistent-session bookkeeping (v1.3.0 Phase 4A). None of these are
+  // React state on purpose - they're lifecycle guards, not render inputs.
+  const activeSessionId = useRef<string | null>(null);
+  // Guards against duplicate session init/creation from React StrictMode's
+  // double-invoked effects, re-renders, and repeated workspace-prop
+  // updates - claimed synchronously (before any await) the first time a
+  // given workspace root is seen, so a second concurrent effect run for
+  // the same root is a no-op.
+  const initializedForWorkspace = useRef<string | null>(null);
+  // Accumulates the current assistant response outside React state so the
+  // exact final text is available synchronously when payload.done fires,
+  // without depending on a possibly-stale `messages` closure.
+  const streamingContentRef = useRef<string>("");
+  // Ensures assistant-completion persistence happens exactly once per
+  // request, even if AI_RESPONSE_TOKEN's done:true is (re)delivered more
+  // than once for the same request_id.
+  const persistedRequestIds = useRef<Set<string>>(new Set());
 
   async function handleIndex() { setIndexing(true); setIndexStatus(null); try { const s = await ai.indexWorkspace(); setIndexStatus(`Indexed ${s.files_indexed} files (${s.chunks_created} chunks)`); } catch (e) { setIndexStatus(`Index failed: ${e}`); } finally { setIndexing(false); } }
 
   useEffect(() => { ai.ollamaHealthCheck().then(async (healthy) => { setOllamaAvailable(healthy); if (healthy) { const l = await ai.listModels(); setModels(l); if (l.length > 0) setSelectedModel(l[0].name); } }); }, []);
 
-  useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => { if (payload.request_id !== activeRequestId.current) return; setMessages((prev) => { const n = [...prev]; const last = n[n.length - 1]; if (last && last.role === "assistant") n[n.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache }; else n.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() }); return n; }); if (payload.done) { setSending(false); activeRequestId.current = null; } });
+  // Session initialization: UNINITIALIZED -> LOADING_SESSION -> SESSION_READY | FAILED_FALLBACK.
+  // Runs once per distinct workspaceRoot value (see initializedForWorkspace above).
+  useEffect(() => {
+    if (!workspaceRoot) {
+      activeSessionId.current = null;
+      initializedForWorkspace.current = null;
+      persistedRequestIds.current.clear();
+      setMessages([]);
+      setSessionState("uninitialized");
+      return;
+    }
+    if (initializedForWorkspace.current === workspaceRoot) return;
+    initializedForWorkspace.current = workspaceRoot;
+    activeSessionId.current = null;
+    persistedRequestIds.current.clear();
+    setMessages([]);
+    setSessionState("loading");
+
+    (async () => {
+      try {
+        // Backend already scopes list_sessions to the currently open
+        // workspace (server-side AppState.workspace_root) - no client path
+        // is sent. Ordering is whatever the backend returns; not re-sorted
+        // here, per the "no client-side sorting" rule.
+        const sessions = await ai.listSessions();
+        const session = sessions[0] ?? (await ai.createSession("New Chat"));
+        activeSessionId.current = session.id;
+        const history = await ai.getSessionMessages(session.id);
+        setMessages(
+          history.map((m) => ({
+            role: m.role === "user" ? "user" : "assistant",
+            content: m.content,
+            timestamp: m.timestamp * 1000,
+          }))
+        );
+        setSessionState("ready");
+      } catch (e) {
+        // Session loading failed - chat must still work, just without
+        // persistence for this workspace visit.
+        setError(`Could not load saved conversations: ${e}`);
+        setSessionState("failed");
+      }
+    })();
+  }, [workspaceRoot]);
+
+  useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => {
+    if (payload.request_id !== activeRequestId.current) return;
+    streamingContentRef.current += payload.token;
+    setMessages((prev) => { const n = [...prev]; const last = n[n.length - 1]; if (last && last.role === "assistant") n[n.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache }; else n.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() }); return n; });
+    if (payload.done) {
+      setSending(false);
+      const finishedRequestId = payload.request_id;
+      const finalContent = streamingContentRef.current;
+      activeRequestId.current = null;
+      streamingContentRef.current = "";
+      const sid = activeSessionId.current;
+      if (sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
+        persistedRequestIds.current.add(finishedRequestId);
+        ai.appendSessionMessage(sid, "assistant", finalContent, "complete").catch((e) => {
+          console.error("Failed to persist assistant message", e);
+          setError((prev) => prev ?? `Response wasn't saved: ${e}`);
+        });
+      }
+    }
+  });
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
 
   function cancelGeneration() {
+    // No persistence call here on purpose: an incomplete assistant
+    // response must never be saved (see Phase 4A cancellation rules).
     activeRequestId.current = null;
+    streamingContentRef.current = "";
     setSending(false);
     setError("Generation cancelled.");
   }
@@ -49,11 +136,22 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
     setError(null);
     const rid = crypto.randomUUID();
     activeRequestId.current = rid;
+    streamingContentRef.current = "";
     const um: DisplayMessage = { role: "user", content: input, timestamp: Date.now() };
     const nm = [...messages, um];
     setMessages(nm);
     setInput("");
     setSending(true);
+
+    // Persist the user message before kicking off generation, so storage
+    // ordering (USER then ASSISTANT) holds even though assistant
+    // persistence happens later, asynchronously, on payload.done.
+    const sid = activeSessionId.current;
+    if (sid) {
+      try { await ai.appendSessionMessage(sid, "user", um.content, "complete"); }
+      catch (e) { console.error("Failed to persist user message", e); setError(`Message wasn't saved: ${e}`); }
+    }
+
     let mtu = selectedModel;
     if (autoMode) {
       try { const sel = await ai.autoSelectModel(um.content); setAutoSelection(sel); mtu = sel.model; }
@@ -71,6 +169,7 @@ export default function ChatPane({ workspaceOpen }: ChatPaneProps) {
 
   if (ollamaAvailable === null) return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Checking Ollama...</div>;
   if (!ollamaAvailable) return <EmptyState icon="🔌" title="Ollama not detected" hint="Install Ollama and make sure it's running at localhost:11434, then reopen NeuralForge." />;
+  if (workspaceOpen && sessionState === "loading") return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Loading conversation...</div>;
 
   return (
     <div className="flex h-full flex-col bg-white dark:bg-neutral-900">

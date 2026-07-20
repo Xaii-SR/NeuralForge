@@ -174,3 +174,61 @@ export function autoSelectModel(prompt: string): Promise<AutoSelection> {
   return invoke("auto_select_model", { prompt });
 }
 
+// ── Session persistence (v1.3.0 Phase 4A) ──────────────────────────────
+// Thin wrappers over the Phase 2 IPC commands (database::*), matching this
+// file's existing convention. Session/SessionMessage shapes mirror the
+// Rust structs in database/sessions.rs exactly.
+
+export interface Session {
+  id: string;
+  workspace_path: string;
+  title: string;
+  provider: string | null;
+  active_model: string | null;
+  last_message_preview: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SessionMessage {
+  id: number;
+  session_id: string;
+  role: string;
+  content: string;
+  status: string;
+  timestamp: number;
+}
+
+export function createSession(
+  title: string,
+  provider?: string | null,
+  model?: string | null
+): Promise<Session> {
+  return invoke("create_session", { title, provider: provider ?? null, model: model ?? null });
+}
+
+export function listSessions(): Promise<Session[]> {
+  return invoke("list_sessions");
+}
+
+export function getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
+  return invoke("get_session_messages", { sessionId });
+}
+
+export function appendSessionMessage(
+  sessionId: string,
+  role: string,
+  content: string,
+  status: string
+): Promise<void> {
+  return invoke("append_session_message", { sessionId, role, content, status });
+}
+
+export function updateSessionMetadata(
+  sessionId: string,
+  title: string,
+  lastMessagePreview: string
+): Promise<void> {
+  return invoke("update_session_metadata", { sessionId, title, lastMessagePreview });
+}
+
