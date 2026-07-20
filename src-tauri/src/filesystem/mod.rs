@@ -86,8 +86,51 @@ fn list_dir(dir: &Path) -> AppResult<Vec<FileEntry>> {
     Ok(entries)
 }
 
+/// v1.4.0 workspace restoration: the last successfully opened workspace
+/// path is remembered in a small file under the app's data dir (the same
+/// global, non-per-workspace location family as app_log_dir - per-workspace
+/// storage can't work here, since the whole point is knowing which
+/// workspace to reopen before any workspace is open). Pure functions over
+/// an explicit dir so they're testable with temp dirs, per this codebase's
+/// pure-core/thin-wrapper pattern.
+const LAST_WORKSPACE_FILE: &str = "last_workspace.txt";
+
+fn save_last_workspace_path(data_dir: &Path, workspace: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    fs::write(data_dir.join(LAST_WORKSPACE_FILE), workspace.to_string_lossy().as_bytes())
+}
+
+/// Returns the remembered path only if it still exists as a directory -
+/// a moved/deleted workspace degrades to "nothing to restore", never an
+/// error surfaced at startup.
+fn load_last_workspace_path(data_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(data_dir.join(LAST_WORKSPACE_FILE)).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_dir() {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+/// Startup restoration query: which workspace, if any, should the frontend
+/// reopen? Read-only - the frontend then goes through the exact same
+/// open_workspace flow a manual "Open Folder" uses (single source of truth,
+/// so restoration gets indexing/session behavior identical to a manual open).
+#[tauri::command]
+pub fn get_last_workspace(app: AppHandle) -> Option<String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().ok()?;
+    load_last_workspace_path(&data_dir)
+}
+
 #[tauri::command]
 pub fn open_workspace(
+    app: AppHandle,
     state: State<AppState>,
     db: State<crate::database::DbState>,
     path: String,
@@ -100,6 +143,17 @@ pub fn open_workspace(
     ensure_memory_scaffold(&root)?;
     *db.conn.lock().unwrap() = Some(crate::database::open_for_workspace(&root)?);
     tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
+
+    // Remember this workspace for startup restoration (v1.4.0). Best-effort:
+    // a failure to persist the preference must never fail the open itself.
+    {
+        use tauri::Manager;
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            if let Err(e) = save_last_workspace_path(&data_dir, &root) {
+                tracing::warn!(target: "filesystem", event = "last_workspace_save_failed", error = %e);
+            }
+        }
+    }
 
     // Automatic indexing (v1.3.0 Phase 3, made non-blocking post-audit):
     // still the exact same indexer::index_workspace implementation the
@@ -337,6 +391,34 @@ mod tests {
     // Workspace" button calls via database::index_workspace), which is
     // the real logic under test; the command wrapper itself is a
     // provably trivial match over that call, visible directly in the diff.
+
+    /// v1.4.0 workspace restoration: save/load round trip against a real
+    /// temp data dir, plus every graceful-degradation path (missing file,
+    /// empty file, remembered workspace that no longer exists on disk).
+    #[test]
+    fn last_workspace_round_trips_and_degrades_gracefully() {
+        let data_dir = temp_workspace();
+        let workspace = temp_workspace();
+
+        // Nothing saved yet -> nothing to restore.
+        assert_eq!(load_last_workspace_path(&data_dir), None);
+
+        // Round trip.
+        save_last_workspace_path(&data_dir, &workspace).unwrap();
+        let loaded = load_last_workspace_path(&data_dir).expect("saved workspace must load");
+        assert_eq!(PathBuf::from(&loaded), workspace);
+
+        // Empty file -> None, not an error.
+        fs::write(data_dir.join(LAST_WORKSPACE_FILE), "").unwrap();
+        assert_eq!(load_last_workspace_path(&data_dir), None);
+
+        // Remembered workspace deleted from disk -> None, never an error.
+        save_last_workspace_path(&data_dir, &workspace).unwrap();
+        fs::remove_dir_all(&workspace).unwrap();
+        assert_eq!(load_last_workspace_path(&data_dir), None);
+
+        fs::remove_dir_all(&data_dir).unwrap();
+    }
 
     #[test]
     fn opening_a_fresh_workspace_indexes_it_without_a_manual_step() {

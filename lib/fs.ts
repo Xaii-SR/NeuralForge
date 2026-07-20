@@ -10,6 +10,11 @@ export function openWorkspace(path: string): Promise<string> {
   return invoke("open_workspace", { path });
 }
 
+/** Last successfully opened workspace path, if it still exists on disk (v1.4.0 restoration). */
+export function getLastWorkspace(): Promise<string | null> {
+  return invoke("get_last_workspace");
+}
+
 export function readDir(path: string): Promise<FileEntry[]> {
   return invoke("read_dir", { path });
 }

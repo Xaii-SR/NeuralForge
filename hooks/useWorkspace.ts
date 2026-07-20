@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import * as fs from "@/lib/fs";
 
@@ -14,6 +14,30 @@ export function useWorkspace() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+  const restoreAttempted = useRef(false);
+
+  // v1.4.0 workspace restoration: on launch, reopen the last workspace (if
+  // it still exists) through the exact same open_workspace flow a manual
+  // "Open Folder" uses - so indexing and session restoration behave
+  // identically to a manual open. Best-effort: any failure leaves the app
+  // at the normal "No folder open" state, never an error screen. The ref
+  // guard (claimed synchronously, before any await) makes this idempotent
+  // across StrictMode's double-effect-invoke, same pattern as ChatPane's
+  // session init.
+  useEffect(() => {
+    if (restoreAttempted.current) return;
+    restoreAttempted.current = true;
+    (async () => {
+      try {
+        const last = await fs.getLastWorkspace();
+        if (!last) return;
+        const root = await fs.openWorkspace(last);
+        setWorkspaceRoot(root);
+      } catch {
+        // No workspace restored - identical to a fresh first launch.
+      }
+    })();
+  }, []);
 
   const openFolder = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false });

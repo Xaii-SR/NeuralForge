@@ -65,6 +65,7 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       filesystem::open_workspace,
+      filesystem::get_last_workspace,
       filesystem::read_dir,
       filesystem::read_file,
       filesystem::write_file,
