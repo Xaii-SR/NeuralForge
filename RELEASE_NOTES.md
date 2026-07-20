@@ -22,9 +22,9 @@ Opening a folder now indexes it automatically — repository-aware AI chat conte
 **Workspace-aware AI Chat & Session Persistence**
 Session storage is scoped per workspace at the database level (each workspace has its own SQLite file) — conversations from one project never leak into another. Streaming responses, model auto-selection, and cancellation behavior are unchanged from v1.2.0; persistence hooks into the existing send/stream-complete lifecycle without altering it.
 
-## Known limitation
+## Notes on indexing behavior
 
-**First-time indexing of very large workspaces can temporarily freeze the UI.** Automatic indexing currently runs synchronously on workspace open. For a typical-sized project this completes in well under a second on repeat opens (thanks to incremental skipping), but the *first* index of a large, never-before-indexed workspace can take tens of seconds, during which the window may appear unresponsive. The workspace still opens successfully once indexing completes, and no data is lost — this is a responsiveness issue, not a correctness one. Making this indexing pass asynchronous is tracked as a future improvement.
+Automatic indexing runs on a background thread — opening a folder returns immediately and the UI stays fully responsive while indexing proceeds, even for very large workspaces (verified against a multi-gigabyte game-content directory with thousands of files). Repository-aware chat context becomes available as soon as indexing completes; for a typical project this is near-instant, and re-opening an already-indexed workspace skips unchanged files entirely.
 
 ## Compatibility
 
