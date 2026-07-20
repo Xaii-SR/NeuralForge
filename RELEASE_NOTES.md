@@ -1,39 +1,37 @@
-# NeuralForge v1.3.0
+# NeuralForge v1.4.0
 
 A local-first, offline-capable, AI-native desktop IDE. Tauri 2 (Rust) backend, Next.js 16 frontend, powered by local (Ollama) and configurable cloud AI providers.
 
-This release adds persistent, multi-session AI chat and automatic workspace indexing on top of the v1.2.0 foundation. All v1.2.0 functionality (providers, AI Council, Prompt Maker, build identity display, editor/file/terminal shell) is preserved unchanged.
+This release adds automatic workspace restoration on top of the v1.3.0 foundation. All v1.3.0 functionality (persistent chat sessions, SessionTabs, automatic background workspace indexing, providers, AI Council, Prompt Maker, build identity display, editor/file/terminal shell) is preserved unchanged.
 
-## What's new in v1.3.0
+## What's new in v1.4.0
 
-**Persistent Chat Sessions**
-AI chat conversations are now saved to a per-workspace SQLite database instead of living only in memory. Closing and reopening NeuralForge restores your conversation history automatically — no manual save/export step required.
+**Workspace Restoration**
+NeuralForge now remembers the last workspace you had open and reopens it automatically on launch — no manual "Open Folder" step required to pick up where you left off. Restoration goes through the exact same open flow as a manual open, so background indexing runs and your saved chat sessions (SessionTabs) reappear with the workspace, exactly as you left them.
 
-**SessionTabs**
-A tab strip above the chat panel lets you manage multiple parallel conversations per workspace:
-- Create a new session at any time
-- Switch between sessions instantly (each keeps its own isolated message history)
-- Rename a session by double-clicking its tab
-- Delete a session; NeuralForge automatically selects a replacement session (or shows a clean empty state if none remain)
+Restoration is fully graceful:
+- First launch (nothing to restore) starts at the normal "No folder open" state.
+- If the remembered folder was moved or deleted, NeuralForge simply starts fresh — never an error screen.
+- Restoration can never block or break startup; any failure silently falls back to a normal fresh launch.
 
-**Automatic Workspace Indexing**
-Opening a folder now indexes it automatically — repository-aware AI chat context is available immediately, with no manual "Index Workspace" click required. The existing manual "Index Workspace" button remains available as an explicit rebuild/recovery option; both paths use the same underlying indexer, so there is exactly one indexing implementation to reason about. Re-opening an already-indexed workspace is fast — unchanged files are skipped via the existing content-hash/mtime incremental logic.
+## Carried forward from v1.3.0
 
-**Workspace-aware AI Chat & Session Persistence**
-Session storage is scoped per workspace at the database level (each workspace has its own SQLite file) — conversations from one project never leak into another. Streaming responses, model auto-selection, and cancellation behavior are unchanged from v1.2.0; persistence hooks into the existing send/stream-complete lifecycle without altering it.
-
-## Notes on indexing behavior
-
-Automatic indexing runs on a background thread — opening a folder returns immediately and the UI stays fully responsive while indexing proceeds, even for very large workspaces (verified against a multi-gigabyte game-content directory with thousands of files). Repository-aware chat context becomes available as soon as indexing completes; for a typical project this is near-instant, and re-opening an already-indexed workspace skips unchanged files entirely.
+- **Persistent Chat Sessions** — conversations are saved per workspace in SQLite and restored across restarts.
+- **SessionTabs** — create, switch, rename, and delete parallel conversations per workspace.
+- **Automatic Workspace Indexing** — opening a folder indexes it on a background thread; the UI stays responsive even for very large workspaces, and repeat opens skip unchanged files.
+- **Workspace-aware AI Chat** — repository context is retrieved automatically for your questions.
+- **AI Council** — the sequential Architect → Critic → Judge multi-agent reasoning pass, available from the red Council toolbar button.
+- **Prompt Maker** — guided prompt generation from the toolbar.
+- **Provider support** — local Ollama plus configurable cloud providers (Anthropic, Gemini, OpenAI-compatible endpoints) with secure OS-keychain credential storage and per-provider connection testing.
 
 ## Compatibility
 
-- Workspaces opened for the first time with v1.3.0 initialize cleanly with no manual setup.
-- Workspaces previously indexed under v1.2.0 continue to work — the session tables are created automatically on first open, with no manual database migration step.
-- All v1.2.0 features (provider management, AI Council, Prompt Maker, build identity display) are unchanged.
+- Workspaces opened for the first time with v1.4.0 initialize cleanly with no manual setup.
+- Workspaces and sessions created under v1.3.0 continue to work unchanged — no migration step.
+- All v1.3.0 features are unchanged.
 
 ## Installation
 
 See [INSTALLATION.md](INSTALLATION.md) for full setup. Windows x64 build artifacts are provided with this release (NSIS `.exe` and `.msi`).
 
-Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
