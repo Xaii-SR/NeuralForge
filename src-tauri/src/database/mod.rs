@@ -358,6 +358,84 @@ pub fn resolve_file_reference(db: State<DbState>, query: String) -> AppResult<re
     with_conn(&db, |conn| resolver::resolve_file_reference(conn, &query))
 }
 
+// ── Session persistence commands (v1.3.0 Phase 2 - IPC layer only) ─────
+//
+// Thin wrappers only, matching this file's own index_workspace/
+// search_workspace/resolve_file_reference precedent immediately above:
+// receive parameters, obtain a connection via with_conn, call a
+// database::sessions:: function, return its result. All real logic (row
+// mapping, malformed-row skipping, cascade-delete semantics) stays in
+// sessions.rs, untouched by this phase.
+//
+// create_session/list_sessions never trust a frontend-supplied workspace
+// path (there isn't one to trust - no caller here ever sends one, same as
+// index_workspace above); the workspace is always resolved from
+// AppState.workspace_root, so sessions can never be scoped to anything
+// other than the actually-open workspace.
+//
+// get_session_messages/append_session_message/update_session_metadata/
+// delete_session are keyed by session_id, not workspace - same as their
+// Phase 1 functions - and deliberately do NOT add existence-check
+// validation here: Phase 1 already made and tested explicit design
+// decisions for "unknown session_id" (get_session_messages returns an
+// empty Vec, update_session_metadata's UPDATE affects zero rows,
+// delete_session is an idempotent no-op) and a nonexistent session_id on
+// append_session_message already fails loudly via the schema's own FK
+// constraint (`session_id REFERENCES sessions(id)`, FK enforcement is on
+// - see open_for_workspace). Re-implementing any of that here would move
+// business logic into the command layer, which this phase's mission
+// explicitly forbids.
+
+#[tauri::command]
+pub fn create_session(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    title: String,
+    provider: Option<String>,
+    model: Option<String>,
+) -> AppResult<sessions::Session> {
+    let root = state
+        .workspace_root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    let workspace_path = root.to_string_lossy().to_string();
+    with_conn(&db, |conn| sessions::create_session(conn, &workspace_path, &title, provider.as_deref(), model.as_deref()))
+}
+
+#[tauri::command]
+pub fn list_sessions(state: State<crate::core::state::AppState>, db: State<DbState>) -> AppResult<Vec<sessions::Session>> {
+    let root = state
+        .workspace_root
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    let workspace_path = root.to_string_lossy().to_string();
+    with_conn(&db, |conn| sessions::list_sessions(conn, &workspace_path))
+}
+
+#[tauri::command]
+pub fn get_session_messages(db: State<DbState>, session_id: String) -> AppResult<Vec<sessions::SessionMessage>> {
+    with_conn(&db, |conn| sessions::get_session_messages(conn, &session_id))
+}
+
+#[tauri::command]
+pub fn append_session_message(db: State<DbState>, session_id: String, role: String, content: String, status: String) -> AppResult<()> {
+    with_conn(&db, |conn| sessions::append_message(conn, &session_id, &role, &content, &status))
+}
+
+#[tauri::command]
+pub fn update_session_metadata(db: State<DbState>, session_id: String, title: String, last_message_preview: String) -> AppResult<()> {
+    with_conn(&db, |conn| sessions::update_session_metadata(conn, &session_id, &title, &last_message_preview))
+}
+
+#[tauri::command]
+pub fn delete_session(db: State<DbState>, session_id: String) -> AppResult<()> {
+    with_conn(&db, |conn| sessions::delete_session(conn, &session_id))
+}
+
 /// Sprint 7 hardening tests: migration safety and transaction atomicity.
 #[cfg(test)]
 mod hardening_tests {
