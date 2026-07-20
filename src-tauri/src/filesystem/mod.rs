@@ -101,26 +101,51 @@ pub fn open_workspace(
     *db.conn.lock().unwrap() = Some(crate::database::open_for_workspace(&root)?);
     tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
 
-    // Automatic indexing (v1.3.0 Phase 3): reuses the exact same
-    // database::index_workspace command the manual "Index Workspace" button
-    // calls - single source of truth, see database::indexer for the
-    // content-hash/mtime incremental behavior that makes this cheap on
-    // repeat opens. Indexing failure must never block opening the
-    // workspace - file browsing and chat must still work.
-    match crate::database::index_workspace(state.clone(), db.clone()) {
-        Ok(stats) => tracing::info!(
-            target: "filesystem",
-            event = "auto_index_completed",
-            files_indexed = stats.files_indexed,
-            files_skipped_unchanged = stats.files_skipped_unchanged
-        ),
-        Err(e) => tracing::warn!(
-            target: "filesystem",
-            event = "auto_index_failed",
-            error = %e,
-            "automatic workspace indexing failed; workspace remains open"
-        ),
-    }
+    // Automatic indexing (v1.3.0 Phase 3, made non-blocking post-audit):
+    // still the exact same indexer::index_workspace implementation the
+    // manual "Index Workspace" button reaches - single source of truth -
+    // but now invoked on a background thread with its own Connection to
+    // the same index.db, so open_workspace returns immediately.
+    //
+    // Why: the original synchronous call blocked this IPC command until
+    // indexing finished. On a huge real-world folder (reproduced against
+    // Z:\Steam\...\assettocorsa\content\cars: three opens logged
+    // workspace_opened with no auto_index_completed ever following), the
+    // recursive walk alone can take minutes, the window goes Not
+    // Responding, and the user kills the app - a release-blocking crash
+    // in practice, not the documented "tens of seconds" freeze.
+    //
+    // A separate Connection (rather than locking the shared DbState from
+    // the thread) keeps every UI-facing command - session loading, chat
+    // context, settings - fully unblocked while indexing runs. Write
+    // collisions between the two connections are absorbed by the
+    // busy_timeout set in database::open_for_workspace. Indexing failure
+    // still can't block the workspace: the thread only logs.
+    let index_root = root.clone();
+    std::thread::spawn(move || {
+        match crate::database::open_for_workspace(&index_root) {
+            Ok(conn) => match crate::database::indexer::index_workspace(&conn, &index_root) {
+                Ok(stats) => tracing::info!(
+                    target: "filesystem",
+                    event = "auto_index_completed",
+                    files_indexed = stats.files_indexed,
+                    files_skipped_unchanged = stats.files_skipped_unchanged
+                ),
+                Err(e) => tracing::warn!(
+                    target: "filesystem",
+                    event = "auto_index_failed",
+                    error = %e,
+                    "automatic workspace indexing failed; workspace remains open"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                target: "filesystem",
+                event = "auto_index_failed",
+                error = %e,
+                "could not open background indexing connection; workspace remains open"
+            ),
+        }
+    });
 
     Ok(root.to_string_lossy().to_string())
 }
@@ -326,6 +351,56 @@ mod tests {
         assert!(!results.is_empty(), "freshly auto-indexed content must be queryable without pressing the manual button");
 
         drop(conn); // release the sqlite file handle before deleting on Windows
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Regression test for the v1.3.0 folder-open crash fix: automatic
+    /// indexing now runs on a background thread with its OWN Connection to
+    /// the same index.db, concurrently with the UI's shared connection.
+    /// This proves two live connections to one workspace database can
+    /// index (bulk writes) and persist a chat session (interleaved writes)
+    /// at the same time without "database is locked" failures - the
+    /// property the busy_timeout added in open_for_workspace exists to
+    /// guarantee. Real threads, real concurrent SQLite connections, no
+    /// mocks, matching this codebase's testing philosophy.
+    #[test]
+    fn background_indexing_connection_does_not_lock_out_the_ui_connection() {
+        let root = temp_workspace();
+        for i in 0..50 {
+            fs::write(root.join(format!("file_{i}.rs")), format!("fn function_number_{i}() -> u32 {{ {i} }}\n")).unwrap();
+        }
+
+        // "UI" connection: what DbState would hold.
+        let ui_conn = crate::database::open_for_workspace(&root).unwrap();
+
+        // "Background indexer" connection: what the spawned thread opens.
+        let index_root = root.clone();
+        let indexer_thread = std::thread::spawn(move || {
+            let conn = crate::database::open_for_workspace(&index_root).unwrap();
+            crate::database::indexer::index_workspace(&conn, &index_root).unwrap()
+        });
+
+        // Meanwhile the UI connection persists a chat session - the exact
+        // workload that races the background indexer in the real app.
+        let session = crate::database::sessions::create_session(
+            &ui_conn,
+            root.to_string_lossy().as_ref(),
+            "concurrent test",
+            None,
+            None,
+        )
+        .unwrap();
+        for i in 0..10 {
+            crate::database::sessions::append_message(&ui_conn, &session.id, "user", &format!("message {i}"), "completed").unwrap();
+        }
+
+        let stats = indexer_thread.join().expect("indexer thread must not panic");
+        assert_eq!(stats.files_indexed, 50, "all files indexed despite concurrent session writes");
+
+        let messages = crate::database::sessions::get_session_messages(&ui_conn, &session.id).unwrap();
+        assert_eq!(messages.len(), 10, "all session writes survived despite concurrent indexing");
+
+        drop(ui_conn);
         fs::remove_dir_all(&root).unwrap();
     }
 

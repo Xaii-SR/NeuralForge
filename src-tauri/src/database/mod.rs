@@ -259,6 +259,14 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // promotion_requests, files.id from chunks, etc.) are guaranteed.
     conn.execute_batch("PRAGMA foreign_keys = ON")
         .map_err(|e| AppError::Provider(format!("failed to enable foreign keys: {e}")))?;
+    // v1.3.0 crash fix: automatic indexing now runs on a background thread
+    // with its own Connection to this same file (see filesystem::open_workspace),
+    // so two connections can be live at once. Without a busy timeout, a write
+    // collision between the indexer and the UI connection surfaces as an
+    // immediate "database is locked" error; with it, SQLite retries for up
+    // to 5s, which comfortably covers the indexer's short write bursts.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| AppError::Provider(format!("failed to set busy timeout: {e}")))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
 
