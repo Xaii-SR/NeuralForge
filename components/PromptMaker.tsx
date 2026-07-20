@@ -113,7 +113,7 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
         <div className="space-y-4">
           <div>
             <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-neutral-400">What objective or role do you want to optimize this AI agent for?</label>
-            <textarea value={userIntent} onChange={(e) => setUserIntent(e.target.value)} rows={3} placeholder="e.g., Make a drift physics tuner for Assetto Corsa" disabled={isRunning} className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" />
+            <textarea value={userIntent} onChange={(e) => setUserIntent(e.target.value)} rows={3} placeholder="Example: Write a Python script to scrape a website" disabled={isRunning} className="w-full resize-none rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none transition-colors focus:border-blue-500 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200" />
           </div>
 
           <div className="text-xs text-neutral-400">
