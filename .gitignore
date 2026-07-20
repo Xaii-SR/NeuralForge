@@ -33,3 +33,6 @@ Thumbs.db
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
+
+# Local Claude instructions file
+CLAUDE.md
