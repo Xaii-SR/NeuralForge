@@ -5,7 +5,7 @@ import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
 import LogViewer from "@/components/LogViewer";
-import ChatPane from "@/components/ChatPane";
+import SessionTabs from "@/components/SessionTabs";
 import SettingsPanel from "@/components/SettingsPanel";
 import AgentPanel from "@/components/AgentPanel";
 import AgentWorkbench from "@/components/AgentWorkbench";
@@ -109,7 +109,7 @@ export default function Home() {
         </div>
         <ResizeHandle orientation="vertical" label="Resize chat panel" onPointerDown={layout.startDrag("chat")} onDoubleClick={() => layout.resetPanel("chat")} onNudge={(d) => layout.nudgePanel("chat", -d)} />
         <div style={{ width: "var(--nf-chat-w, 320px)" }} className="shrink-0 border-l border-neutral-200 dark:border-neutral-800">
-          <ChatPane workspaceRoot={workspace.workspaceRoot} />
+          <SessionTabs workspaceRoot={workspace.workspaceRoot} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">{lastEvent ?? "Ready"}</div>

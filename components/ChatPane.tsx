@@ -13,11 +13,24 @@ interface DisplayMessage { role: "user" | "assistant"; content: string; fromCach
 interface TokenPayload { request_id: string; token: string; done: boolean; from_cache?: boolean; }
 type SessionState = "uninitialized" | "loading" | "ready" | "failed";
 
-export interface ChatPaneProps { workspaceRoot: string | null; }
+export interface ChatPaneProps {
+  workspaceRoot: string | null;
+  // v1.3.0 Phase 4B: session selection now lives in SessionTabs, which is
+  // this component's only caller. ChatPane consumes the active session id
+  // and messages for it - it does not discover or create sessions itself.
+  activeSessionId: string | null;
+  // True once SessionTabs has finished its own init attempt (ready or
+  // failed) - lets ChatPane tell "no session yet, still loading the tab
+  // strip" apart from "tab strip settled and there's genuinely none".
+  sessionsReady: boolean;
+  externalError: string | null;
+  onDismissExternalError: () => void;
+  onSendingChange: (sending: boolean) => void;
+}
 
 function formatTime(ts: number): string { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 
-export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
+export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
   const workspaceOpen = !!workspaceRoot;
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
@@ -33,15 +46,13 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
   const [sessionState, setSessionState] = useState<SessionState>("uninitialized");
   const activeRequestId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Persistent-session bookkeeping (v1.3.0 Phase 4A). None of these are
-  // React state on purpose - they're lifecycle guards, not render inputs.
-  const activeSessionId = useRef<string | null>(null);
-  // Guards against duplicate session init/creation from React StrictMode's
-  // double-invoked effects, re-renders, and repeated workspace-prop
-  // updates - claimed synchronously (before any await) the first time a
-  // given workspace root is seen, so a second concurrent effect run for
-  // the same root is a no-op.
-  const initializedForWorkspace = useRef<string | null>(null);
+  // Mirrors the activeSessionId prop into a ref: useEvent (see hooks/useEvent.ts)
+  // subscribes once and keeps whatever closure it captured on that first
+  // subscription, so anything read inside the AI_RESPONSE_TOKEN handler
+  // below must come from a ref, never a prop/state value directly, or it
+  // would keep targeting whichever session was active on first mount.
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   // Accumulates the current assistant response outside React state so the
   // exact final text is available synchronously when payload.done fires,
   // without depending on a possibly-stale `messages` closure.
@@ -55,34 +66,24 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
 
   useEffect(() => { ai.ollamaHealthCheck().then(async (healthy) => { setOllamaAvailable(healthy); if (healthy) { const l = await ai.listModels(); setModels(l); if (l.length > 0) setSelectedModel(l[0].name); } }); }, []);
 
-  // Session initialization: UNINITIALIZED -> LOADING_SESSION -> SESSION_READY | FAILED_FALLBACK.
-  // Runs once per distinct workspaceRoot value (see initializedForWorkspace above).
+  useEffect(() => { onSendingChange(sending); }, [sending, onSendingChange]);
+
+  // Message loading: keyed on activeSessionId, which SessionTabs owns and
+  // controls entirely (init, switch, create, delete-with-replacement all
+  // funnel through the same prop). No independent session discovery here.
   useEffect(() => {
-    if (!workspaceRoot) {
-      activeSessionId.current = null;
-      initializedForWorkspace.current = null;
-      persistedRequestIds.current.clear();
+    persistedRequestIds.current.clear();
+    if (!activeSessionId) {
       setMessages([]);
-      setSessionState("uninitialized");
+      setSessionState(sessionsReady ? "ready" : workspaceOpen ? "loading" : "uninitialized");
       return;
     }
-    if (initializedForWorkspace.current === workspaceRoot) return;
-    initializedForWorkspace.current = workspaceRoot;
-    activeSessionId.current = null;
-    persistedRequestIds.current.clear();
-    setMessages([]);
     setSessionState("loading");
-
+    let cancelled = false;
     (async () => {
       try {
-        // Backend already scopes list_sessions to the currently open
-        // workspace (server-side AppState.workspace_root) - no client path
-        // is sent. Ordering is whatever the backend returns; not re-sorted
-        // here, per the "no client-side sorting" rule.
-        const sessions = await ai.listSessions();
-        const session = sessions[0] ?? (await ai.createSession("New Chat"));
-        activeSessionId.current = session.id;
-        const history = await ai.getSessionMessages(session.id);
+        const history = await ai.getSessionMessages(activeSessionId);
+        if (cancelled) return;
         setMessages(
           history.map((m) => ({
             role: m.role === "user" ? "user" : "assistant",
@@ -92,13 +93,13 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
         );
         setSessionState("ready");
       } catch (e) {
-        // Session loading failed - chat must still work, just without
-        // persistence for this workspace visit.
+        if (cancelled) return;
         setError(`Could not load saved conversations: ${e}`);
         setSessionState("failed");
       }
     })();
-  }, [workspaceRoot]);
+    return () => { cancelled = true; };
+  }, [activeSessionId, sessionsReady, workspaceOpen]);
 
   useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => {
     if (payload.request_id !== activeRequestId.current) return;
@@ -110,7 +111,7 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
       const finalContent = streamingContentRef.current;
       activeRequestId.current = null;
       streamingContentRef.current = "";
-      const sid = activeSessionId.current;
+      const sid = activeSessionIdRef.current;
       if (sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
         persistedRequestIds.current.add(finishedRequestId);
         ai.appendSessionMessage(sid, "assistant", finalContent, "complete").catch((e) => {
@@ -132,7 +133,7 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
   }
 
   async function handleSend() {
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || !activeSessionId) return;
     setError(null);
     const rid = crypto.randomUUID();
     activeRequestId.current = rid;
@@ -146,8 +147,11 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
     // Persist the user message before kicking off generation, so storage
     // ordering (USER then ASSISTANT) holds even though assistant
     // persistence happens later, asynchronously, on payload.done.
-    const sid = activeSessionId.current;
-    if (sid) {
+    // SessionTabs disables switching/deleting while sending is true, so
+    // activeSessionId is guaranteed stable for the lifetime of this send -
+    // see the streaming/session-switch limitation note near onSendingChange.
+    const sid = activeSessionId;
+    {
       try { await ai.appendSessionMessage(sid, "user", um.content, "complete"); }
       catch (e) { console.error("Failed to persist user message", e); setError(`Message wasn't saved: ${e}`); }
     }
@@ -170,6 +174,11 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
   if (ollamaAvailable === null) return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Checking Ollama...</div>;
   if (!ollamaAvailable) return <EmptyState icon="🔌" title="Ollama not detected" hint="Install Ollama and make sure it's running at localhost:11434, then reopen NeuralForge." />;
   if (workspaceOpen && sessionState === "loading") return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Loading conversation...</div>;
+  // Empty session state (v1.3.0 Phase 4B): reachable after deleting the
+  // last session in a workspace. SessionTabs' "+ New" stays enabled here -
+  // this is just the message pane telling the user there's nothing active
+  // to send into yet.
+  if (workspaceOpen && sessionsReady && !activeSessionId) return <EmptyState icon="💬" title="No active session" hint={'Click "+ New" above to start a conversation'} />;
 
   return (
     <div className="flex h-full flex-col bg-white dark:bg-neutral-900">
@@ -187,6 +196,7 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {messages.length === 0 && <EmptyState icon="💬" title="Ask NeuralForge anything" hint="Questions about your code get workspace context automatically" />}
         {messages.map((m, i) => { const iu = m.role === "user"; const isStreamingNow = sending && i === messages.length - 1; const complete = !iu && m.content && !isStreamingNow; return (<div key={i} className={`mb-3 flex ${iu ? "justify-end" : "justify-start"}`}><div className={`max-w-[85%] ${iu ? "items-end" : "items-start"} flex flex-col gap-1`}><div className={`group relative rounded-lg px-3 py-2 text-sm leading-relaxed shadow-sm ${iu ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100"}`}><div className="whitespace-pre-wrap">{m.content || (isStreamingNow ? "…" : "")}</div>{complete && <CopyButton text={m.content} className="absolute right-1 top-1 opacity-0 group-hover:opacity-100" />}</div><div className="flex items-center gap-1.5 px-1 text-[10px] text-neutral-400 dark:text-neutral-600"><span>{formatTime(m.timestamp)}</span>{m.fromCache && <span className="font-medium text-yellow-600 dark:text-yellow-500">from cache</span>}</div></div></div>); })}
+        {externalError && <ErrorBanner message={externalError} onDismiss={onDismissExternalError} />}
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       </div>
       <div className="flex shrink-0 items-end gap-2 border-t border-neutral-200 p-2 dark:border-neutral-800">
@@ -194,7 +204,7 @@ export default function ChatPane({ workspaceRoot }: ChatPaneProps) {
         {sending ? (
           <button onClick={cancelGeneration} className="flex shrink-0 items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500">⏹ Stop</button>
         ) : (
-          <button onClick={handleSend} disabled={!autoMode && !selectedModel} className="flex shrink-0 items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{sending && <Spinner size={10} />}Send</button>
+          <button onClick={handleSend} disabled={(!autoMode && !selectedModel) || !activeSessionId} className="flex shrink-0 items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{sending && <Spinner size={10} />}Send</button>
         )}
       </div>
     </div>

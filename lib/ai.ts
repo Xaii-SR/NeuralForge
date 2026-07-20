@@ -232,3 +232,7 @@ export function updateSessionMetadata(
   return invoke("update_session_metadata", { sessionId, title, lastMessagePreview });
 }
 
+export function deleteSession(sessionId: string): Promise<void> {
+  return invoke("delete_session", { sessionId });
+}
+
