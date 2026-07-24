@@ -3332,7 +3332,7 @@ dependencies = [
 
 [[package]]
 name = "neuralforge"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "crossbeam-utils",
  "fastembed",
