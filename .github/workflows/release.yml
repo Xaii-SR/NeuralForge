@@ -29,7 +29,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: __VERSION__
-          releaseName: 'Neural Forge __VERSION__'
-          releaseBody: 'Automated release of Neural Forge. See the attached assets to download and install.'
+          releaseName: 'Version __VERSION__'
+          releaseBody: 'Release metadata will be finalized from RELEASE_NOTES.md after the build completes.'
           releaseDraft: false
           prerelease: false
+      - name: Apply release title and notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          gh release edit $tag --title "Version $version" --notes-file RELEASE_NOTES.md

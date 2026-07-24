@@ -38,6 +38,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promptMakerOpen, setPromptMakerOpen] = useState(false);
   const [councilOpen, setCouncilOpen] = useState(false);
+  const [selectedContext, setSelectedContext] = useState<string | null>(null);
 
   useEvent<FileChangedPayload>("FILE_CHANGED", (payload) => { setLastEvent(`${payload.kind}: ${payload.path}`); });
 
@@ -83,7 +84,7 @@ export default function Home() {
       )}
       <div ref={layout.rootRef} className="flex min-h-0 flex-1">
         <div style={{ width: "var(--nf-sidebar-w, 256px)" }} className="shrink-0 border-r border-neutral-200 dark:border-neutral-800">
-          {workspace.workspaceRoot ? <FileExplorer workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} /> : <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />}
+          {workspace.workspaceRoot ? <FileExplorer workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} onContextSelect={setSelectedContext} /> : <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />}
         </div>
         <ResizeHandle orientation="vertical" label="Resize file explorer" onPointerDown={layout.startDrag("sidebar")} onDoubleClick={() => layout.resetPanel("sidebar")} onNudge={(d) => layout.nudgePanel("sidebar", d)} />
         <div className="flex min-w-0 flex-1 flex-col">
@@ -108,8 +109,8 @@ export default function Home() {
           </div>
         </div>
         <ResizeHandle orientation="vertical" label="Resize chat panel" onPointerDown={layout.startDrag("chat")} onDoubleClick={() => layout.resetPanel("chat")} onNudge={(d) => layout.nudgePanel("chat", -d)} />
-        <div style={{ width: "var(--nf-chat-w, 320px)" }} className="shrink-0 border-l border-neutral-200 dark:border-neutral-800">
-          <SessionTabs workspaceRoot={workspace.workspaceRoot} />
+        <div style={{ width: "var(--nf-chat-w, 380px)" }} className="shrink-0 border-l border-neutral-200 dark:border-neutral-800">
+          <SessionTabs workspaceRoot={workspace.workspaceRoot} selectedContext={selectedContext} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">{lastEvent ?? "Ready"}</div>

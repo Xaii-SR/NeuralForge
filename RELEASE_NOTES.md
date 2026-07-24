@@ -1,37 +1,49 @@
-# NeuralForge v1.4.0
+# NeuralForge v1.4.2
 
 A local-first, offline-capable, AI-native desktop IDE. Tauri 2 (Rust) backend, Next.js 16 frontend, powered by local (Ollama) and configurable cloud AI providers.
 
-This release adds automatic workspace restoration on top of the v1.3.0 foundation. All v1.3.0 functionality (persistent chat sessions, SessionTabs, automatic background workspace indexing, providers, AI Council, Prompt Maker, build identity display, editor/file/terminal shell) is preserved unchanged.
+This release packages the validated stabilization and workflow improvements currently present in the repository, with a focus on database reliability, workspace context handling, provider model selection, and Ollama usability.
 
-## What's new in v1.4.0
+## What's new in v1.4.2
 
-**Workspace Restoration**
-NeuralForge now remembers the last workspace you had open and reopens it automatically on launch — no manual "Open Folder" step required to pick up where you left off. Restoration goes through the exact same open flow as a manual open, so background indexing runs and your saved chat sessions (SessionTabs) reappear with the workspace, exactly as you left them.
+**Stability and Database Reliability**
+- Enabled the correct SQLite concurrency configuration for the application's shared and background connection pattern.
+- Corrected WAL initialization so journal mode is read correctly instead of being executed like a rowless statement.
+- Preserved the existing database schema while improving concurrent session and indexing reliability.
 
-Restoration is fully graceful:
-- First launch (nothing to restore) starts at the normal "No folder open" state.
-- If the remembered folder was moved or deleted, NeuralForge simply starts fresh — never an error screen.
-- Restoration can never block or break startup; any failure silently falls back to a normal fresh launch.
+**Workspace and Indexing Reliability**
+- Improved workspace indexing for files modified more than once within the same filesystem timestamp interval.
+- Added content-hash verification so same-second file changes are not incorrectly treated as unchanged.
+- Preserved the existing workspace scoping behavior for sessions and reopened workspaces.
 
-## Carried forward from v1.3.0
+**File and Folder Context**
+- Added explicit file and folder selection behavior in the explorer.
+- Connected the selected file or folder to the active chat context.
+- Preserved the existing file-opening workflow while making context selection available.
 
-- **Persistent Chat Sessions** — conversations are saved per workspace in SQLite and restored across restarts.
-- **SessionTabs** — create, switch, rename, and delete parallel conversations per workspace.
-- **Automatic Workspace Indexing** — opening a folder indexes it on a background thread; the UI stays responsive even for very large workspaces, and repeat opens skip unchanged files.
-- **Workspace-aware AI Chat** — repository context is retrieved automatically for your questions.
-- **AI Council** — the sequential Architect → Critic → Judge multi-agent reasoning pass, available from the red Council toolbar button.
-- **Prompt Maker** — guided prompt generation from the toolbar.
-- **Provider support** — local Ollama plus configurable cloud providers (Anthropic, Gemini, OpenAI-compatible endpoints) with secure OS-keychain credential storage and per-provider connection testing.
+**Provider and Model Improvements**
+- Added model selection to the provider configuration flow.
+- Populated model presets for supported non-Ollama providers.
+- Ensured saved Ollama model selections are honored instead of always defaulting to the first discovered model.
 
-## Compatibility
+**Ollama Improvements**
+- Added an Ollama model installation workflow from the provider UI.
+- Added installed-model state handling to avoid duplicate or confusing install actions.
+- Preserved the existing Ollama discovery architecture.
 
-- Workspaces opened for the first time with v1.4.0 initialize cleanly with no manual setup.
-- Workspaces and sessions created under v1.3.0 continue to work unchanged — no migration step.
-- All v1.3.0 features are unchanged.
+**Interface Improvements**
+- Increased the default chat pane width.
+- Corrected provider guidance placement and related form details.
+
+## Validation
+
+- `npx tsc --noEmit`: passed
+- `npm run build`: passed
+- `cargo check`: passed
+- `cargo test`: passed, 376 passed / 0 failed / 19 ignored
+
+Existing legacy Rust warnings remain in the codebase and were unchanged by this release.
 
 ## Installation
 
-See [INSTALLATION.md](INSTALLATION.md) for full setup. Windows x64 build artifacts are provided with this release (NSIS `.exe` and `.msi`).
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+See [INSTALLATION.md](INSTALLATION.md) for full setup. Windows x64 build artifacts are produced through the repository's tag-driven GitHub Actions release workflow.

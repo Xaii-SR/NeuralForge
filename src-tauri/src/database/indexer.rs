@@ -550,8 +550,7 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
         let rel_path = path.strip_prefix(workspace_root).unwrap_or(path).to_string_lossy().to_string();
         let existing: Option<(String, i64)> = conn.query_row("SELECT content_hash, modified_at FROM files WHERE path = ?1", params![rel_path],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).ok();
-        if let Some((ref existing_hash, existing_modified)) = existing {
-            if existing_modified == modified_at { stats.files_skipped_unchanged += 1; continue; }
+        if let Some((ref existing_hash, _existing_modified)) = existing {
             let Ok(bytes) = std::fs::read(path) else { stats.files_failed += 1; continue; };
             if !is_probably_text(&bytes) { stats.files_skipped_binary += 1; continue; }
             let Ok(content) = String::from_utf8(bytes) else { stats.files_failed += 1; continue; };

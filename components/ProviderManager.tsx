@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as providers from "@/lib/providers";
+import * as ai from "@/lib/ai";
 import type { ProviderConfig } from "@/lib/providers";
 import Spinner from "@/components/ui/Spinner";
 
@@ -46,6 +47,24 @@ const PROVIDER_TYPES = [
 
 const providerTypeByValue = new Map(PROVIDER_TYPES.map((provider) => [provider.value, provider]));
 
+const OLLAMA_MODEL_CATALOG = [
+  "qwen2.5-coder:7b",
+  "llama3.1:8b",
+  "deepseek-r1:7b",
+  "mistral:7b",
+  "gemma3:4b",
+];
+
+const PROVIDER_MODEL_PRESETS: Record<string, string[]> = {
+  openai: ["gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+  anthropic: ["claude-sonnet-4-20250514", "claude-3-5-haiku-latest"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-pro"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  mistral: ["mistral-large-latest", "codestral-latest"],
+  qwen: ["qwen-plus", "qwen-turbo"],
+  openrouter: ["openai/gpt-4.1-mini", "anthropic/claude-sonnet-4"],
+};
+
 const TASK_KEYS = [
   { key: "active_model_chat", label: "Chat" },
   { key: "active_model_agent", label: "Agent" },
@@ -70,8 +89,13 @@ export default function ProviderManager() {
   const [newType, setNewType] = useState("openai_compatible");
   const [newUrl, setNewUrl] = useState("");
   const [newKey, setNewKey] = useState("");
+  const [newModel, setNewModel] = useState("");
+  const [ollamaModels, setOllamaModels] = useState<ai.OllamaModel[]>([]);
+  const [installMenu, setInstallMenu] = useState<string | null>(null);
+  const [installingModel, setInstallingModel] = useState<string | null>(null);
   const [editModel, setEditModel] = useState("");
   const selectedProviderType = useMemo(() => providerTypeByValue.get(newType), [newType]);
+  const newModelOptions = newType === "ollama" ? ollamaModels.map((model) => model.name) : PROVIDER_MODEL_PRESETS[newType] ?? [];
 
   const load = useCallback(async () => {
     try {
@@ -93,14 +117,34 @@ export default function ProviderManager() {
     });
   }, []);
 
+  useEffect(() => {
+    if (newType !== "ollama") return;
+    ai.listModels().then(setOllamaModels).catch(() => setOllamaModels([]));
+  }, [newType]);
+
   async function handleAdd() {
     if (!newName.trim() || !newUrl.trim()) return;
     try {
-      await providers.addProviderConfig(newName.trim(), newType, newUrl.trim(), newKey.trim());
-      setNewName(""); setNewType("openai_compatible"); setNewUrl(""); setNewKey("");
+      const created = await providers.addProviderConfig(newName.trim(), newType, newUrl.trim(), newKey.trim());
+      if (newModel.trim()) await providers.updateProviderConfig(created.id, { models: [newModel.trim()] });
+      setNewName(""); setNewType("openai_compatible"); setNewUrl(""); setNewKey(""); setNewModel("");
       setShowAdd(false);
       await load();
     } catch (e: any) { setTestResult(`Error: ${e}`); }
+  }
+
+  async function handleInstallModel(config: ProviderConfig, model: string) {
+    if (config.provider_type !== "ollama" || installingModel) return;
+    setInstallingModel(model); setTestResult(null);
+    try {
+      await ai.pullModel(model);
+      const installed = await ai.listModels();
+      setOllamaModels(installed);
+      await providers.updateProviderConfig(config.id, { models: installed.map((item) => item.name) });
+      await load();
+      setTestResult(`Installed ${model}`);
+    } catch (e: any) { setTestResult(`Install failed: ${e}`); }
+    finally { setInstallingModel(null); }
   }
 
   function handleProviderTypeChange(value: string) {
@@ -172,12 +216,16 @@ export default function ProviderManager() {
             <select value={newType} onChange={(e) => handleProviderTypeChange(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800">
               {PROVIDER_TYPES.map((t) => (<option key={t.value} value={t.value}>{t.label}</option>))}
             </select>
+            <select value={newModel} onChange={(e) => setNewModel(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800">
+              <option value="">Model (optional)</option>
+              {newModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+            </select>
+            <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="Base URL (e.g. http://localhost:1234/v1)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
             {selectedProviderType?.notes && (
               <div className="rounded bg-white/70 px-2 py-1 text-[10px] text-neutral-500 dark:bg-neutral-900/40 dark:text-neutral-400">
                 {selectedProviderType.notes}
               </div>
             )}
-            <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="Base URL (e.g. http://localhost:1234/v1)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
             <input value={newKey} onChange={(e) => setNewKey(e.target.value)} type="password" placeholder="API Key (optional)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
             <button onClick={handleAdd} className="w-full rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500">Save Provider</button>
           </div>
@@ -218,6 +266,21 @@ export default function ProviderManager() {
                     </button>
                     {discoveredModels.length > 0 && (
                       <span className="text-[10px] text-neutral-400">{discoveredModels.length} models found</span>
+                    )}
+                    {cfg.provider_type === "ollama" && (
+                      <div className="relative">
+                        <button onClick={async () => { if (installMenu === cfg.id) { setInstallMenu(null); return; } setInstallMenu(cfg.id); try { setOllamaModels(await ai.listModels()); } catch {} }} className="rounded bg-blue-50 px-2.5 py-1 text-[10px] font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50">
+                          Install Models
+                        </button>
+                        {installMenu === cfg.id && (
+                          <div className="absolute left-0 top-8 z-10 w-56 rounded border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+                            {OLLAMA_MODEL_CATALOG.map((model) => {
+                              const installed = ollamaModels.some((item) => item.name === model) || cfg.models.includes(model);
+                              return <button key={model} disabled={installed || installingModel !== null} onClick={() => handleInstallModel(cfg, model)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[10px] ${installed ? "text-neutral-700 dark:text-neutral-200" : "text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800"}`}><span>{model}</span><span>{installed ? "Installed" : installingModel === model ? "Installing..." : "↓"}</span></button>;
+                            })}
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
 

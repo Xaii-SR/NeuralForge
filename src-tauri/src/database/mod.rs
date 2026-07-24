@@ -267,6 +267,15 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // to 5s, which comfortably covers the indexer's short write bursts.
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| AppError::Provider(format!("failed to set busy timeout: {e}")))?;
+    // WAL allows readers to continue while the background indexer commits.
+    // Some test/portable workspace paths can be read-only to SQLite even
+    // though the database itself is usable. Keep the existing timeout-based
+    // fallback there; normal workspace databases use WAL.
+    if let Err(e) = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get::<_, String>(0)) {
+        tracing::warn!(target: "database", event = "wal_unavailable", error = %e);
+    }
+    conn.execute_batch("PRAGMA synchronous = NORMAL;")
+        .map_err(|e| AppError::Provider(format!("failed to configure SQLite synchronous mode: {e}")))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
 

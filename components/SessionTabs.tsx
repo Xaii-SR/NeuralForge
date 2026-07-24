@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as ai from "@/lib/ai";
 import ChatPane from "@/components/ChatPane";
 
-export interface SessionTabsProps { workspaceRoot: string | null; }
+export interface SessionTabsProps { workspaceRoot: string | null; selectedContext?: string | null; }
 
 const TAB_BUTTON = "group flex shrink-0 items-center gap-1 rounded-t px-2.5 py-1 text-xs font-medium transition-colors border-b-2 max-w-[140px]";
 const TAB_ACTIVE = "border-blue-500 bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100";
@@ -19,7 +19,7 @@ type TabsState = "uninitialized" | "loading" | "ready" | "failed";
  * or create sessions itself (that logic moved here from ChatPane's old
  * Phase 4A init effect, it was not duplicated).
  */
-export default function SessionTabs({ workspaceRoot }: SessionTabsProps) {
+export default function SessionTabs({ workspaceRoot, selectedContext }: SessionTabsProps) {
   const [sessions, setSessions] = useState<ai.Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tabsState, setTabsState] = useState<TabsState>("uninitialized");
@@ -174,6 +174,7 @@ export default function SessionTabs({ workspaceRoot }: SessionTabsProps) {
       <div className="min-h-0 flex-1">
         <ChatPane
           workspaceRoot={workspaceRoot}
+          selectedContext={selectedContext}
           activeSessionId={activeSessionId}
           sessionsReady={tabsState === "ready" || tabsState === "failed"}
           externalError={error}

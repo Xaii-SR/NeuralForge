@@ -8,6 +8,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
 import CopyButton from "@/components/ui/CopyButton";
+import { getAppConfig } from "@/lib/store";
 
 interface DisplayMessage { role: "user" | "assistant"; content: string; fromCache?: boolean; timestamp: number; }
 interface TokenPayload { request_id: string; token: string; done: boolean; from_cache?: boolean; }
@@ -15,6 +16,7 @@ type SessionState = "uninitialized" | "loading" | "ready" | "failed";
 
 export interface ChatPaneProps {
   workspaceRoot: string | null;
+  selectedContext?: string | null;
   // v1.3.0 Phase 4B: session selection now lives in SessionTabs, which is
   // this component's only caller. ChatPane consumes the active session id
   // and messages for it - it does not discover or create sessions itself.
@@ -35,9 +37,10 @@ function workspaceName(workspaceRoot: string | null): string | null {
   return workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? workspaceRoot;
 }
 
-export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
+export default function ChatPane({ workspaceRoot, selectedContext, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
   const workspaceOpen = !!workspaceRoot;
   const connectedWorkspace = workspaceName(workspaceRoot);
+  const [liveSelectedContext, setLiveSelectedContext] = useState<string | null>(selectedContext ?? null);
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
@@ -67,10 +70,16 @@ export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady
   // request, even if AI_RESPONSE_TOKEN's done:true is (re)delivered more
   // than once for the same request_id.
   const persistedRequestIds = useRef<Set<string>>(new Set());
+  useEffect(() => { setLiveSelectedContext(selectedContext ?? null); }, [selectedContext]);
+  useEffect(() => {
+    const onContextSelected = (event: Event) => setLiveSelectedContext((event as CustomEvent<string>).detail);
+    window.addEventListener("nf_context_selected", onContextSelected);
+    return () => window.removeEventListener("nf_context_selected", onContextSelected);
+  }, []);
 
   async function handleIndex() { setIndexing(true); setIndexStatus(null); try { const s = await ai.indexWorkspace(); setIndexStatus(`Indexed ${s.files_indexed} files (${s.chunks_created} chunks)`); } catch (e) { setIndexStatus(`Index failed: ${e}`); } finally { setIndexing(false); } }
 
-  useEffect(() => { ai.ollamaHealthCheck().then(async (healthy) => { setOllamaAvailable(healthy); if (healthy) { const l = await ai.listModels(); setModels(l); if (l.length > 0) setSelectedModel(l[0].name); } }); }, []);
+  useEffect(() => { ai.ollamaHealthCheck().then(async (healthy) => { setOllamaAvailable(healthy); if (healthy) { const l = await ai.listModels(); setModels(l); const saved = await getAppConfig().catch(() => null); const preferred = saved?.model && l.some((model) => model.name === saved.model) ? saved.model : l[0]?.name; if (preferred) setSelectedModel(preferred); } }); }, []);
 
   useEffect(() => { onSendingChange(sending); }, [sending, onSendingChange]);
 
@@ -169,7 +178,10 @@ export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady
     } else { setAutoSelection(null); }
     if (!mtu) { setError("No model available"); setSending(false); activeRequestId.current = null; return; }
     let cp: string | null = null;
-    try { cp = await ai.getContextForQuery(um.content); } catch { cp = null; }
+    try {
+      const contextQuery = liveSelectedContext ? `${um.content}\nSelected workspace context: ${liveSelectedContext}` : um.content;
+      cp = await ai.getContextForQuery(contextQuery);
+    } catch { cp = null; }
     const out: ai.ChatMessage[] = [];
     if (cp) out.push({ role: "system", content: cp });
     out.push(...nm.map((m) => ({ role: m.role, content: m.content })));
@@ -200,6 +212,7 @@ export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady
             Workspace: {connectedWorkspace}
           </div>
         )}
+        {liveSelectedContext && <div title={liveSelectedContext} className="max-w-[180px] truncate rounded bg-blue-50 px-2 py-1 text-[10px] font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">Context: {liveSelectedContext.split(/[\\/]/).pop()}</div>}
         {workspaceOpen && <button onClick={handleIndex} disabled={indexing} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-300 dark:hover:bg-neutral-800">{indexing && <Spinner size={10} />}{indexing ? "Indexing..." : "Index Workspace"}</button>}
       </div>
       {indexStatus && <div className="border-b border-neutral-200 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">{indexStatus}</div>}
