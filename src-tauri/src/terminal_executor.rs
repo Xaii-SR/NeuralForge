@@ -73,9 +73,8 @@ pub struct ExecutionStreamPayload {
 }
 
 fn validate_request(req: &ExecutionRequest, config: &SandboxConfig) -> AppResult<()> {
-    let full = format!("{} {}", req.command, req.arguments.join(" "));
     for blocked in &config.denylist {
-        if full.contains(blocked) {
+        if denylist_matches(req, blocked) {
             return Err(AppError::CommandRejected(format!("blocked by denylist '{}'", blocked)));
         }
     }
@@ -90,6 +89,37 @@ fn validate_request(req: &ExecutionRequest, config: &SandboxConfig) -> AppResult
         return Err(AppError::InvalidPath(req.working_directory.clone()));
     }
     Ok(())
+}
+
+fn denylist_matches(req: &ExecutionRequest, blocked: &str) -> bool {
+    let command = req.command.to_lowercase();
+    let args: Vec<String> = req.arguments.iter().map(|a| a.to_lowercase()).collect();
+    let full = std::iter::once(command.as_str())
+        .chain(args.iter().map(|s| s.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pattern = blocked.to_lowercase();
+
+    if full.contains(&pattern) {
+        return true;
+    }
+
+    match command.as_str() {
+        "rm" => {
+            let delete_root = args.iter().any(|a| a == "/" || a == "~" || a == "/root" || a == "c:\\");
+            let dangerous_flag = args.iter().any(|a| a == "-r" || a == "-rf" || a.contains("-r") || a.contains("-f"));
+            delete_root && dangerous_flag
+        }
+        "find" => args.iter().any(|a| a == "-delete" || a == "-exec") && args.iter().any(|a| a == "/" || a == "."),
+        "sh" | "bash" | "zsh" | "powershell" | "pwsh" => {
+            full.contains("rm -rf /")
+                || full.contains("rm -rf ~")
+                || full.contains("find / -delete")
+                || full.contains("find . -delete")
+        }
+        "cmd" => full.contains("del /s") || full.contains("rd /s") || full.contains("format "),
+        _ => false,
+    }
 }
 
 pub async fn execute_command(app: AppHandle, sandbox: &SandboxState, req: ExecutionRequest) -> AppResult<ExecutionResult> {

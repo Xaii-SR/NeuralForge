@@ -17,7 +17,6 @@ const PROVIDER_TYPES = [
   { value: "fireworks", label: "Fireworks" },
   { value: "deepinfra", label: "DeepInfra" },
   { value: "mistral", label: "Mistral" },
-  { value: "cohere", label: "Cohere" },
 ];
 
 const TASK_KEYS = [
