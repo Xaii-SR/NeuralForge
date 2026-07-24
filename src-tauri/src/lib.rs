@@ -46,9 +46,9 @@ use task_orchestrator::OrchestratorState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  if let Err(e) = bootstrap::environment::enforce_environment_gate() {
-    eprintln!("{}", e);
-    std::process::exit(1);
+  let bootstrap_warning = bootstrap::environment::enforce_environment_gate().err();
+  if let Some(message) = &bootstrap_warning {
+    eprintln!("{message}");
   }
 
   tauri::Builder::default()
@@ -185,10 +185,22 @@ pub fn run() {
       task_orchestrator::orchestrator_get_state,
       task_orchestrator::orchestrator_reset,
     ])
-    .setup(|app| {
-      let log_dir = app.path().app_log_dir()?;
+    .setup(move |app| {
+      let log_dir = app
+        .path()
+        .app_log_dir()
+        .or_else(|_| app.path().app_local_data_dir().map(|dir| dir.join("logs")))?;
       let guard = core::logging::init(&log_dir)?;
       app.manage(guard);
+
+      if let Some(message) = &bootstrap_warning {
+        tracing::warn!(
+          target: "bootstrap",
+          event = "environment_gate_warning",
+          message = %message,
+          "startup continued with local AI environment unavailable"
+        );
+      }
 
       tracing::info!(target: "core", event = "app_started", "NeuralForge started");
       Ok(())

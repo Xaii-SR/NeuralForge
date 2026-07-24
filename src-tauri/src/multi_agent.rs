@@ -394,9 +394,20 @@ mod tests {
     use crate::context_retrieval::RankedFile;
     use crate::terminal_executor::{ExecutionRequest, ExecutionResult};
 
+    fn test_workspace_root(label: &str) -> PathBuf {
+        let mut root = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        root.push(format!("neuralforge_multi_agent_{label}_{nanos}"));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     #[test]
     fn create_session_initializes_all_agents() {
-        let session = MultiAgentSupervisor::create_session("Fix auth bug", PathBuf::from("/tmp"));
+        let session = MultiAgentSupervisor::create_session("Fix auth bug", test_workspace_root("create_session"));
         assert_eq!(session.agents.len(), 5);
         assert!(session.agents.contains_key(&AgentRole::Supervisor));
         assert!(session.agents.contains_key(&AgentRole::Research));
@@ -408,7 +419,7 @@ mod tests {
 
     #[test]
     fn research_phase_produces_summary() {
-        let mut session = MultiAgentSupervisor::create_session("Investigate project", PathBuf::from("/tmp"));
+        let mut session = MultiAgentSupervisor::create_session("Investigate project", test_workspace_root("research"));
         let ranked = vec![
             RankedFile { path: "src/main.rs".into(), language: "Rust".into(), priority: 100, reason: "exact match".into(), matched_symbols: vec![], snippet: String::new() },
             RankedFile { path: "src/lib.rs".into(), language: "Rust".into(), priority: 90, reason: "path match".into(), matched_symbols: vec![], snippet: String::new() },
@@ -422,7 +433,7 @@ mod tests {
 
     #[test]
     fn planning_decomposes_into_subtasks() {
-        let mut session = MultiAgentSupervisor::create_session("Add auth system", PathBuf::from("/tmp"));
+        let mut session = MultiAgentSupervisor::create_session("Add auth system", test_workspace_root("planning"));
         let ranked = vec![RankedFile { path: "src/auth.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec!["authenticate".into()], snippet: String::new() }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         let subtasks = MultiAgentSupervisor::plan(&mut session).unwrap();
@@ -434,7 +445,7 @@ mod tests {
 
     #[test]
     fn execute_and_observe_subtask() {
-        let mut session = MultiAgentSupervisor::create_session("Test feature", PathBuf::from("/tmp"));
+        let mut session = MultiAgentSupervisor::create_session("Test feature", test_workspace_root("execute"));
         let ranked = vec![RankedFile { path: "src/lib.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec![], snippet: String::new() }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         MultiAgentSupervisor::plan(&mut session).unwrap();
@@ -456,7 +467,7 @@ mod tests {
 
     #[test]
     fn aggregation_produces_summary() {
-        let mut session = MultiAgentSupervisor::create_session("Complete auth", PathBuf::from("/tmp"));
+        let mut session = MultiAgentSupervisor::create_session("Complete auth", test_workspace_root("aggregate"));
         let ranked = vec![RankedFile { path: "src/auth.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec![], snippet: String::new() }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         MultiAgentSupervisor::plan(&mut session).unwrap();
@@ -478,7 +489,7 @@ mod tests {
 
     #[test]
     fn message_passing_between_agents() {
-        let mut session = MultiAgentSupervisor::create_session("Message test", PathBuf::from("/tmp"));
+        let mut session = MultiAgentSupervisor::create_session("Message test", test_workspace_root("messages"));
         session.message_queue.push(AgentMessage {
             id: "msg-1".into(),
             from: AgentRole::Research,
