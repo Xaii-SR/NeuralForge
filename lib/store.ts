@@ -12,6 +12,21 @@ export interface AIConfig {
 }
 
 const STORE_VERSION = 1;
+export type EffortLevel = AIConfig["effort"];
+
+export function inferEffortForModel(model: string): EffortLevel {
+  const normalized = model.toLowerCase();
+  if (/(reason|thinking|r1|o3|o4|opus|pro|max|large|70b|72b|120b|405b)/.test(normalized)) {
+    return "Extra High";
+  }
+  if (/(coder|code|sonnet|medium|32b|34b|40b|mixtral|jamba)/.test(normalized)) {
+    return "High";
+  }
+  if (/(mini|small|flash|haiku|lite|fast|8b|7b|3b|1b)/.test(normalized)) {
+    return "Medium";
+  }
+  return "High";
+}
 
 function safeJSONParse(value: string | null) {
   try { return value ? JSON.parse(value) : null; }

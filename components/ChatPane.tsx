@@ -30,8 +30,14 @@ export interface ChatPaneProps {
 
 function formatTime(ts: number): string { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 
+function workspaceName(workspaceRoot: string | null): string | null {
+  if (!workspaceRoot) return null;
+  return workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? workspaceRoot;
+}
+
 export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
   const workspaceOpen = !!workspaceRoot;
+  const connectedWorkspace = workspaceName(workspaceRoot);
   const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
   const [models, setModels] = useState<ai.OllamaModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
@@ -189,7 +195,12 @@ export default function ChatPane({ workspaceRoot, activeSessionId, sessionsReady
             {models.map((m) => (<option key={m.name} value={m.name}>{m.name} ({m.parameter_size})</option>))}
           </select>
         )}
-        {workspaceOpen && <button onClick={handleIndex} disabled={indexing} className="ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-300 dark:hover:bg-neutral-800">{indexing && <Spinner size={10} />}{indexing ? "Indexing..." : "Index Workspace"}</button>}
+        {connectedWorkspace && (
+          <div title={workspaceRoot ?? undefined} className="ml-auto max-w-[220px] truncate rounded bg-neutral-100 px-2 py-1 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+            Workspace: {connectedWorkspace}
+          </div>
+        )}
+        {workspaceOpen && <button onClick={handleIndex} disabled={indexing} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-300 dark:hover:bg-neutral-800">{indexing && <Spinner size={10} />}{indexing ? "Indexing..." : "Index Workspace"}</button>}
       </div>
       {indexStatus && <div className="border-b border-neutral-200 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">{indexStatus}</div>}
       {autoMode && autoSelection && (<div className="border-b border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[10px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">Selected <span className="font-medium text-neutral-800 dark:text-neutral-200">{autoSelection.model}</span> from {autoSelection.provider} because {autoSelection.reason}. {autoSelection.is_free ? <span className="font-medium text-green-600 dark:text-green-400">Free</span> : <span className="font-medium text-yellow-600 dark:text-yellow-400">~${autoSelection.estimated_cost_usd.toFixed(4)}</span>}</div>)}

@@ -1,23 +1,50 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as providers from "@/lib/providers";
 import type { ProviderConfig } from "@/lib/providers";
 import Spinner from "@/components/ui/Spinner";
 
 const PROVIDER_TYPES = [
-  { value: "ollama", label: "Ollama" },
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai_compatible", label: "OpenAI Compatible" },
-  { value: "gemini", label: "Google Gemini" },
-  { value: "openrouter", label: "OpenRouter" },
-  { value: "groq", label: "Groq" },
-  { value: "together", label: "Together AI" },
-  { value: "fireworks", label: "Fireworks" },
-  { value: "deepinfra", label: "DeepInfra" },
-  { value: "mistral", label: "Mistral" },
+  { value: "ollama", label: "Ollama", baseUrl: "http://localhost:11434", notes: "Local models" },
+  { value: "lmstudio", label: "LM Studio", baseUrl: "http://localhost:1234", notes: "Local OpenAI-compatible server" },
+  { value: "llamacpp", label: "llama.cpp", baseUrl: "http://localhost:8080", notes: "Local OpenAI-compatible server" },
+  { value: "localai", label: "LocalAI", baseUrl: "http://localhost:8080", notes: "Local OpenAI-compatible server" },
+  { value: "vllm", label: "vLLM", baseUrl: "http://localhost:8000", notes: "Self-hosted OpenAI-compatible server" },
+  { value: "sglang", label: "SGLang", baseUrl: "http://localhost:30000", notes: "Self-hosted OpenAI-compatible server" },
+  { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", notes: "Native OpenAI-compatible API" },
+  { value: "anthropic", label: "Anthropic", baseUrl: "https://api.anthropic.com", notes: "Native Claude adapter" },
+  { value: "gemini", label: "Google Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta", notes: "Native Gemini adapter" },
+  { value: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", notes: "Aggregator for many frontier/open models" },
+  { value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", notes: "OpenAI-compatible API" },
+  { value: "xai", label: "xAI Grok", baseUrl: "https://api.x.ai/v1", notes: "OpenAI-compatible API" },
+  { value: "mistral", label: "Mistral AI", baseUrl: "https://api.mistral.ai/v1", notes: "OpenAI-compatible API" },
+  { value: "groq", label: "GroqCloud", baseUrl: "https://api.groq.com/openai/v1", notes: "OpenAI-compatible API" },
+  { value: "together", label: "Together AI", baseUrl: "https://api.together.xyz/v1", notes: "OpenAI-compatible API" },
+  { value: "fireworks", label: "Fireworks AI", baseUrl: "https://api.fireworks.ai/inference/v1", notes: "OpenAI-compatible API" },
+  { value: "deepinfra", label: "DeepInfra", baseUrl: "https://api.deepinfra.com/v1/openai", notes: "Provider-specific OpenAI-compatible path" },
+  { value: "cerebras", label: "Cerebras Cloud", baseUrl: "https://api.cerebras.ai/v1", notes: "OpenAI-compatible API" },
+  { value: "sambanova", label: "SambaNova Cloud", baseUrl: "https://api.sambanova.ai/v1", notes: "OpenAI-compatible API" },
+  { value: "perplexity", label: "Perplexity", baseUrl: "https://api.perplexity.ai", notes: "OpenAI-compatible chat API" },
+  { value: "ai21", label: "AI21 Labs", baseUrl: "https://api.ai21.com/studio/v1", notes: "Use only if your account exposes OpenAI-compatible chat" },
+  { value: "cohere", label: "Cohere", baseUrl: "https://api.cohere.com/compatibility/v1", notes: "OpenAI-compatible endpoint only" },
+  { value: "qwen", label: "Alibaba Qwen", baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", notes: "OpenAI-compatible mode" },
+  { value: "moonshot", label: "Moonshot Kimi", baseUrl: "https://api.moonshot.ai/v1", notes: "OpenAI-compatible API" },
+  { value: "zhipu", label: "Zhipu GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4", notes: "Versioned compatible API; adjust if your account expects a different root" },
+  { value: "minimax", label: "MiniMax", baseUrl: "https://api.minimax.io/v1", notes: "Use only if your account exposes OpenAI-compatible chat" },
+  { value: "baidu", label: "Baidu ERNIE", baseUrl: "https://qianfan.baidubce.com/v2", notes: "Use only if your account exposes OpenAI-compatible chat" },
+  { value: "tencent", label: "Tencent Hunyuan", baseUrl: "https://api.hunyuan.cloud.tencent.com/v1", notes: "Use only if your account exposes OpenAI-compatible chat" },
+  { value: "bytedance", label: "ByteDance Doubao", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", notes: "OpenAI-compatible API" },
+  { value: "01ai", label: "01.AI Yi", baseUrl: "https://api.lingyiwanwu.com/v1", notes: "OpenAI-compatible API" },
+  { value: "nvidia", label: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1", notes: "OpenAI-compatible API" },
+  { value: "ibm", label: "IBM watsonx / Granite", baseUrl: "", notes: "Enter your deployment endpoint" },
+  { value: "azure_openai", label: "Azure OpenAI", baseUrl: "", notes: "Enter your Azure deployment endpoint" },
+  { value: "bedrock", label: "AWS Bedrock", baseUrl: "", notes: "Use an OpenAI-compatible gateway or custom endpoint" },
+  { value: "vertex", label: "Google Vertex AI", baseUrl: "", notes: "Use Gemini native or an OpenAI-compatible gateway" },
+  { value: "openai_compatible", label: "Custom OpenAI-Compatible", baseUrl: "http://localhost:1234", notes: "For any compatible endpoint not listed" },
 ];
+
+const providerTypeByValue = new Map(PROVIDER_TYPES.map((provider) => [provider.value, provider]));
 
 const TASK_KEYS = [
   { key: "active_model_chat", label: "Chat" },
@@ -44,6 +71,7 @@ export default function ProviderManager() {
   const [newUrl, setNewUrl] = useState("");
   const [newKey, setNewKey] = useState("");
   const [editModel, setEditModel] = useState("");
+  const selectedProviderType = useMemo(() => providerTypeByValue.get(newType), [newType]);
 
   const load = useCallback(async () => {
     try {
@@ -73,6 +101,13 @@ export default function ProviderManager() {
       setShowAdd(false);
       await load();
     } catch (e: any) { setTestResult(`Error: ${e}`); }
+  }
+
+  function handleProviderTypeChange(value: string) {
+    const preset = providerTypeByValue.get(value);
+    setNewType(value);
+    setNewName((current) => current.trim() || preset?.label || "");
+    setNewUrl((current) => current.trim() || preset?.baseUrl || "");
   }
 
   async function handleDelete(id: string) {
@@ -134,9 +169,14 @@ export default function ProviderManager() {
         {showAdd && (
           <div className="mb-3 rounded border border-blue-200 bg-blue-50 p-3 space-y-2 dark:border-blue-800 dark:bg-blue-900/20">
             <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name (e.g. My DeepSeek)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
-            <select value={newType} onChange={(e) => setNewType(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800">
+            <select value={newType} onChange={(e) => handleProviderTypeChange(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800">
               {PROVIDER_TYPES.map((t) => (<option key={t.value} value={t.value}>{t.label}</option>))}
             </select>
+            {selectedProviderType?.notes && (
+              <div className="rounded bg-white/70 px-2 py-1 text-[10px] text-neutral-500 dark:bg-neutral-900/40 dark:text-neutral-400">
+                {selectedProviderType.notes}
+              </div>
+            )}
             <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="Base URL (e.g. http://localhost:1234/v1)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
             <input value={newKey} onChange={(e) => setNewKey(e.target.value)} type="password" placeholder="API Key (optional)" className="w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-xs outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
             <button onClick={handleAdd} className="w-full rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500">Save Provider</button>

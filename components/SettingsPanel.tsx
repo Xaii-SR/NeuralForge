@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as ai from "@/lib/ai";
 import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
-import { getAppConfig, saveAppConfig } from "@/lib/store";
+import { getAppConfig, inferEffortForModel, saveAppConfig } from "@/lib/store";
 import ProviderManager from "@/components/ProviderManager";
 import { getBuildInfo, type BuildInfo } from "@/lib/buildInfo";
 
@@ -105,6 +105,11 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     onClose();
   }
 
+  function handleModelChange(model: string) {
+    setSelectedModel(model);
+    setEffort(inferEffortForModel(model));
+  }
+
   async function handleClearCache() {
     const count = await ai.clearResponseCache();
     setCacheStatus(`Cleared ${count} cached response${count === 1 ? "" : "s"}`);
@@ -127,7 +132,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Default (Ollama)</div>
             <div>
               <div className="mb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">Model</div>
-              <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+              <select value={selectedModel} onChange={(e) => handleModelChange(e.target.value)} className="w-full rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-800 outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
                 {modelChoices.map((m) => (<option key={m} value={m}>{m}</option>))}
               </select>
               {installedModels.length === 0 && <div className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">Could not list installed models - showing defaults. Verify Ollama is running.</div>}
@@ -145,6 +150,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
               <option value="High">High</option>
               <option value="Extra High">Extra High</option>
             </select>
+            <div className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">Changing the model auto-selects a matching effort level; you can still override it here.</div>
           </div>
           <div className="mb-5 border-t border-neutral-100 pt-4 dark:border-neutral-800">
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Cloud &amp; Custom Providers</div>

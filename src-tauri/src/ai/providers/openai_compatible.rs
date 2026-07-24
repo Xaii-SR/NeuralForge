@@ -36,10 +36,20 @@ impl OpenAiCompatibleProvider {
         }
     }
 
+    fn api_url(&self, path: &str) -> String {
+        let root = self.base_url.trim_end_matches('/');
+        let has_versioned_path = ["/v1", "/v2", "/v3", "/v4"].iter().any(|segment| root.contains(segment));
+        if has_versioned_path {
+            format!("{}/{}", root, path)
+        } else {
+            format!("{}/v1/{}", root, path)
+        }
+    }
+
     /// Health check: GET {base_url}/v1/models
     pub async fn health_check(&self) -> bool {
         self.client
-            .get(format!("{}/v1/models", self.base_url))
+            .get(self.api_url("models"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .timeout(std::time::Duration::from_secs(5))
             .send()
@@ -52,7 +62,7 @@ impl OpenAiCompatibleProvider {
     pub async fn list_models(&self) -> AppResult<Vec<OpenAiModel>> {
         let resp = self
             .client
-            .get(format!("{}/v1/models", self.base_url))
+            .get(self.api_url("models"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -110,7 +120,7 @@ impl OpenAiCompatibleProvider {
 
         let resp = self
             .client
-            .post(format!("{}/v1/chat/completions", self.base_url))
+            .post(self.api_url("chat/completions"))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({
@@ -224,5 +234,32 @@ mod tests {
             "sk-test".to_string(),
         );
         assert_eq!(provider.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn api_url_adds_v1_for_plain_roots() {
+        let provider = OpenAiCompatibleProvider::new(
+            "https://api.openai.com".to_string(),
+            "sk-test".to_string(),
+        );
+        assert_eq!(provider.api_url("models"), "https://api.openai.com/v1/models");
+    }
+
+    #[test]
+    fn api_url_does_not_duplicate_existing_version_segment() {
+        let provider = OpenAiCompatibleProvider::new(
+            "https://openrouter.ai/api/v1".to_string(),
+            "sk-test".to_string(),
+        );
+        assert_eq!(provider.api_url("chat/completions"), "https://openrouter.ai/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn api_url_preserves_provider_specific_version_prefixes() {
+        let provider = OpenAiCompatibleProvider::new(
+            "https://ark.cn-beijing.volces.com/api/v3".to_string(),
+            "sk-test".to_string(),
+        );
+        assert_eq!(provider.api_url("models"), "https://ark.cn-beijing.volces.com/api/v3/models");
     }
 }

@@ -142,6 +142,15 @@ export default function SessionTabs({ workspaceRoot }: SessionTabsProps) {
               </button>
             )}
             <button
+              onClick={() => startRename(s)}
+              disabled={sending}
+              title="Rename chat"
+              aria-label={`Rename ${s.title}`}
+              className="shrink-0 rounded px-1 text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-200 hover:text-blue-500 group-hover:opacity-100 disabled:opacity-0 dark:hover:bg-neutral-700"
+            >
+              Edit
+            </button>
+            <button
               onClick={() => handleDelete(s)}
               disabled={sending}
               title="Delete session"
