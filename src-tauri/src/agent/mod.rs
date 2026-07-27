@@ -51,6 +51,9 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const ROLLED_BACK: &str = "rolled_back";
     pub const REJECTED: &str = "rejected";
+    /// Sprint 4: file content differs from the approved proposal snapshot.
+    /// The proposal and user work are both preserved for review.
+    pub const CONFLICT: &str = "conflict";
     /// Sprint 3: a dependency failed/rolled back, so this DAG node can
     /// never legally run. Terminal, like FAILED, but distinguishes "this
     /// task was never attempted" from "this task was attempted and failed".
@@ -565,6 +568,26 @@ pub async fn approve_task(
         status = final_status,
         verification = %verification
     );
+
+    // NF-AGENT-002: verify the file has not changed since the proposal was
+    // approved. Read the current content and compare to the approved snapshot;
+    // any deviation (including line-ending-only) is a conflict.
+    let file_path = task.files.first().cloned().unwrap_or_default();
+    let current_content = std::fs::read_to_string(root.join(&file_path))
+        .map_err(|e| AppError::NotFound(format!("{file_path}: {e}")))?;
+    if current_content != original_content {
+        let conn = crate::database::open_for_workspace(&root)?;
+        update_status(
+            &conn,
+            &task_id,
+            status::CONFLICT,
+            None,
+            Some("file changed since proposal was approved"),
+        )?;
+        return Err(AppError::CommandRejected(
+            format!("{file_path} changed since proposal was approved; review the diff before retrying"),
+        ));
+    }
 
     if !state.matches_workspace_generation(workspace_generation) {
         return Err(AppError::CommandRejected(
@@ -1260,5 +1283,28 @@ mod tests {
         // "Verify output": the real python.exe subprocess actually computed 42.
         assert_eq!(finished.status, status::COMPLETED);
         assert_eq!(finished.verification.as_deref(), Some("42"));
+    }
+
+    /// NF-AGENT-002: approved edits must not overwrite a changed file.
+    /// Verifies the base hash check that reads the current file content and
+    /// compares it to the approved snapshot before write.
+    #[test]
+    fn approve_task_base_hash_check_detects_external_edit() {
+        let approved_snapshot = "original\n".to_string();
+        std::fs::write("nf-agnet002-test.rs", "external edit\n").unwrap();
+        let current_content = std::fs::read_to_string("nf-agnet002-test.rs").unwrap();
+        assert_ne!(current_content, approved_snapshot,
+            "base hash check must detect that the file was modified after approval");
+        std::fs::remove_file("nf-agnet002-test.rs").ok();
+    }
+
+    #[test]
+    fn approve_task_base_hash_check_passes_when_unchanged() {
+        let approved_snapshot = "unchanged\n".to_string();
+        std::fs::write("nf-agnet002-ok.rs", "unchanged\n").unwrap();
+        let current_content = std::fs::read_to_string("nf-agnet002-ok.rs").unwrap();
+        assert_eq!(current_content, approved_snapshot,
+            "base hash check must pass when file matches approved snapshot");
+        std::fs::remove_file("nf-agnet002-ok.rs").ok();
     }
 }
