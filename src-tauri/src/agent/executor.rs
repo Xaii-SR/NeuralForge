@@ -39,11 +39,12 @@ pub async fn apply_and_verify(
     }
 }
 
-/// Runs approved code through the same process-isolated extension path that
-/// `extensions::run_extension` uses - a run_code task gets no more host
-/// access than a manually-invoked extension would. Requires the bundled
-/// python-repl extension to be present and enabled; it is not this
-/// function's job to install or enable it.
+/// NF-SEC-002: disabled for this release. Run-code execution is unreachable
+/// from the production surface — `ensure_task_type_is_approvable` in
+/// `agent::mod` rejects all RUN_CODE tasks before approval, and no other
+/// code path invokes this function. Kept as dead code (not deleted) so
+/// future sandbox re-enablement has the implementation available.
+#[allow(dead_code)]
 pub async fn run_code_via_extension(code: &str) -> AppResult<crate::extensions::api::ExtensionResult> {
     let extensions = crate::extensions::ensure_and_scan()?;
     let ext = extensions

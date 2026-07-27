@@ -20,6 +20,10 @@ impl ChangeGenerator {
     /// If called BEFORE the agent writes changes, this function returns an
     /// error rather than generating a no-op patch. This prevents false
     /// successful execution of a patch that changes nothing.
+    ///
+    /// NF-UNP-003: this entire module is dead scaffold — no production caller.
+    /// Kept only to satisfy Clippy without activating unsafe behavior.
+    #[allow(clippy::never_loop)]
     pub fn generate_patches(plan: &TaskPlan, root: &Path) -> Result<(Vec<Patch>, Vec<String>), String> {
         let mut patches = Vec::new();
 

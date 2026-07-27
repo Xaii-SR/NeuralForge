@@ -525,6 +525,26 @@ pub async fn approve_task(
         ));
     }
 
+    // NF-AGENT-002: verify the file has not changed since the proposal was
+    // approved. Read the current content and compare to the approved snapshot
+    // BEFORE writing. Any deviation (including line-ending-only) is a conflict.
+    let file_path = task.files.first().cloned().unwrap_or_default();
+    let current_content = std::fs::read_to_string(root.join(&file_path))
+        .map_err(|e| AppError::NotFound(format!("{file_path}: {e}")))?;
+    if current_content != original_content {
+        let conn = crate::database::open_for_workspace(&root)?;
+        update_status(
+            &conn,
+            &task_id,
+            status::CONFLICT,
+            None,
+            Some("file changed since proposal was approved"),
+        )?;
+        return Err(AppError::CommandRejected(
+            format!("{file_path} changed since proposal was approved; review the diff before retrying"),
+        ));
+    }
+
     // Only governed file edits reach this point. Other task types are rejected
     // before approval state or ledger data changes.
     let (final_status, verification, error, rollback_note, memory_root): (
@@ -534,7 +554,6 @@ pub async fn approve_task(
         Option<String>,
         Option<std::path::PathBuf>,
     ) = {
-        let file_path = task.files.first().cloned().unwrap_or_default();
         let result = executor::apply_and_verify(&root, &file_path, &original_content, &proposed_content).await?;
         let final_status = if result.rolled_back { status::ROLLED_BACK } else { status::COMPLETED };
         let error = if result.rolled_back { Some(result.verification.clone()) } else { None };
@@ -570,8 +589,8 @@ pub async fn approve_task(
     );
 
     // NF-AGENT-002: verify the file has not changed since the proposal was
-    // approved. Read the current content and compare to the approved snapshot;
-    // any deviation (including line-ending-only) is a conflict.
+    // approved. Read the current content and compare to the approved snapshot
+    // BEFORE writing. Any deviation (including line-ending-only) is a conflict.
     let file_path = task.files.first().cloned().unwrap_or_default();
     let current_content = std::fs::read_to_string(root.join(&file_path))
         .map_err(|e| AppError::NotFound(format!("{file_path}: {e}")))?;

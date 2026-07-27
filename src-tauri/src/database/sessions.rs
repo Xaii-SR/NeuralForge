@@ -164,19 +164,21 @@ pub fn append_message_with_metadata(
     let preview = content.chars().take(preview_len).collect::<String>();
     let ts = now_secs();
 
-    conn.execute(
-        "INSERT INTO session_messages (session_id, role, content, status, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session_id, role, content, status, ts],
-    )
-    .map_err(|e| AppError::Provider(format!("failed to append message: {e}")))?;
+    crate::database::in_transaction(conn, |conn| {
+        conn.execute(
+            "INSERT INTO session_messages (session_id, role, content, status, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![session_id, role, content, status, ts],
+        )
+        .map_err(|e| AppError::Provider(format!("failed to append message: {e}")))?;
 
-    conn.execute(
-        "UPDATE sessions SET last_message_preview = ?1, updated_at = ?2 WHERE id = ?3",
-        params![preview, ts, session_id],
-    )
-    .map_err(|e| AppError::Provider(format!("failed to update session metadata: {e}")))?;
+        conn.execute(
+            "UPDATE sessions SET last_message_preview = ?1, updated_at = ?2 WHERE id = ?3",
+            params![preview, ts, session_id],
+        )
+        .map_err(|e| AppError::Provider(format!("failed to update session metadata: {e}")))?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Lists every message for `session_id`, oldest first (chronological
@@ -379,5 +381,37 @@ mod tests {
         // Metadata updated: preview is trimmed to 200 chars.
         let sessions = list_sessions(&conn, "/ws").unwrap();
         assert_eq!(sessions[0].last_message_preview, Some("Hello world!".to_string()));
+    }
+
+    /// NF-SESSION-001: if the metadata UPDATE fails mid-transaction, the
+    /// INSERT is rolled back too - no partial message can survive.
+    #[test]
+    fn append_message_with_metadata_rolls_back_on_partial_failure() {
+        let conn = temp_conn();
+        let session = create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
+        let session_id = session.id.clone();
+        let messages_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_messages WHERE session_id = ?1", params![&session_id], |r| r.get(0))
+            .unwrap();
+        let sessions_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions WHERE id = ?1", params![&session_id], |r| r.get(0))
+            .unwrap();
+
+        // Sabotage: rename sessions so the UPDATE fails mid-transaction.
+        conn.execute("ALTER TABLE sessions RENAME TO sessions_sabotaged", []).unwrap();
+        let result = append_message_with_metadata(&conn, &session_id, "assistant", "lost", "complete");
+        conn.execute("ALTER TABLE sessions_sabotaged RENAME TO sessions", []).unwrap();
+
+        assert!(result.is_err(), "partial failure must be surfaced to the caller");
+
+        // NOTHING partial persisted: no orphaned message, no phantom session.
+        let messages_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_messages WHERE session_id = ?1", params![&session_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(messages_after, messages_before, "no orphaned message may survive the rollback");
+        let sessions_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions WHERE id = ?1", params![&session_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sessions_after, sessions_before, "no phantom session metadata may survive the rollback");
     }
 }
