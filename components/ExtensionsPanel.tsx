@@ -12,9 +12,6 @@ export default function ExtensionsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busyName, setBusyName] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [testInput, setTestInput] = useState("print('hello from an isolated process')");
-  const [testRunning, setTestRunning] = useState(false);
-  const [testResult, setTestResult] = useState<extensions.ExtensionResult | null>(null);
 
   async function refresh() {
     try {
@@ -57,20 +54,6 @@ export default function ExtensionsPanel() {
     }
   }
 
-  async function runTest(ext: extensions.InstalledExtension) {
-    setTestRunning(true);
-    setTestResult(null);
-    try {
-      const request = ext.manifest.name === "file-search" ? { query: testInput, files: ["src/auth.rs", "src/lib.rs", "README.md"] } : { code: testInput };
-      const result = await extensions.runExtension(ext.manifest.name, request);
-      setTestResult(result);
-    } catch (e) {
-      setTestResult({ success: false, output: null, error: String(e) });
-    } finally {
-      setTestRunning(false);
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -101,7 +84,6 @@ export default function ExtensionsPanel() {
               key={ext.manifest.name}
               onClick={() => {
                 setSelectedName(ext.manifest.name);
-                setTestResult(null);
               }}
               className={`cursor-pointer space-y-1 border-b border-neutral-200 px-3 py-2 text-xs transition-colors hover:bg-neutral-100 dark:border-neutral-800 dark:hover:bg-neutral-800 ${
                 selected?.manifest.name === ext.manifest.name ? "bg-neutral-100 dark:bg-neutral-800" : ""
@@ -145,7 +127,7 @@ export default function ExtensionsPanel() {
               </div>
               <div>
                 <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Runtime</div>
-                <div className="text-neutral-700 dark:text-neutral-300">{selected.manifest.runtime} (isolated child process)</div>
+                <div className="text-neutral-700 dark:text-neutral-300">{selected.manifest.runtime} (execution disabled)</div>
               </div>
               <div>
                 <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">Permissions</div>
@@ -173,42 +155,8 @@ export default function ExtensionsPanel() {
               </button>
             </div>
 
-            <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
-              <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
-                Test this extension directly
-              </div>
-              <textarea
-                value={testInput}
-                onChange={(e) => setTestInput(e.target.value)}
-                rows={3}
-                placeholder={selected.manifest.name === "file-search" ? "search query" : "python code"}
-                className="w-full resize-none rounded border border-neutral-200 bg-white px-2 py-1.5 font-mono text-[11px] text-neutral-800 outline-none transition-colors focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-              />
-              <button
-                onClick={() => runTest(selected)}
-                disabled={testRunning || !selected.enabled}
-                className="mt-1.5 flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
-              >
-                {testRunning && <Spinner size={10} />}
-                {testRunning ? "Running..." : "Run"}
-              </button>
-              {!selected.enabled && (
-                <div className="mt-1 text-[10px] text-neutral-400 dark:text-neutral-500">Enable the extension to run it.</div>
-              )}
-              {testResult && (
-                <div className="mt-2">
-                  <div
-                    className={`mb-1 text-[10px] font-medium uppercase tracking-wide ${
-                      testResult.success ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"
-                    }`}
-                  >
-                    {testResult.success ? "Success" : "Error"}
-                  </div>
-                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-2 text-[11px] text-neutral-700 dark:border-neutral-800 dark:bg-neutral-800/60 dark:text-neutral-300">
-                    {testResult.error ?? JSON.stringify(testResult.output, null, 2)}
-                  </pre>
-                </div>
-              )}
+            <div className="rounded border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+              Extension execution is unavailable in this release. Management remains available so installed extensions can be disabled or removed safely.
             </div>
           </div>
         )}

@@ -34,15 +34,11 @@ mod performance;
 mod services;
 mod workspace;
 
-use ai::composer::ComposerSessionState;
-use ai::composer::ProcessTracker;
 use ai::health::HealthRegistry;
 use core::state::AppState;
 use database::DbState;
 use tauri::Manager;
 use terminal::TerminalRegistry;
-use terminal_executor::SandboxState;
-use task_orchestrator::OrchestratorState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -56,11 +52,6 @@ pub fn run() {
     .manage(TerminalRegistry::default())
     .manage(HealthRegistry::default())
     .manage(DbState::default())
-    .manage(ComposerSessionState::default())
-    .manage(ProcessTracker::new())
-    .manage(agent_v2::ApprovalRegistry::new())
-    .manage(SandboxState::default())
-    .manage(OrchestratorState::default())
     .manage(agent_core::AgentCoreState::default())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
@@ -110,13 +101,6 @@ pub fn run() {
       ai::completion::get_prediction_with_fim,
       ai::completion::store_prediction_result,
       ai::completion::request_async_completion,
-      ai::composer::initialize_composer_session,
-      ai::composer::add_composer_file,
-      ai::composer::remove_composer_file,
-      ai::composer::send_composer_message,
-      ai::composer::get_composer_session,
-      ai::composer::execute_composer_command_stream,
-      ai::composer::kill_composer_command,
       ai::docs::fetch_and_cache_doc,
       ai::docs::list_cached_docs,
       ai::docs::read_cached_doc,
@@ -124,9 +108,6 @@ pub fn run() {
       ai::git::get_git_diff,
       ai::web::search_web,
       ai::inline::stream_inline_edit,
-      agent_v2::start_agent_task,
-      agent_v2::approve_agent_task,
-      agent_v2::reject_agent_task,
       agent_core::commands::agent_lifecycle_transition,
       agent_core::commands::run_council_pass,
       database::index_workspace,
@@ -145,7 +126,6 @@ pub fn run() {
       governance::list_requirements,
       governance::get_requirement_history,
       agent::create_and_plan_task,
-      agent::create_and_plan_code_task,
       agent::approve_task,
       agent::reject_task,
       agent::list_agent_tasks,
@@ -168,22 +148,12 @@ pub fn run() {
       extensions::list_extensions,
       extensions::set_extension_enabled,
       extensions::uninstall_extension,
-      extensions::run_extension,
       bootstrap::propose_self_improvement,
       workspace::search::search_workspace_files,
       workspace::embeddings::build_local_index,
       workspace::embeddings::generate_local_embeddings,
       workspace::embeddings::query_codebase_semantic,
       bootstrap::apply_self_improvement,
-      terminal_executor::execute_sandboxed_command,
-      terminal_executor::allowlist_add,
-      terminal_executor::denylist_add,
-      task_orchestrator::orchestrator_create_task,
-      task_orchestrator::orchestrator_approve_task,
-      task_orchestrator::orchestrator_reject_task,
-      task_orchestrator::orchestrator_cancel_task,
-      task_orchestrator::orchestrator_get_state,
-      task_orchestrator::orchestrator_reset,
     ])
     .setup(move |app| {
       let log_dir = app

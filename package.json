@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test:frontend": "node --test tests/*.test.mjs",
     "lint": "next lint",
     "tauri": "tauri",
     "setup": "node scripts/setup.mjs"

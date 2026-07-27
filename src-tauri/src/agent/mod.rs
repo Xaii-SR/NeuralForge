@@ -442,6 +442,15 @@ fn format_extension_output(output: &serde_json::Value) -> String {
     }
 }
 
+fn ensure_task_type_is_approvable(task: &AgentTask) -> AppResult<()> {
+    if task.task_type != task_type::EDIT_FILE {
+        return Err(AppError::CommandRejected(
+            "model-generated code execution is disabled in this release".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn approve_task(
     state: tauri::State<'_, crate::core::state::AppState>,
@@ -454,6 +463,7 @@ pub async fn approve_task(
             .as_ref()
             .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
         let task = get_task(conn, &task_id)?;
+        ensure_task_type_is_approvable(&task)?;
         let (original_content, proposed_content) = get_task_content(conn, &task_id)?;
         update_status(conn, &task_id, status::APPLYING, None, None)?;
         
@@ -473,22 +483,15 @@ pub async fn approve_task(
         (task, original_content, proposed_content)
     };
 
-    // (final_status, verification text, error, rollback note, workspace root if this
-    // was a file edit - only file edits get a memory record, since run_code tasks
-    // never touch the workspace).
+    // Only governed file edits reach this point. Other task types are rejected
+    // before approval state or ledger data changes.
     let (final_status, verification, error, rollback_note, memory_root): (
         &str,
         String,
         Option<String>,
         Option<String>,
         Option<std::path::PathBuf>,
-    ) = if task.task_type == task_type::RUN_CODE {
-        match executor::run_code_via_extension(&proposed_content).await {
-            Ok(result) if result.success => (status::COMPLETED, format_extension_output(&result.output), None, None, None),
-            Ok(result) => (status::FAILED, format_extension_output(&result.output), result.error, None, None),
-            Err(e) => (status::FAILED, String::new(), Some(e.to_string()), None, None),
-        }
-    } else {
+    ) = {
         let root = state
             .workspace_root
             .lock()
@@ -1094,6 +1097,32 @@ mod tests {
         assert_eq!(task.task_type, task_type::RUN_CODE);
         assert!(task.files.is_empty(), "run_code tasks should not report a workspace file");
         assert_eq!(task.proposed_content.as_deref(), Some("print(42)"));
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_run_code_task_cannot_be_approved() {
+        let (dir, conn) = temp_conn();
+        insert_task(&conn, "legacy-code", "print 42", task_type::RUN_CODE, "", status::AWAITING_APPROVAL, "", "print(42)", "low risk", None, None).unwrap();
+
+        let task = get_task(&conn, "legacy-code").unwrap();
+        let error = ensure_task_type_is_approvable(&task).unwrap_err();
+        assert!(matches!(error, AppError::CommandRejected(_)));
+        assert_eq!(get_task(&conn, "legacy-code").unwrap().status, status::AWAITING_APPROVAL);
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn governed_file_edit_remains_approvable() {
+        let (dir, conn) = temp_conn();
+        insert_task(&conn, "edit-task", "edit", task_type::EDIT_FILE, "main.rs", status::AWAITING_APPROVAL, "old", "new", "low risk", None, None).unwrap();
+
+        let task = get_task(&conn, "edit-task").unwrap();
+        ensure_task_type_is_approvable(&task).unwrap();
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

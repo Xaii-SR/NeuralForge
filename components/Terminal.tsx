@@ -6,9 +6,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useTerminal } from "@/hooks/useTerminal";
-import { useComposer } from "@/hooks/useComposer";
-import { setTerminalBufferGetter } from "@/hooks/useComposer";
-import FixWithAiButton from "@/components/terminal/FixWithAiButton";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalOutputPayload {
@@ -18,8 +15,7 @@ interface TerminalOutputPayload {
 
 export default function Terminal() {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { appendTerminalOutput, getTerminalBuffer, hasActiveError, clearTerminalError } = useTerminal();
-  const { initialize, setIsOpen } = useComposer();
+  const { appendTerminalOutput, clearTerminalError } = useTerminal();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -91,26 +87,9 @@ export default function Terminal() {
     };
   }, []);
 
-  // Register the terminal buffer getter for Composer @terminal context
-  useEffect(() => {
-    setTerminalBufferGetter(getTerminalBuffer);
-  }, [getTerminalBuffer]);
-
-  const handleFixWithAi = async () => {
-    const buf = getTerminalBuffer();
-    const msg = `Terminal Output (see below for output) Please analyze and fix this error.\n\n--- RECENT TERMINAL OUTPUT ---\n${buf}\n--- END TERMINAL ---`;
-    await initialize([]);
-    setTimeout(async () => {
-      // The Composer is now open; we need to send the message
-      // This uses a workaround: accessing the sendMessage via global ref
-      // For now, the user can press Enter after the @terminal flow
-    }, 100);
-  };
-
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full bg-[#1e1e1e]" />
-      {hasActiveError && <FixWithAiButton onClick={handleFixWithAi} />}
     </div>
   );
 }
