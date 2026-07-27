@@ -94,6 +94,7 @@ export default function ProviderManager() {
   const [installMenu, setInstallMenu] = useState<string | null>(null);
   const [installingModel, setInstallingModel] = useState<string | null>(null);
   const [editModel, setEditModel] = useState("");
+  const [editKey, setEditKey] = useState("");
   const selectedProviderType = useMemo(() => providerTypeByValue.get(newType), [newType]);
   const newModelOptions = newType === "ollama" ? ollamaModels.map((model) => model.name) : PROVIDER_MODEL_PRESETS[newType] ?? [];
 
@@ -150,8 +151,42 @@ export default function ProviderManager() {
   function handleProviderTypeChange(value: string) {
     const preset = providerTypeByValue.get(value);
     setNewType(value);
-    setNewName((current) => current.trim() || preset?.label || "");
-    setNewUrl((current) => current.trim() || preset?.baseUrl || "");
+    setNewName(preset?.label || "");
+    setNewUrl(preset?.baseUrl || "");
+    setNewModel("");
+    setNewKey("");
+  }
+
+  function startEditing(config: ProviderConfig) {
+    setEditing({ ...config, models: [...config.models] });
+    setEditModel("");
+    setEditKey("");
+  }
+
+  async function handleSaveEdit() {
+    if (!editing || !editing.name.trim() || !editing.base_url.trim()) return;
+    const manualModel = editModel.trim();
+    const models = manualModel && !editing.models.includes(manualModel)
+      ? [...editing.models, manualModel]
+      : editing.models;
+    try {
+      await providers.updateProviderConfig(editing.id, {
+        name: editing.name.trim(),
+        base_url: editing.base_url.trim(),
+        models,
+      });
+      if (editKey.trim()) {
+        await providers.updateProviderConfig(editing.id, { api_key: editKey.trim() });
+      }
+      setEditing(null);
+      setEditModel("");
+      setEditKey("");
+      await load();
+      window.dispatchEvent(new Event("nf_settings_updated"));
+      setTestResult("Provider updated");
+    } catch (e: any) {
+      setTestResult(`Update failed: ${e}`);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -247,6 +282,9 @@ export default function ProviderManager() {
                   </div>
                 </div>
                 <div className="flex gap-1">
+                  <button onClick={() => startEditing(cfg)} className="rounded px-2 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">
+                    Edit
+                  </button>
                   {cfg.provider_type !== "ollama" && (
                     <button onClick={() => handleTestConnection(cfg)} disabled={testing} className="rounded px-2 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">
                       {testing ? "..." : "Test"}
@@ -262,6 +300,41 @@ export default function ProviderManager() {
               {/* Expanded view */}
               {expandProvider === cfg.id && (
                 <div className="mt-2 space-y-2 border-t border-neutral-100 pt-2 dark:border-neutral-700">
+                  {editing?.id === cfg.id && (
+                    <div className="space-y-1.5 rounded border border-neutral-200 p-2 dark:border-neutral-700">
+                      <input
+                        value={editing.name}
+                        onChange={(event) => setEditing({ ...editing, name: event.target.value })}
+                        placeholder="Provider name"
+                        className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] dark:border-neutral-700 dark:bg-neutral-800"
+                      />
+                      <input
+                        value={editing.base_url}
+                        onChange={(event) => setEditing({ ...editing, base_url: event.target.value })}
+                        placeholder="Base URL"
+                        className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] dark:border-neutral-700 dark:bg-neutral-800"
+                      />
+                      <input
+                        value={editModel}
+                        onChange={(event) => setEditModel(event.target.value)}
+                        placeholder="Add a model ID (optional)"
+                        className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] dark:border-neutral-700 dark:bg-neutral-800"
+                      />
+                      {cfg.provider_type !== "ollama" && (
+                        <input
+                          value={editKey}
+                          onChange={(event) => setEditKey(event.target.value)}
+                          type="password"
+                          placeholder="Replace credential (leave blank to keep it)"
+                          className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] dark:border-neutral-700 dark:bg-neutral-800"
+                        />
+                      )}
+                      <div className="flex gap-1">
+                        <button onClick={handleSaveEdit} className="rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white">Save changes</button>
+                        <button onClick={() => setEditing(null)} className="rounded px-2 py-1 text-[10px] text-neutral-500">Cancel</button>
+                      </div>
+                    </div>
+                  )}
                   {/* Model discovery */}
                   <div className="flex gap-2">
                     <button onClick={() => handleDiscoverModels(cfg)} disabled={discovering} className="rounded bg-neutral-100 px-2.5 py-1 text-[10px] font-medium text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">

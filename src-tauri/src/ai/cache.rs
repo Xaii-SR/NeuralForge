@@ -5,9 +5,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn hash_prompt(model: &str, messages: &[ChatMessage]) -> String {
+fn hash_prompt(
+    provider_id: &str,
+    model: &str,
+    effective_options: &str,
+    messages: &[ChatMessage],
+) -> String {
     let mut hasher = DefaultHasher::new();
+    provider_id.hash(&mut hasher);
     model.hash(&mut hasher);
+    effective_options.hash(&mut hasher);
     for m in messages {
         m.role.hash(&mut hasher);
         m.content.hash(&mut hasher);
@@ -15,8 +22,14 @@ fn hash_prompt(model: &str, messages: &[ChatMessage]) -> String {
     format!("{:x}", hasher.finish())
 }
 
-pub fn get_cached(conn: &Connection, model: &str, messages: &[ChatMessage]) -> Option<String> {
-    let hash = hash_prompt(model, messages);
+pub fn get_cached(
+    conn: &Connection,
+    provider_id: &str,
+    model: &str,
+    effective_options: &str,
+    messages: &[ChatMessage],
+) -> Option<String> {
+    let hash = hash_prompt(provider_id, model, effective_options, messages);
     conn.query_row(
         "SELECT response FROM response_cache WHERE prompt_hash = ?1 AND model = ?2",
         params![hash, model],
@@ -25,8 +38,15 @@ pub fn get_cached(conn: &Connection, model: &str, messages: &[ChatMessage]) -> O
     .ok()
 }
 
-pub fn store_response(conn: &Connection, model: &str, messages: &[ChatMessage], response: &str) -> AppResult<()> {
-    let hash = hash_prompt(model, messages);
+pub fn store_response(
+    conn: &Connection,
+    provider_id: &str,
+    model: &str,
+    effective_options: &str,
+    messages: &[ChatMessage],
+    response: &str,
+) -> AppResult<()> {
+    let hash = hash_prompt(provider_id, model, effective_options, messages);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     conn.execute(
         "INSERT INTO response_cache (prompt_hash, model, response, success_rating, created_at)
@@ -63,18 +83,22 @@ mod tests {
 
         let conn = crate::database::open_for_workspace(&dir).unwrap();
 
-        assert!(get_cached(&conn, "model-a", &msgs("hello")).is_none());
+        assert!(get_cached(&conn, "provider-a", "model-a", "default", &msgs("hello")).is_none());
 
-        store_response(&conn, "model-a", &msgs("hello"), "hi there").unwrap();
-        assert_eq!(get_cached(&conn, "model-a", &msgs("hello")), Some("hi there".to_string()));
+        store_response(&conn, "provider-a", "model-a", "default", &msgs("hello"), "hi there").unwrap();
+        assert_eq!(
+            get_cached(&conn, "provider-a", "model-a", "default", &msgs("hello")),
+            Some("hi there".to_string())
+        );
 
-        // Different model or different prompt -> still a miss
-        assert!(get_cached(&conn, "model-b", &msgs("hello")).is_none());
-        assert!(get_cached(&conn, "model-a", &msgs("goodbye")).is_none());
+        assert!(get_cached(&conn, "provider-b", "model-a", "default", &msgs("hello")).is_none());
+        assert!(get_cached(&conn, "provider-a", "model-b", "default", &msgs("hello")).is_none());
+        assert!(get_cached(&conn, "provider-a", "model-a", "high-effort", &msgs("hello")).is_none());
+        assert!(get_cached(&conn, "provider-a", "model-a", "default", &msgs("goodbye")).is_none());
 
         let cleared = clear_cache(&conn).unwrap();
         assert_eq!(cleared, 1);
-        assert!(get_cached(&conn, "model-a", &msgs("hello")).is_none());
+        assert!(get_cached(&conn, "provider-a", "model-a", "default", &msgs("hello")).is_none());
 
         drop(conn);
         std::fs::remove_dir_all(&dir).unwrap();

@@ -33,8 +33,7 @@ export interface ModelConfig {
 
 export interface OpenAiModel {
   id: string;
-  object: string;
-  owned_by: string;
+  display_name: string;
 }
 
 // Provider CRUD

@@ -12,6 +12,7 @@ use crate::ai::provider_registry::{self, AdapterKind, ProviderConfig};
 use crate::ai::providers::{anthropic, gemini, ollama, openai_compatible};
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::Connection;
+use serde::Serialize;
 use std::time::Instant;
 
 // AdapterKind and its classification (`adapter_kind_for` / `ProviderConfig::
@@ -81,7 +82,7 @@ where
     F: FnMut(&str, bool),
 {
     if config.adapter_kind() != AdapterKind::Ollama {
-        return stream_cloud_chat(health, config, model, messages, on_token).await;
+        return stream_cloud_chat(health, config, model, &messages, on_token).await;
     }
 
     let health_key = health_key_for(config);
@@ -94,7 +95,7 @@ where
 
     let start = Instant::now();
     let mut accumulated = String::new();
-    let result = ollama::chat_stream(model, messages, |token, done| {
+    let result = ollama::chat_stream_at(&config.base_url, model, messages, |token, done| {
         if !token.is_empty() {
             accumulated.push_str(token);
         }
@@ -119,7 +120,7 @@ pub async fn stream_cloud_chat<F>(
     health: &HealthRegistry,
     config: &ProviderConfig,
     model: &str,
-    messages: Vec<ollama::ChatMessage>,
+    messages: &[ollama::ChatMessage],
     mut on_token: F,
 ) -> AppResult<String>
 where
@@ -155,7 +156,8 @@ where
                 config.api_key.clone(),
             );
             let oc_messages: Vec<openai_compatible::ChatMessage> = messages
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|m| openai_compatible::ChatMessage { role: m.role, content: m.content })
                 .collect();
 
@@ -176,7 +178,8 @@ where
                 config.api_key.clone(),
             );
             let anthropic_messages: Vec<anthropic::ChatMessage> = messages
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|m| anthropic::ChatMessage { role: m.role, content: m.content })
                 .collect();
 
@@ -197,7 +200,8 @@ where
                 config.api_key.clone(),
             );
             let gemini_messages: Vec<gemini::ChatMessage> = messages
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|m| gemini::ChatMessage { role: m.role, content: m.content })
                 .collect();
 
@@ -246,7 +250,7 @@ pub async fn test_connection(provider_type: &str, base_url: String, api_key: Str
 /// tests hit and worked around by testing `max_capabilities_for` directly.
 async fn test_connection_for_kind(kind: AdapterKind, provider_type: &str, base_url: String, api_key: String) -> Result<bool, String> {
     match kind {
-        AdapterKind::Ollama => Ok(ollama::health_check().await),
+        AdapterKind::Ollama => Ok(ollama::health_check_at(&base_url).await),
         AdapterKind::OpenAiCompatible => {
             Ok(openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key).health_check().await)
         }
@@ -257,6 +261,71 @@ async fn test_connection_for_kind(kind: AdapterKind, provider_type: &str, base_u
         AdapterKind::Unimplemented => Err(format!(
             "{provider_type} does not have a native adapter yet - cannot test connection"
         )),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderModel {
+    pub id: String,
+    pub display_name: String,
+}
+
+pub async fn list_models(config: &ProviderConfig) -> AppResult<Vec<ProviderModel>> {
+    match config.adapter_kind() {
+        AdapterKind::Ollama => Ok(ollama::list_models_at(&config.base_url)
+            .await?
+            .into_iter()
+            .map(|model| ProviderModel {
+                display_name: model.name.clone(),
+                id: model.name,
+            })
+            .collect()),
+        AdapterKind::OpenAiCompatible => Ok(
+            openai_compatible::OpenAiCompatibleProvider::new(
+                config.base_url.clone(),
+                config.api_key.clone(),
+            )
+            .list_models()
+            .await?
+            .into_iter()
+            .map(|model| ProviderModel {
+                display_name: model.id.clone(),
+                id: model.id,
+            })
+            .collect(),
+        ),
+        AdapterKind::Anthropic => Ok(anthropic::AnthropicProvider::new(
+            config.base_url.clone(),
+            config.api_key.clone(),
+        )
+        .list_models()
+        .await?
+        .into_iter()
+        .map(|model| ProviderModel {
+            id: model.id,
+            display_name: model.display_name,
+        })
+        .collect()),
+        AdapterKind::Gemini => Ok(gemini::GeminiProvider::new(
+            config.base_url.clone(),
+            config.api_key.clone(),
+        )
+        .list_models()
+        .await?
+        .into_iter()
+        .map(|model| ProviderModel {
+            id: model
+                .name
+                .strip_prefix("models/")
+                .unwrap_or(&model.name)
+                .to_string(),
+            display_name: model.display_name,
+        })
+        .collect()),
+        AdapterKind::Unimplemented => Err(AppError::Provider(format!(
+            "{} does not support model discovery",
+            config.name
+        ))),
     }
 }
 
@@ -419,7 +488,16 @@ pub async fn complete_fim(
     }
     tracing::debug!(target: "ai", event = "fim_falling_back_to_ollama");
 
-    let models = ollama::list_models().await?;
+    let ollama_config = providers
+        .iter()
+        .find(|provider| {
+            provider.enabled
+                && provider.adapter_kind() == AdapterKind::Ollama
+                && provider.capabilities.fim
+        })
+        .cloned()
+        .unwrap_or_else(provider_registry::default_ollama_provider);
+    let models = ollama::list_models_at(&ollama_config.base_url).await?;
     let prefs = crate::ai::router::Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
     let model = crate::ai::router::score_models(&models, &prefs)
         .into_iter()
@@ -427,7 +505,7 @@ pub async fn complete_fim(
         .map(|(_, name, _)| name)
         .ok_or_else(|| AppError::Provider("no local Ollama models available".to_string()))?;
 
-    let config = provider_registry::default_ollama_provider();
+    let config = ollama_config;
     let health_key = health_key_for(&config);
     if !health.is_healthy(&health_key) {
         return Err(AppError::Provider(format!(
@@ -437,7 +515,14 @@ pub async fn complete_fim(
     }
 
     let start = Instant::now();
-    let result = ollama::generate_raw(&model, prompt, num_predict, temperature).await;
+    let result = ollama::generate_raw_at(
+        &config.base_url,
+        &model,
+        prompt,
+        num_predict,
+        temperature,
+    )
+    .await;
     match &result {
         Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
         Err(_) => health.record_failure(&health_key),
@@ -473,7 +558,7 @@ pub async fn generate_for_task(
 
     let non_ollama: Vec<ProviderConfig> = providers.iter().filter(|p| p.adapter_kind() != AdapterKind::Ollama).cloned().collect();
     if let Some((config, model)) = select_provider_and_model_for_task(&non_ollama, task) {
-        return stream_cloud_chat(health, &config, &model, messages, |_token, _done| {}).await;
+        return stream_cloud_chat(health, &config, &model, &messages, |_token, _done| {}).await;
     }
 
     // Fall back to local Ollama. Model choice reuses the existing

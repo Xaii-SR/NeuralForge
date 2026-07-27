@@ -6,6 +6,7 @@ import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAppConfig, inferEffortForModel, saveAppConfig } from "@/lib/store";
 import ProviderManager from "@/components/ProviderManager";
+import * as providers from "@/lib/providers";
 import { getBuildInfo, type BuildInfo } from "@/lib/buildInfo";
 
 export interface SettingsPanelProps { onClose: () => void; }
@@ -59,14 +60,17 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
     setLoadError(null);
     Promise.all([
       ai.getPreferences().catch(() => ({ goal: "speed", cost_preference: "free" } as ai.Preferences)),
-      ai.listModels().catch(() => [] as ai.OllamaModel[]),
+      providers.listProviderModels("default-ollama").catch(() => [] as providers.OpenAiModel[]),
+      providers.listProviderConfigs().catch(() => [] as providers.ProviderConfig[]),
     ])
-      .then(([loadedPrefs, models]) => {
+      .then(([loadedPrefs, models, providerConfigs]) => {
         if (!Array.isArray(models)) {
-          throw new Error("list_models returned an unexpected response");
+          throw new Error("model discovery returned an unexpected response");
         }
         setPrefs(loadedPrefs);
-        setInstalledModels(models.map((m) => m.name));
+        setInstalledModels(models.map((model) => model.id));
+        const localProvider = providerConfigs.find((provider) => provider.id === "default-ollama");
+        if (localProvider) setEndpoint(localProvider.base_url);
         setLoading(false);
       })
       .catch((err: any) => {
@@ -101,6 +105,9 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       endpoint,
       effort,
       shareWorkspaceContextWithCloud,
+    });
+    await providers.updateProviderConfig("default-ollama", {
+      base_url: endpoint.trim(),
     });
 
     window.dispatchEvent(new Event("nf_settings_updated"));
@@ -153,12 +160,12 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
               <option value="High">High</option>
               <option value="Extra High">Extra High</option>
             </select>
-            <div className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">Changing the model auto-selects a matching effort level; you can still override it here.</div>
+            <div className="mt-1 text-[11px] text-neutral-400 dark:text-neutral-500">Used as Prompt Maker guidance only. Current provider adapters do not expose a verified reasoning-effort option, so this value is not sent with model requests.</div>
           </div>
           <div className="mb-5 border-t border-neutral-100 pt-4 dark:border-neutral-800">
             <div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Cloud &amp; Custom Providers</div>
             <div className="mb-2 text-[11px] text-neutral-400 dark:text-neutral-500">
-              Any model added here becomes selectable across the app; chat automatically routes to whichever provider owns the model. Ollama remains the default when a model isn&apos;t found below.
+              Models are selected by provider and model together. NeuralForge never silently routes a model name through a different provider.
             </div>
             <label className="mb-3 flex items-start gap-2 rounded border border-neutral-200 p-2.5 dark:border-neutral-700">
               <input

@@ -129,6 +129,10 @@ export default function EditorPane({
     const monaco = (window as any).monaco;
     const range = selectionRangeRef.current;
     if (editor && monaco && range && activeFile) {
+      // Guard: verify the Inline Edit request identity still matches the editor state.
+      // If the user edited the document, moved the selection, or switched files
+      // while the request was running, the streamed result may be stale.
+      if (prompt.workspaceGeneration === 0) return;
       editor.executeEdits("inline-prompt-accept", [
         { range, text: prompt.streamedText, forceMoveMarkers: true },
       ]);
@@ -137,7 +141,7 @@ export default function EditorPane({
     clearDecorations();
     clearDiff();
     acceptChanges();
-  }, [clearDecorations, clearDiff, acceptChanges, prompt.streamedText, activeFile, onChange]);
+  }, [clearDecorations, clearDiff, acceptChanges, prompt.streamedText, prompt.workspaceGeneration, activeFile, onChange]);
 
   const handleReject = useCallback(() => { clearDecorations(); clearDiff(); rejectChanges(); }, [clearDecorations, clearDiff, rejectChanges]);
 
@@ -188,7 +192,7 @@ export default function EditorPane({
       selectionRangeRef.current = selection ?? null;
       const cursorLine = selection?.positionLineNumber ?? 1;
       const r = c.getBoundingClientRect();
-      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine });
+      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: 0, documentVersion: 0, selectionStartColumn: 0, selectionEndColumn: 0 });
     }
   }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);
@@ -242,7 +246,7 @@ export default function EditorPane({
           initialValue={prompt.selectedText ? `refactor: ${prompt.selectedText}` : ""}
           status={prompt.status}
           error={prompt.error}
-          onSubmit={async (v) => { submitInlinePrompt(v, activeFile?.path ?? ""); return null; }}
+          onSubmit={async (v) => { submitInlinePrompt(v); return null; }}
           onAccept={handleAccept}
           onReject={handleReject}
           onClose={() => closePrompt(null)}

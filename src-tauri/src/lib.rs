@@ -51,6 +51,7 @@ pub fn run() {
     .manage(AppState::default())
     .manage(TerminalRegistry::default())
     .manage(HealthRegistry::default())
+    .manage(ai::request_registry::RequestRegistry::default())
     .manage(DbState::default())
     .manage(agent_core::AgentCoreState::default())
     .plugin(tauri_plugin_dialog::init())
@@ -81,8 +82,10 @@ pub fn run() {
       ai::get_provider_health,
       ai::check_vram_for_model,
       ai::chat_with_model,
+      ai::cancel_ai_request,
       ai::test_provider_connection,
       ai::list_provider_models,
+      ai::list_chat_models,
       ai::provider_registry::list_provider_configs,
       ai::provider_registry::add_provider_config,
       ai::provider_registry::update_provider_config,

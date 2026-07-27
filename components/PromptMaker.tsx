@@ -51,17 +51,21 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
     setGenerationError("");
     setGeneratedPrompt("");
 
-    const config = await getAppConfig();
-    if (config.provider !== "ollama") {
+    const { getModelConfig } = await import("@/lib/providers");
+    const [availableModels, assignment] = await Promise.all([
+      ai.listChatModels(),
+      getModelConfig("active_model_chat").catch(() => null),
+    ]);
+    const selected = assignment
+      ? availableModels.find(
+          (model) =>
+            model.provider_id === assignment.provider_id
+            && model.model_id === assignment.model,
+        )
+      : availableModels[0];
+    if (!selected) {
       setGenerationError(
-        `Provider: ${config.provider}\nAction: Generate system prompt\nFailure reason: Only Ollama is currently wired to the local runtime.\nPossible fix: Switch the provider to Ollama in Settings.`
-      );
-      setGenState("error");
-      return;
-    }
-    if (!config.model) {
-      setGenerationError(
-        `Provider: ollama\nAction: Generate system prompt\nFailure reason: No model is configured.\nPossible fix: Choose a model in Settings.`
+        "Action: Generate system prompt\nFailure reason: No enabled chat model is configured.\nPossible fix: Configure and assign a Chat model in Settings."
       );
       setGenState("error");
       return;
@@ -72,14 +76,14 @@ export default function PromptMaker({ onClose }: PromptMakerProps) {
     setGenState("generating");
 
     try {
-      await ai.chatWithModel(requestId, config.model, [
+      await ai.chatWithModel(requestId, selected.provider_id, selected.model_id, [
         { role: "system", content: META_PROMPT_SYSTEM_INSTRUCTION },
         { role: "user", content: `Target Objective to Engineer: ${userIntent}` },
       ]);
     } catch (err: any) {
       activeRequestId.current = null;
       setGenerationError(
-        `Provider: ollama\nAction: Generate system prompt\nFailure reason: ${err?.message || String(err)}\nPossible fix: Verify Ollama is running at the endpoint configured in Settings.`
+        `Provider: ${selected.provider_name}\nAction: Generate system prompt\nFailure reason: ${err?.message || String(err)}\nPossible fix: Verify the selected provider in Settings.`
       );
       setGenState("error");
     }

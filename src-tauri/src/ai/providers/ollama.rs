@@ -47,9 +47,17 @@ fn client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
+fn endpoint(base_url: &str, path: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+}
+
 pub async fn health_check() -> bool {
+    health_check_at(BASE_URL).await
+}
+
+pub async fn health_check_at(base_url: &str) -> bool {
     client()
-        .get(format!("{BASE_URL}/api/version"))
+        .get(endpoint(base_url, "api/version"))
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await
@@ -58,8 +66,12 @@ pub async fn health_check() -> bool {
 }
 
 pub async fn list_models() -> AppResult<Vec<OllamaModel>> {
+    list_models_at(BASE_URL).await
+}
+
+pub async fn list_models_at(base_url: &str) -> AppResult<Vec<OllamaModel>> {
     let resp = client()
-        .get(format!("{BASE_URL}/api/tags"))
+        .get(endpoint(base_url, "api/tags"))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -100,8 +112,18 @@ pub async fn list_models() -> AppResult<Vec<OllamaModel>> {
 /// verbatim without applying the model's chat template, required for FIM
 /// tokens like `<|fim_prefix|>` to reach the model unmodified.
 pub async fn generate_raw(model: &str, prompt: &str, num_predict: u32, temperature: f32) -> AppResult<String> {
+    generate_raw_at(BASE_URL, model, prompt, num_predict, temperature).await
+}
+
+pub async fn generate_raw_at(
+    base_url: &str,
+    model: &str,
+    prompt: &str,
+    num_predict: u32,
+    temperature: f32,
+) -> AppResult<String> {
     let resp = client()
-        .post(format!("{BASE_URL}/api/generate"))
+        .post(endpoint(base_url, "api/generate"))
         .json(&serde_json::json!({
             "model": model,
             "prompt": prompt,
@@ -130,8 +152,12 @@ pub async fn generate_raw(model: &str, prompt: &str, num_predict: u32, temperatu
 }
 
 pub async fn remove_model(name: &str) -> AppResult<()> {
+    remove_model_at(BASE_URL, name).await
+}
+
+pub async fn remove_model_at(base_url: &str, name: &str) -> AppResult<()> {
     let resp = client()
-        .delete(format!("{BASE_URL}/api/delete"))
+        .delete(endpoint(base_url, "api/delete"))
         .json(&serde_json::json!({ "name": name }))
         .send()
         .await
@@ -147,8 +173,12 @@ pub async fn remove_model(name: &str) -> AppResult<()> {
 }
 
 pub async fn pull_model(app: &AppHandle, name: &str) -> AppResult<()> {
+    pull_model_at(app, BASE_URL, name).await
+}
+
+pub async fn pull_model_at(app: &AppHandle, base_url: &str, name: &str) -> AppResult<()> {
     let resp = client()
-        .post(format!("{BASE_URL}/api/pull"))
+        .post(endpoint(base_url, "api/pull"))
         .json(&serde_json::json!({ "name": name, "stream": true }))
         .send()
         .await
@@ -219,8 +249,20 @@ pub async fn chat_stream<F>(model: &str, messages: Vec<ChatMessage>, mut on_toke
 where
     F: FnMut(&str, bool),
 {
+    chat_stream_at(BASE_URL, model, messages, on_token).await
+}
+
+pub async fn chat_stream_at<F>(
+    base_url: &str,
+    model: &str,
+    messages: Vec<ChatMessage>,
+    mut on_token: F,
+) -> AppResult<ChatStats>
+where
+    F: FnMut(&str, bool),
+{
     let resp = client()
-        .post(format!("{BASE_URL}/api/chat"))
+        .post(endpoint(base_url, "api/chat"))
         .json(&serde_json::json!({
             "model": model,
             "messages": messages,

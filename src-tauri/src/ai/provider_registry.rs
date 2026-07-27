@@ -280,6 +280,55 @@ const SETTINGS_KEY_ACTIVE_AGENT: &str = "active_model_agent";
 const SETTINGS_KEY_ACTIVE_INLINE: &str = "active_model_inline";
 const SETTINGS_KEY_ACTIVE_GHOST: &str = "active_model_ghost";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiMode {
+    Chat,
+    Agent,
+    Inline,
+    Ghost,
+}
+
+impl AiMode {
+    pub fn settings_key(self) -> &'static str {
+        match self {
+            Self::Chat => SETTINGS_KEY_ACTIVE_CHAT,
+            Self::Agent => SETTINGS_KEY_ACTIVE_AGENT,
+            Self::Inline => SETTINGS_KEY_ACTIVE_INLINE,
+            Self::Ghost => SETTINGS_KEY_ACTIVE_GHOST,
+        }
+    }
+
+    pub fn from_settings_key(key: &str) -> Option<Self> {
+        match key {
+            SETTINGS_KEY_ACTIVE_CHAT => Some(Self::Chat),
+            SETTINGS_KEY_ACTIVE_AGENT => Some(Self::Agent),
+            SETTINGS_KEY_ACTIVE_INLINE => Some(Self::Inline),
+            SETTINGS_KEY_ACTIVE_GHOST => Some(Self::Ghost),
+            _ => None,
+        }
+    }
+
+    fn is_supported_by(self, provider: &ProviderConfig) -> bool {
+        match self {
+            Self::Chat => provider.capabilities.chat && provider.capabilities.streaming,
+            Self::Agent | Self::Inline => {
+                provider.capabilities.chat
+                    && provider.capabilities.streaming
+                    && provider.capabilities.coding
+            }
+            Self::Ghost => {
+                provider.adapter_kind() == AdapterKind::Ollama && provider.capabilities.fim
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedModeModel {
+    pub provider: ProviderConfig,
+    pub model: String,
+}
+
 fn epoch_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -573,6 +622,84 @@ pub fn update_provider_config(
     Ok(ProviderConfigView::from(&result))
 }
 
+pub fn resolve_mode_model(conn: &Connection, mode: AiMode) -> Result<ResolvedModeModel, String> {
+    let providers = load_providers_raw(conn);
+    let assignment = load_model_config(conn, mode.settings_key());
+
+    if let Some(assignment) = assignment {
+        let provider = providers
+            .into_iter()
+            .find(|provider| provider.id == assignment.provider_id)
+            .ok_or_else(|| format!("the configured {:?} provider no longer exists", mode))?;
+        if !provider.enabled {
+            return Err(format!("the configured {:?} provider is disabled", mode));
+        }
+        if !mode.is_supported_by(&provider) {
+            return Err(format!(
+                "{} does not support the capabilities required by {:?}",
+                provider.name, mode
+            ));
+        }
+        if !provider.models.iter().any(|model| model == &assignment.model) {
+            return Err(format!(
+                "{} is not configured for provider {}",
+                assignment.model, provider.name
+            ));
+        }
+        return Ok(ResolvedModeModel {
+            provider,
+            model: assignment.model,
+        });
+    }
+
+    let provider = providers
+        .into_iter()
+        .filter(|provider| provider.enabled && mode.is_supported_by(provider))
+        .find(|provider| provider.is_default && !provider.models.is_empty())
+        .or_else(|| {
+            load_providers_raw(conn)
+                .into_iter()
+                .find(|provider| {
+                    provider.enabled
+                        && mode.is_supported_by(provider)
+                        && !provider.models.is_empty()
+                })
+        })
+        .ok_or_else(|| format!("no configured provider supports {:?}", mode))?;
+    let model = provider.models[0].clone();
+    Ok(ResolvedModeModel { provider, model })
+}
+
+pub fn resolve_provider_model(
+    conn: &Connection,
+    provider_id: &str,
+    model: &str,
+    mode: AiMode,
+) -> Result<ResolvedModeModel, String> {
+    let provider = load_providers_raw(conn)
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| "provider not found".to_string())?;
+    if !provider.enabled {
+        return Err("provider is disabled".to_string());
+    }
+    if !mode.is_supported_by(&provider) {
+        return Err(format!(
+            "{} does not support the capabilities required by {:?}",
+            provider.name, mode
+        ));
+    }
+    if provider.adapter_kind() != AdapterKind::Ollama
+        && !provider.models.iter().any(|candidate| candidate == model)
+    {
+        return Err(format!("{model} is not configured for {}", provider.name));
+    }
+    Ok(ResolvedModeModel {
+        provider,
+        model: model.to_string(),
+    })
+}
+
 #[tauri::command]
 pub fn migrate_legacy_api_key(
     db: tauri::State<'_, crate::database::DbState>,
@@ -661,6 +788,9 @@ pub fn set_default_model(
 ) -> Result<(), String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
+    let mode = AiMode::from_settings_key(&key)
+        .ok_or_else(|| "unknown AI mode assignment key".to_string())?;
+    resolve_provider_model(conn, &provider_id, &model, mode)?;
     let config = ModelConfig { provider_id, provider_name, model };
     save_model_config(conn, &key, &config).map_err(|e| e.to_string())
 }
@@ -672,7 +802,9 @@ pub fn get_model_config(
 ) -> Result<Option<ModelConfig>, String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
-    Ok(load_model_config(conn, &key))
+    let mode = AiMode::from_settings_key(&key)
+        .ok_or_else(|| "unknown AI mode assignment key".to_string())?;
+    Ok(load_model_config(conn, mode.settings_key()))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -935,6 +1067,85 @@ mod tests {
         assert_eq!(loaded.model, "deepseek-coder");
     }
 
+    #[test]
+    fn four_modes_resolve_provider_scoped_duplicate_model_ids() {
+        let conn = temp_db();
+        let make_provider = |id: &str, model: &str| ProviderConfig {
+            id: id.into(),
+            name: id.into(),
+            provider_type: "openai_compatible".into(),
+            base_url: format!("https://{id}.invalid/v1"),
+            api_key: String::new(),
+            models: vec![model.into()],
+            enabled: true,
+            is_default: false,
+            capabilities: ProviderCapabilities::default(),
+            created_at: 0,
+        };
+        let mut ghost = default_ollama_provider();
+        ghost.models = vec!["shared-model".into()];
+        persist_provider_configs(
+            &conn,
+            &[
+                make_provider("chat-provider", "shared-model"),
+                make_provider("agent-provider", "shared-model"),
+                make_provider("inline-provider", "shared-model"),
+                ghost,
+            ],
+        )
+        .unwrap();
+        for (mode, provider_id) in [
+            (AiMode::Chat, "chat-provider"),
+            (AiMode::Agent, "agent-provider"),
+            (AiMode::Inline, "inline-provider"),
+            (AiMode::Ghost, DEFAULT_OLLAMA_ID),
+        ] {
+            save_model_config(
+                &conn,
+                mode.settings_key(),
+                &ModelConfig {
+                    provider_id: provider_id.into(),
+                    provider_name: provider_id.into(),
+                    model: "shared-model".into(),
+                },
+            )
+            .unwrap();
+            let resolved = resolve_mode_model(&conn, mode).unwrap();
+            assert_eq!(resolved.provider.id, provider_id);
+            assert_eq!(resolved.model, "shared-model");
+        }
+    }
+
+    #[test]
+    fn configured_mode_never_falls_back_when_provider_is_disabled() {
+        let conn = temp_db();
+        let provider = ProviderConfig {
+            id: "disabled-provider".into(),
+            name: "Disabled".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://disabled.invalid/v1".into(),
+            api_key: String::new(),
+            models: vec!["model-a".into()],
+            enabled: false,
+            is_default: false,
+            capabilities: ProviderCapabilities::default(),
+            created_at: 0,
+        };
+        persist_provider_configs(&conn, &[provider, default_ollama_provider()]).unwrap();
+        save_model_config(
+            &conn,
+            AiMode::Chat.settings_key(),
+            &ModelConfig {
+                provider_id: "disabled-provider".into(),
+                provider_name: "Disabled".into(),
+                model: "model-a".into(),
+            },
+        )
+        .unwrap();
+        let error = resolve_mode_model(&conn, AiMode::Chat).unwrap_err();
+        assert!(error.contains("disabled"));
+    }
+
     // ── Capability clamping (Phase 5 hardening) ─────────────────────────
 
     fn all_true_capabilities() -> ProviderCapabilities {
@@ -1060,5 +1271,140 @@ mod tests {
     fn provider_config_adapter_kind_method_matches_free_function() {
         let ollama = default_ollama_provider();
         assert_eq!(ollama.adapter_kind(), adapter_kind_for(&ollama.provider_type));
+    }
+
+    // ── Wave 3 focused contract tests ───────────────────────────────────
+
+    #[test]
+    fn resolved_provider_model_fails_on_model_not_configured_for_provider() {
+        let conn = temp_db();
+        let provider = ProviderConfig {
+            id: "cloud-1".into(),
+            name: "Cloud".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://cloud.invalid/v1".into(),
+            api_key: "sk-test".into(),
+            models: vec!["model-x".into()],
+            enabled: true,
+            is_default: false,
+            capabilities: all_true_capabilities(),
+            created_at: 0,
+        };
+        persist_provider_configs(&conn, &[provider]).unwrap();
+        let error = resolve_provider_model(&conn, "cloud-1", "model-y", AiMode::Chat).unwrap_err();
+        assert!(error.contains("model-y") && error.contains("not configured"));
+    }
+
+    #[test]
+    fn ghost_mode_requires_fim_capability() {
+        let conn = temp_db();
+        let provider = ProviderConfig {
+            id: "cloud-no-fim".into(),
+            name: "NoFIM".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://nofim.invalid/v1".into(),
+            api_key: String::new(),
+            models: vec!["m".into()],
+            enabled: true,
+            is_default: false,
+            capabilities: ProviderCapabilities {
+                fim: false,
+                ..all_true_capabilities()
+            },
+            created_at: 0,
+        };
+        persist_provider_configs(&conn, &[provider]).unwrap();
+        let error = resolve_mode_model(&conn, AiMode::Ghost).unwrap_err();
+        assert!(error.contains("no configured provider supports"));
+    }
+
+    #[test]
+    fn inline_mode_requires_coding_capability() {
+        let conn = temp_db();
+        let provider = ProviderConfig {
+            id: "no-coding".into(),
+            name: "NoCoding".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://nocoding.invalid/v1".into(),
+            api_key: String::new(),
+            models: vec!["m".into()],
+            enabled: true,
+            is_default: false,
+            capabilities: ProviderCapabilities {
+                coding: false,
+                ..ProviderCapabilities::default()
+            },
+            created_at: 0,
+        };
+        persist_provider_configs(&conn, &[provider]).unwrap();
+        let error = resolve_mode_model(&conn, AiMode::Inline).unwrap_err();
+        assert!(error.contains("no configured provider supports"));
+    }
+
+    #[test]
+    fn resolve_provider_model_fails_on_deleted_provider() {
+        let conn = temp_db();
+        persist_provider_configs(&conn, &[default_ollama_provider()]).unwrap();
+        let error = resolve_provider_model(&conn, "ghost-provider", "model", AiMode::Chat).unwrap_err();
+        assert!(error.contains("not found"));
+    }
+
+    #[test]
+    fn custom_ollama_endpoint_is_used_for_discovery() {
+        let conn = temp_db();
+        let custom = ProviderConfig {
+            id: "custom-ollama".into(),
+            name: "Custom Ollama".into(),
+            provider_type: "ollama".into(),
+            base_url: "http://10.0.0.1:11434".into(),
+            api_key: String::new(),
+            models: vec!["custom-model".into()],
+            enabled: true,
+            is_default: false,
+            capabilities: ProviderCapabilities {
+                fim: true,
+                chat: true,
+                streaming: true,
+                ..ProviderCapabilities::default()
+            },
+            created_at: 0,
+        };
+        persist_provider_configs(&conn, &[custom]).unwrap();
+        let resolved = resolve_mode_model(&conn, AiMode::Ghost).unwrap();
+        assert_eq!(resolved.provider.base_url, "http://10.0.0.1:11434");
+    }
+
+    #[test]
+    fn ghost_mode_prefers_ollama_over_non_fim_providers() {
+        let conn = temp_db();
+        let chat_provider = ProviderConfig {
+            id: "chat-prov".into(),
+            name: "Chat".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://chat.invalid/v1".into(),
+            api_key: String::new(),
+            models: vec!["m".into()],
+            enabled: true,
+            is_default: true,
+            capabilities: ProviderCapabilities {
+                fim: false,
+                ..ProviderCapabilities::default()
+            },
+            created_at: 0,
+        };
+        let mut ollama = default_ollama_provider();
+        ollama.models = vec!["local-model".into()];
+        persist_provider_configs(&conn, &[chat_provider, ollama]).unwrap();
+        let resolved = resolve_mode_model(&conn, AiMode::Ghost).unwrap();
+        assert_eq!(resolved.provider.id, DEFAULT_OLLAMA_ID);
+    }
+
+    #[test]
+    fn ai_mode_settings_key_mapping_is_bijective() {
+        for mode in [AiMode::Chat, AiMode::Agent, AiMode::Inline, AiMode::Ghost] {
+            let key = mode.settings_key();
+            let recovered = AiMode::from_settings_key(key);
+            assert_eq!(recovered, Some(mode), "settings_key roundtrip failed for {:?}", mode);
+        }
     }
 }

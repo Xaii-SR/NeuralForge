@@ -9,9 +9,17 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
 import CopyButton from "@/components/ui/CopyButton";
 import { getAppConfig } from "@/lib/store";
+import { getModelConfig, setDefaultModel } from "@/lib/providers";
 
 interface DisplayMessage { role: "user" | "assistant"; content: string; fromCache?: boolean; timestamp: number; }
-interface TokenPayload { request_id: string; token: string; done: boolean; from_cache?: boolean; }
+interface TokenPayload {
+  request_id: string;
+  token: string;
+  done: boolean;
+  from_cache?: boolean;
+  status?: "success" | "cancelled" | "error";
+  error?: string | null;
+}
 type SessionState = "uninitialized" | "loading" | "ready" | "failed";
 
 export interface ChatPaneProps {
@@ -42,11 +50,9 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
   const workspaceOpen = !!workspaceRoot;
   const connectedWorkspace = workspaceName(workspaceRoot);
   const [liveSelectedContext, setLiveSelectedContext] = useState<string | null>(selectedContext ?? null);
-  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
-  const [models, setModels] = useState<ai.OllamaModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
-  const [autoMode, setAutoMode] = useState(true);
-  const [autoSelection, setAutoSelection] = useState<ai.AutoSelection | null>(null);
+  const [models, setModels] = useState<ai.ChatModelDescriptor[]>([]);
+  const [selectedModelKey, setSelectedModelKey] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -91,9 +97,65 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
 
   async function handleIndex() { setIndexing(true); setIndexStatus(null); try { const s = await ai.indexWorkspace(); setIndexStatus(`Indexed ${s.files_indexed} files (${s.chunks_created} chunks)`); } catch (e) { setIndexStatus(`Index failed: ${e}`); } finally { setIndexing(false); } }
 
-  useEffect(() => { ai.ollamaHealthCheck().then(async (healthy) => { setOllamaAvailable(healthy); if (healthy) { const l = await ai.listModels(); setModels(l); const saved = await getAppConfig().catch(() => null); const preferred = saved?.model && l.some((model) => model.name === saved.model) ? saved.model : l[0]?.name; if (preferred) setSelectedModel(preferred); } }); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadModels() {
+      setModelsLoading(true);
+      try {
+        const [available, assignment] = await Promise.all([
+          ai.listChatModels(),
+          getModelConfig("active_model_chat").catch(() => null),
+        ]);
+        if (cancelled) return;
+        setModels(available);
+        const assigned = assignment
+          ? available.find(
+              (model) =>
+                model.provider_id === assignment.provider_id
+                && model.model_id === assignment.model,
+            )
+          : null;
+        const selected = assigned ?? available[0];
+        setSelectedModelKey(
+          selected ? `${selected.provider_id}\u0000${selected.model_id}` : "",
+        );
+      } catch (e) {
+        if (!cancelled) {
+          setModels([]);
+          setSelectedModelKey("");
+          setError(`Could not load configured chat models: ${e}`);
+        }
+      } finally {
+        if (!cancelled) setModelsLoading(false);
+      }
+    }
+    void loadModels();
+    window.addEventListener("nf_settings_updated", loadModels);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("nf_settings_updated", loadModels);
+    };
+  }, [workspaceGeneration]);
 
   useEffect(() => { onSendingChange(sending); }, [sending, onSendingChange]);
+
+  async function handleModelChange(key: string) {
+    setSelectedModelKey(key);
+    const selected = models.find(
+      (model) => `${model.provider_id}\u0000${model.model_id}` === key,
+    );
+    if (!selected) return;
+    try {
+      await setDefaultModel(
+        "active_model_chat",
+        selected.provider_id,
+        selected.provider_name,
+        selected.model_id,
+      );
+    } catch (e) {
+      setError(`Could not save the Chat model assignment: ${e}`);
+    }
+  }
 
   // Message loading: keyed on activeSessionId, which SessionTabs owns and
   // controls entirely (init, switch, create, delete-with-replacement all
@@ -131,8 +193,10 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
 
   useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => {
     if (payload.request_id !== activeRequestId.current) return;
-    streamingContentRef.current += payload.token;
-    setMessages((prev) => { const n = [...prev]; const last = n[n.length - 1]; if (last && last.role === "assistant") n[n.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache }; else n.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() }); return n; });
+    if (payload.token) {
+      streamingContentRef.current += payload.token;
+      setMessages((prev) => { const n = [...prev]; const last = n[n.length - 1]; if (last && last.role === "assistant") n[n.length - 1] = { ...last, content: last.content + payload.token, fromCache: payload.from_cache }; else n.push({ role: "assistant", content: payload.token, fromCache: payload.from_cache, timestamp: Date.now() }); return n; });
+    }
     if (payload.done) {
       setSending(false);
       const finishedRequestId = payload.request_id;
@@ -141,7 +205,9 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
       streamingContentRef.current = "";
       const sid = activeSessionIdRef.current;
       const generation = workspaceGenerationRef.current;
-      if (sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
+      if (payload.status === "error") setError(payload.error ?? "Generation failed.");
+      if (payload.status === "cancelled") setError("Generation cancelled.");
+      if (payload.status === "success" && sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
         persistedRequestIds.current.add(finishedRequestId);
         ai.appendSessionMessage(generation, sid, "assistant", finalContent, "complete").catch((e) => {
           console.error("Failed to persist assistant message", e);
@@ -152,13 +218,14 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
   });
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
 
-  function cancelGeneration() {
-    // No persistence call here on purpose: an incomplete assistant
-    // response must never be saved (see Phase 4A cancellation rules).
-    activeRequestId.current = null;
-    streamingContentRef.current = "";
-    setSending(false);
-    setError("Generation cancelled.");
+  async function cancelGeneration() {
+    const requestId = activeRequestId.current;
+    if (!requestId) return;
+    try {
+      await ai.cancelAiRequest(requestId);
+    } catch (error) {
+      setError(`Could not cancel generation: ${error}`);
+    }
   }
 
   async function handleSend() {
@@ -195,17 +262,15 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
       }
     }
 
-    let mtu = selectedModel;
-    if (autoMode) {
-      try {
-        const sel = await ai.autoSelectModel(um.content);
-        if (workspaceGenerationRef.current !== generation) return;
-        setAutoSelection(sel);
-        mtu = sel.model;
-      }
-      catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; return; }
-    } else { setAutoSelection(null); }
-    if (!mtu) { setError("No model available"); setSending(false); activeRequestId.current = null; return; }
+    const selectedModel = models.find(
+      (model) => `${model.provider_id}\u0000${model.model_id}` === selectedModelKey,
+    );
+    if (!selectedModel) {
+      setError("No enabled chat-capable provider and model is configured");
+      setSending(false);
+      activeRequestId.current = null;
+      return;
+    }
     let cp: string | null = null;
     try {
       const contextQuery = liveSelectedContext ? `${um.content}\nSelected workspace context: ${liveSelectedContext}` : um.content;
@@ -219,17 +284,24 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
       const appConfig = await getAppConfig();
       await ai.chatWithModel(
         rid,
-        mtu,
+        selectedModel.provider_id,
+        selectedModel.model_id,
         out,
         generation,
         appConfig.shareWorkspaceContextWithCloud,
       );
     }
-    catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; }
+    catch (e) {
+      if (activeRequestId.current === rid) {
+        setError(String(e));
+        setSending(false);
+        activeRequestId.current = null;
+      }
+    }
   }
 
-  if (ollamaAvailable === null) return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Checking Ollama...</div>;
-  if (!ollamaAvailable) return <EmptyState icon="🔌" title="Ollama not detected" hint="Install Ollama and make sure it's running at localhost:11434, then reopen NeuralForge." />;
+  if (modelsLoading) return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Loading configured providers...</div>;
+  if (models.length === 0) return <EmptyState icon="🔌" title="No chat model configured" hint="Enable a chat-capable provider and add or discover at least one model in Settings." />;
   if (workspaceOpen && sessionState === "loading") return <div className="flex h-full items-center justify-center gap-2 text-xs text-neutral-500"><Spinner size={12} />Loading conversation...</div>;
   // Empty session state (v1.3.0 Phase 4B): reachable after deleting the
   // last session in a workspace. SessionTabs' "+ New" stays enabled here -
@@ -240,12 +312,13 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
   return (
     <div className="flex h-full flex-col bg-white dark:bg-neutral-900">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-neutral-200 px-2 dark:border-neutral-800">
-        <button onClick={() => { setAutoMode((v) => !v); }} className={`rounded px-2 py-1 text-xs font-medium transition-colors ${autoMode ? "bg-blue-600 text-white hover:bg-blue-500" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"}`}>Auto</button>
-        {!autoMode && (
-          <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-            {models.map((m) => (<option key={m.name} value={m.name}>{m.name} ({m.parameter_size})</option>))}
-          </select>
-        )}
+        <select value={selectedModelKey} onChange={(e) => void handleModelChange(e.target.value)} className="rounded border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+          {models.map((model) => (
+            <option key={`${model.provider_id}:${model.model_id}`} value={`${model.provider_id}\u0000${model.model_id}`}>
+              {model.provider_name}: {model.display_name}
+            </option>
+          ))}
+        </select>
         {connectedWorkspace && (
           <div title={workspaceRoot ?? undefined} className="ml-auto max-w-[220px] truncate rounded bg-neutral-100 px-2 py-1 text-[10px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
             Workspace: {connectedWorkspace}
@@ -255,7 +328,6 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
         {workspaceOpen && <button onClick={handleIndex} disabled={indexing} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-neutral-600 transition-colors hover:bg-neutral-100 disabled:opacity-60 dark:text-neutral-300 dark:hover:bg-neutral-800">{indexing && <Spinner size={10} />}{indexing ? "Indexing..." : "Index Workspace"}</button>}
       </div>
       {indexStatus && <div className="border-b border-neutral-200 px-2 py-1 text-[10px] text-neutral-500 dark:border-neutral-800 dark:text-neutral-500">{indexStatus}</div>}
-      {autoMode && autoSelection && (<div className="border-b border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[10px] text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">Selected <span className="font-medium text-neutral-800 dark:text-neutral-200">{autoSelection.model}</span> from {autoSelection.provider} because {autoSelection.reason}. {autoSelection.is_free ? <span className="font-medium text-green-600 dark:text-green-400">Free</span> : <span className="font-medium text-yellow-600 dark:text-yellow-400">~${autoSelection.estimated_cost_usd.toFixed(4)}</span>}</div>)}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {messages.length === 0 && <EmptyState icon="💬" title="Ask NeuralForge anything" hint="Questions about your code get workspace context automatically" />}
         {messages.map((m, i) => { const iu = m.role === "user"; const isStreamingNow = sending && i === messages.length - 1; const complete = !iu && m.content && !isStreamingNow; return (<div key={i} className={`mb-3 flex ${iu ? "justify-end" : "justify-start"}`}><div className={`max-w-[85%] ${iu ? "items-end" : "items-start"} flex flex-col gap-1`}><div className={`group relative rounded-lg px-3 py-2 text-sm leading-relaxed shadow-sm ${iu ? "bg-blue-600 text-white" : "bg-neutral-100 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-100"}`}><div className="whitespace-pre-wrap">{m.content || (isStreamingNow ? "…" : "")}</div>{complete && <CopyButton text={m.content} className="absolute right-1 top-1 opacity-0 group-hover:opacity-100" />}</div><div className="flex items-center gap-1.5 px-1 text-[10px] text-neutral-400 dark:text-neutral-600"><span>{formatTime(m.timestamp)}</span>{m.fromCache && <span className="font-medium text-yellow-600 dark:text-yellow-500">from cache</span>}</div></div></div>); })}
@@ -267,7 +339,7 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
         {sending ? (
           <button onClick={cancelGeneration} className="flex shrink-0 items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500">⏹ Stop</button>
         ) : (
-          <button onClick={handleSend} disabled={(!autoMode && !selectedModel) || !activeSessionId} className="flex shrink-0 items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{sending && <Spinner size={10} />}Send</button>
+          <button onClick={handleSend} disabled={!selectedModelKey || !activeSessionId} className="flex shrink-0 items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50">{sending && <Spinner size={10} />}Send</button>
         )}
       </div>
     </div>

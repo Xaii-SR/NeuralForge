@@ -14,6 +14,14 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ChatModelDescriptor {
+  provider_id: string;
+  provider_name: string;
+  model_id: string;
+  display_name: string;
+  is_local: boolean;
+}
+
 export interface ProviderMetadata {
   id: string;
   name: string;
@@ -51,6 +59,10 @@ export function listModels(): Promise<OllamaModel[]> {
   return invoke("list_models");
 }
 
+export function listChatModels(): Promise<ChatModelDescriptor[]> {
+  return invoke("list_chat_models");
+}
+
 export function pullModel(name: string): Promise<void> {
   return invoke("pull_model", { name });
 }
@@ -83,18 +95,24 @@ export function getHardwareInfo(): Promise<HardwareInfo> {
 
 export function chatWithModel(
   requestId: string,
+  providerId: string,
   model: string,
   messages: ChatMessage[],
   workspaceGeneration?: number,
-  shareWorkspaceContext?: boolean,
+  shareWorkspaceContext = false,
 ): Promise<void> {
   return invoke("chat_with_model", {
     requestId,
+    providerId,
     model,
     messages,
     workspaceGeneration,
     shareWorkspaceContext,
   });
+}
+
+export function cancelAiRequest(requestId: string): Promise<boolean> {
+  return invoke("cancel_ai_request", { requestId });
 }
 
 export interface IndexStats {

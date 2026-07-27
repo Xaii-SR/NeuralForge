@@ -1,16 +1,28 @@
 use crate::ai::completion;
 use crate::ai::health::HealthRegistry;
-use crate::ai::provider_registry::{self, AdapterKind};
+use crate::ai::provider_registry::{self, AdapterKind, AiMode};
 use crate::ai::provider_router;
 use crate::ai::providers::ollama;
+use crate::ai::request_registry::{self, RequestRegistry};
+use crate::core::errors::{AppError, AppResult};
+use crate::core::state::AppState;
 use crate::database::DbState;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Clone, Serialize)]
 pub struct InlineStreamPayload {
+    pub request_id: String,
+    pub workspace_generation: u64,
+    pub file_path: String,
+    pub document_version: u64,
+    pub selection_start_line: u32,
+    pub selection_start_column: u32,
+    pub selection_end_line: u32,
+    pub selection_end_column: u32,
     pub chunk: String,
     pub done: bool,
+    pub status: Option<String>,
     pub error: Option<String>,
 }
 
@@ -24,74 +36,132 @@ pub struct InlineStreamPayload {
 pub async fn stream_inline_edit(
     app: AppHandle,
     health: State<'_, HealthRegistry>,
+    state: State<'_, AppState>,
     db: State<'_, DbState>,
+    requests: State<'_, RequestRegistry>,
+    request_id: String,
+    workspace_generation: u64,
     prompt: String,
     selected_text: String,
     file_path: String,
+    document_version: u64,
+    selection_start_line: u32,
+    selection_start_column: u32,
+    selection_end_line: u32,
+    selection_end_column: u32,
+    share_workspace_context: bool,
 ) -> Result<(), String> {
-    let models = match ollama::list_models().await {
-        Ok(m) => m,
-        Err(e) => {
-            let _ = app.emit("inline-stream", InlineStreamPayload { chunk: String::new(), done: true, error: Some(e.to_string()) });
-            return Ok(());
+    let cancelled = requests.begin(&request_id)?;
+    let payload = |chunk: String, done: bool, status: Option<String>, error: Option<String>| {
+        InlineStreamPayload {
+            request_id: request_id.clone(),
+            workspace_generation,
+            file_path: file_path.clone(),
+            document_version,
+            selection_start_line,
+            selection_start_column,
+            selection_end_line,
+            selection_end_column,
+            chunk,
+            done,
+            status,
+            error,
         }
     };
-    let Some(model) = models.first().map(|m| m.name.clone()) else {
-        let _ = app.emit(
-            "inline-stream",
-            InlineStreamPayload { chunk: String::new(), done: true, error: Some("no local Ollama models available".to_string()) },
+
+    let outcome: AppResult<String> = async {
+        let resolved = crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            workspace_generation,
+            |_root, conn| {
+                provider_registry::resolve_mode_model(conn, AiMode::Inline)
+                    .map_err(AppError::Provider)
+            },
+        )?;
+        if resolved.provider.adapter_kind() != AdapterKind::Ollama
+            && !share_workspace_context
+        {
+            return Err(AppError::CommandRejected(
+                "Inline Edit cannot send selected workspace code to a cloud provider without explicit workspace-context consent".to_string(),
+            ));
+        }
+
+        let instruction = format!(
+            "Modify the following code according to the instruction. Output ONLY the raw modified code. No markdown fences, no explanations.\n\nInstruction: {}\n\nCode:\n{}\n\nModified code:",
+            prompt, selected_text
         );
-        return Ok(());
-    };
-
-    let config = {
-        let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(provider_registry::load_providers)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|provider| provider.enabled && provider.adapter_kind() == AdapterKind::Ollama)
-            .unwrap_or_else(provider_registry::default_ollama_provider)
-        // guard dropped here, before the streaming call's .await points -
-        // a held MutexGuard can't cross an await (see provider_router's
-        // doc comments on this exact constraint)
-    };
-
-    let instruction = format!(
-        "Modify the following code according to the instruction. Output ONLY the raw modified code. No markdown fences, no explanations.\n\nInstruction: {}\n\nCode:\n{}\n\nModified code:",
-        prompt, selected_text
-    );
-    let messages = vec![ollama::ChatMessage { role: "user".to_string(), content: instruction }];
-
-    let app_for_stream = app.clone();
-    let result = provider_router::stream_chat(&health, &config, &model, messages, move |token, done| {
-        if !token.is_empty() {
-            let _ = app_for_stream.emit("inline-stream", InlineStreamPayload { chunk: token.to_string(), done: false, error: None });
-        }
-        if done {
-            let _ = app_for_stream.emit("inline-stream", InlineStreamPayload { chunk: String::new(), done: true, error: None });
-        }
-    })
+        let messages = vec![ollama::ChatMessage {
+            role: "user".to_string(),
+            content: instruction,
+        }];
+        let app_for_stream = app.clone();
+        let cancelled_for_stream = cancelled.clone();
+        let state_for_stream = &state;
+        request_registry::run_cancellable(
+            &cancelled,
+            provider_router::stream_chat(
+                &health,
+                &resolved.provider,
+                &resolved.model,
+                messages,
+                move |token, _adapter_done| {
+                    if token.is_empty()
+                        || request_registry::is_cancelled(&cancelled_for_stream)
+                        || !state_for_stream.matches_workspace_generation(workspace_generation)
+                    {
+                        return;
+                    }
+                    let _ = app_for_stream.emit(
+                        "inline-stream",
+                        payload(token.to_string(), false, None, None),
+                    );
+                },
+            ),
+        )
+        .await
+    }
     .await;
 
-    match result {
-        Ok(generated) => {
+    if let Ok(generated) = &outcome {
+        if state.matches_workspace_generation(workspace_generation)
+            && !request_registry::is_cancelled(&cancelled)
+        {
             tracing::info!(target: "ai", event = "inline_edit_completed", file_path = %file_path);
-
-            // Real per-line diff for accurate insert/delete decorations,
-            // computed now that the full response is known.
-            let request_id = format!(
-                "inline-{}",
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
-            );
-            completion::stream_inline_diff(app.clone(), request_id, &selected_text, &generated).await;
-        }
-        Err(e) => {
-            tracing::warn!(target: "ai", event = "inline_edit_failed", file_path = %file_path, error = %e);
-            let _ = app.emit("inline-stream", InlineStreamPayload { chunk: String::new(), done: true, error: Some(e.to_string()) });
+            completion::stream_inline_diff(
+                app.clone(),
+                request_id.clone(),
+                &selected_text,
+                generated,
+            )
+            .await;
         }
     }
 
+    let (status, error) = match &outcome {
+        Ok(_) if !state.matches_workspace_generation(workspace_generation) => (
+            "error",
+            Some("workspace changed while Inline Edit was running".to_string()),
+        ),
+        Ok(_) if request_registry::is_cancelled(&cancelled) => ("cancelled", None),
+        Ok(_) => ("success", None),
+        Err(AppError::CommandRejected(message)) if message == "request cancelled" => {
+            ("cancelled", None)
+        }
+        Err(error) => {
+            tracing::warn!(target: "ai", event = "inline_edit_failed", file_path = %file_path, error = %error);
+            ("error", Some(error.to_string()))
+        }
+    };
+    let _ = app.emit(
+        "inline-stream",
+        payload(
+            String::new(),
+            true,
+            Some(status.to_string()),
+            error,
+        ),
+    );
+    requests.finish(&request_id);
     Ok(())
 }

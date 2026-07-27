@@ -12,6 +12,7 @@ pub mod web;
 pub mod model_manager;
 pub mod provider_registry;
 pub mod provider_router;
+pub mod request_registry;
 pub mod providers;
 pub mod router;
 
@@ -22,6 +23,14 @@ use health::{HealthRegistry, ProviderHealthInfo};
 use providers::{ollama, openai_compatible, ProviderMetadata};
 use router::{AutoSelection, CostEstimate, Preferences};
 use tauri::{AppHandle, Emitter, State};
+
+#[tauri::command]
+pub fn cancel_ai_request(
+    requests: State<'_, request_registry::RequestRegistry>,
+    request_id: String,
+) -> bool {
+    requests.cancel(&request_id)
+}
 
 #[tauri::command]
 pub async fn ollama_health_check() -> bool {
@@ -166,17 +175,63 @@ pub async fn list_provider_models(
     state: State<'_, AppState>,
     db: State<'_, DbState>,
     provider_id: String,
-) -> Result<Vec<openai_compatible::OpenAiModel>, String> {
+) -> Result<Vec<provider_router::ProviderModel>, String> {
     let config = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
         provider_registry::load_provider_by_id(conn, &provider_id)
             .map_err(AppError::Provider)
     })
     .map_err(|error| error.to_string())?;
-    let provider = openai_compatible::OpenAiCompatibleProvider::new(
-        config.base_url,
-        config.api_key,
-    );
-    provider.list_models().await.map_err(|error| error.to_string())
+    provider_router::list_models(&config)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct ChatModelDescriptor {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model_id: String,
+    pub display_name: String,
+    pub is_local: bool,
+}
+
+#[tauri::command]
+pub async fn list_chat_models(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+) -> Result<Vec<ChatModelDescriptor>, String> {
+    let providers = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
+        Ok(provider_registry::load_providers(conn))
+    })
+    .map_err(|error| error.to_string())?;
+    let mut descriptors = Vec::new();
+    for provider in providers.into_iter().filter(|provider| {
+        provider.enabled && provider.capabilities.chat && provider.capabilities.streaming
+    }) {
+        let is_local = provider.adapter_kind() == provider_registry::AdapterKind::Ollama;
+        let models = if is_local {
+            provider_router::list_models(&provider)
+                .await
+                .unwrap_or_default()
+        } else {
+            provider
+                .models
+                .iter()
+                .map(|model| provider_router::ProviderModel {
+                    id: model.clone(),
+                    display_name: model.clone(),
+                })
+                .collect()
+        };
+        descriptors.extend(models.into_iter().map(|model| ChatModelDescriptor {
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            model_id: model.id,
+            display_name: model.display_name,
+            is_local,
+        }));
+    }
+    Ok(descriptors)
 }
 
 #[tauri::command]
@@ -210,20 +265,22 @@ pub async fn auto_select_model(
 /// generation stats (proof the response came from a genuine generation).
 async fn chat_with_model_core<F>(
     health: &HealthRegistry,
+    config: &provider_registry::ProviderConfig,
     model: &str,
-    messages: Vec<ollama::ChatMessage>,
+    messages: &[ollama::ChatMessage],
     mut on_token: F,
 ) -> AppResult<(String, ollama::ChatStats)>
 where
     F: FnMut(&str, bool),
 {
-    if !health.is_healthy("ollama") {
+    let health_key = provider_router::health_key_for(config);
+    if !health.is_healthy(&health_key) {
         return Err(AppError::Provider(
             "Ollama is in cooldown after repeated failures - try again shortly".to_string(),
         ));
     }
 
-    let models = ollama::list_models().await?;
+    let models = ollama::list_models_at(&config.base_url).await?;
     if let Some(info) = models.iter().find(|m| m.name == model) {
         let hardware = crate::hardware::detect_all();
         let vram = model_manager::check(&info.parameter_size, &info.quantization_level, &hardware);
@@ -235,7 +292,7 @@ where
 
     let start = std::time::Instant::now();
     let mut accumulated = String::new();
-    let result = ollama::chat_stream(model, messages, |token, done| {
+    let result = ollama::chat_stream_at(&config.base_url, model, messages.to_vec(), |token, done| {
         accumulated.push_str(token);
         on_token(token, done);
     })
@@ -243,11 +300,11 @@ where
 
     match &result {
         Ok(_) => {
-            health.record_success("ollama", start.elapsed().as_secs_f64() * 1000.0);
+            health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0);
             tracing::info!(target: "ai", event = "chat_completed", model = %model);
         }
         Err(e) => {
-            health.record_failure("ollama");
+            health.record_failure(&health_key);
             tracing::warn!(target: "ai", event = "chat_failed", model = %model, error = %e);
         }
     }
@@ -269,7 +326,7 @@ async fn chat_or_use_cache<F>(
     cached: Option<String>,
     config: &provider_registry::ProviderConfig,
     model: &str,
-    messages: Vec<ollama::ChatMessage>,
+    messages: &[ollama::ChatMessage],
     mut on_token: F,
 ) -> AppResult<Option<String>>
 where
@@ -289,7 +346,8 @@ where
     // for anything non-Ollama - see its module doc for why the two paths
     // aren't merged into one generic function.
     let response = if config.adapter_kind() == provider_registry::AdapterKind::Ollama {
-        let (response, _stats) = chat_with_model_core(health, model, messages, &mut on_token).await?;
+        let (response, _stats) =
+            chat_with_model_core(health, config, model, messages, &mut on_token).await?;
         response
     } else {
         provider_router::stream_cloud_chat(health, config, model, messages, &mut on_token).await?
@@ -316,72 +374,131 @@ pub async fn chat_with_model(
     health: State<'_, HealthRegistry>,
     state: State<'_, AppState>,
     db: State<'_, DbState>,
+    requests: State<'_, request_registry::RequestRegistry>,
     request_id: String,
+    provider_id: String,
     model: String,
     messages: Vec<ollama::ChatMessage>,
     workspace_generation: Option<u64>,
-    share_workspace_context: Option<bool>,
+    share_workspace_context: bool,
 ) -> AppResult<()> {
-    let workspace_generation =
-        workspace_generation.unwrap_or_else(|| state.workspace_generation());
-    let config = crate::database::with_workspace_conn_at_generation(
-        &state,
-        &db,
-        workspace_generation,
-        |_root, conn| {
-            let config = provider_router::resolve_provider_for_model(Some(conn), &model);
-            Ok(config)
-        },
-    )?;
-    let messages = prepare_chat_messages(
-        &config,
-        messages,
-        share_workspace_context.unwrap_or(false),
-    );
-    let cached = crate::database::with_workspace_conn_at_generation(
-        &state,
-        &db,
-        workspace_generation,
-        |_root, conn| Ok(cache::get_cached(conn, &model, &messages)),
-    )?;
-    let was_cached = cached.is_some();
-
-    let token_request_id = request_id.clone();
-    let fresh = chat_or_use_cache(&health, cached, &config, &model, messages.clone(), |token, done| {
-        if !state.matches_workspace_generation(workspace_generation) {
-            return;
-        }
-        let _ = app.emit(
-            crate::core::events::AI_RESPONSE_TOKEN,
-            serde_json::json!({
-                "request_id": token_request_id,
-                "token": token,
-                "done": done,
-                "from_cache": was_cached,
-            }),
-        );
-    })
-    .await?;
-
-    if let Some(response) = fresh {
-        crate::database::with_workspace_conn_at_generation(
+    let workspace_generation = workspace_generation.unwrap_or_else(|| state.workspace_generation());
+    let cancelled = requests
+        .begin(&request_id)
+        .map_err(AppError::CommandRejected)?;
+    let outcome = async {
+        let resolved = crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            workspace_generation,
+            |_root, conn| provider_registry::resolve_provider_model(
+                conn,
+                &provider_id,
+                &model,
+                provider_registry::AiMode::Chat,
+            )
+            .map_err(AppError::Provider),
+        )?;
+        let config = resolved.provider;
+        let model = resolved.model;
+        let messages = prepare_chat_messages(&config, messages, share_workspace_context);
+        let effective_options = "default";
+        let cached = crate::database::with_workspace_conn_at_generation(
             &state,
             &db,
             workspace_generation,
             |_root, conn| {
-            if let Err(e) = cache::store_response(conn, &model, &messages, &response) {
-                tracing::warn!(target: "ai", event = "cache_store_failed", error = %e);
-            }
-                Ok(())
+                Ok(cache::get_cached(
+                    conn,
+                    &config.id,
+                    &model,
+                    effective_options,
+                    &messages,
+                ))
             },
         )?;
-    } else if !state.matches_workspace_generation(workspace_generation) {
-        return Err(AppError::CommandRejected(
-            "workspace changed while chat generation was running".to_string(),
-        ));
-    }
+        let was_cached = cached.is_some();
+        let token_request_id = request_id.clone();
+        let fresh = request_registry::run_cancellable(
+            &cancelled,
+            chat_or_use_cache(
+                &health,
+                cached,
+                &config,
+                &model,
+                &messages,
+                |token, _adapter_done| {
+                    if token.is_empty()
+                        || request_registry::is_cancelled(&cancelled)
+                        || !state.matches_workspace_generation(workspace_generation)
+                    {
+                        return;
+                    }
+                    let _ = app.emit(
+                        crate::core::events::AI_RESPONSE_TOKEN,
+                        serde_json::json!({
+                            "request_id": token_request_id,
+                            "token": token,
+                            "done": false,
+                            "from_cache": was_cached,
+                        }),
+                    );
+                },
+            ),
+        )
+        .await?;
 
-    Ok(())
+        if !state.matches_workspace_generation(workspace_generation) {
+            return Err(AppError::CommandRejected(
+                "workspace changed while chat generation was running".to_string(),
+            ));
+        }
+        if request_registry::is_cancelled(&cancelled) {
+            return Err(AppError::CommandRejected("request cancelled".to_string()));
+        }
+        if let Some(response) = fresh {
+            crate::database::with_workspace_conn_at_generation(
+                &state,
+                &db,
+                workspace_generation,
+                |_root, conn| {
+                    if let Err(e) = cache::store_response(
+                        conn,
+                        &config.id,
+                        &model,
+                        effective_options,
+                        &messages,
+                        &response,
+                    ) {
+                        tracing::warn!(target: "ai", event = "cache_store_failed", error = %e);
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
+    }
+    .await;
+
+    let (status, error) = match &outcome {
+        Ok(()) => ("success", None),
+        Err(AppError::CommandRejected(message)) if message == "request cancelled" => {
+            ("cancelled", None)
+        }
+        Err(error) => ("error", Some(error.to_string())),
+    };
+    let _ = app.emit(
+        crate::core::events::AI_RESPONSE_TOKEN,
+        serde_json::json!({
+            "request_id": request_id,
+            "token": "",
+            "done": true,
+            "status": status,
+            "error": error,
+        }),
+    );
+    requests.finish(&request_id);
+    outcome
 }
 
 #[cfg(test)]
@@ -435,8 +552,9 @@ mod tests {
 
         let result = chat_with_model_core(
             &health,
+            &provider_registry::default_ollama_provider(),
             "deepseek-coder:latest",
-            vec![ollama::ChatMessage {
+            &[ollama::ChatMessage {
                 role: "user".to_string(),
                 content: "What is Rust? Answer in one short sentence.".to_string(),
             }],
@@ -500,22 +618,30 @@ mod tests {
         }];
 
         // First call: real cache miss.
-        assert!(cache::get_cached(&conn, model, &messages).is_none());
+        assert!(cache::get_cached(&conn, "default-ollama", model, "default", &messages).is_none());
         let start1 = std::time::Instant::now();
         let mut streamed1 = String::new();
-        let fresh1 = chat_or_use_cache(&health, None, &config, model, messages.clone(), |t, _d| streamed1.push_str(t))
+        let fresh1 = chat_or_use_cache(&health, None, &config, model, &messages, |t, _d| streamed1.push_str(t))
             .await
             .unwrap();
         let elapsed1 = start1.elapsed();
         let response1 = fresh1.expect("first call should be a cache miss producing a fresh response");
-        cache::store_response(&conn, model, &messages, &response1).unwrap();
+        cache::store_response(
+            &conn,
+            "default-ollama",
+            model,
+            "default",
+            &messages,
+            &response1,
+        )
+        .unwrap();
 
         // Second call: real cache hit.
-        let cached2 = cache::get_cached(&conn, model, &messages);
+        let cached2 = cache::get_cached(&conn, "default-ollama", model, "default", &messages);
         assert!(cached2.is_some());
         let start2 = std::time::Instant::now();
         let mut streamed2 = String::new();
-        let fresh2 = chat_or_use_cache(&health, cached2, &config, model, messages.clone(), |t, _d| streamed2.push_str(t))
+        let fresh2 = chat_or_use_cache(&health, cached2, &config, model, &messages, |t, _d| streamed2.push_str(t))
             .await
             .unwrap();
         let elapsed2 = start2.elapsed();
@@ -526,6 +652,34 @@ mod tests {
             elapsed2 < elapsed1 / 2,
             "cache hit ({elapsed2:?}) should be dramatically faster than real generation ({elapsed1:?})"
         );
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cache_does_not_cross_provider_boundaries() {
+        let mut dir = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("neuralforge_cache_provider_isolation_test_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+
+        let messages = vec![
+            ollama::ChatMessage { role: "user".into(), content: "hello".into() },
+        ];
+
+        // Store a response for provider-a.
+        cache::store_response(&conn, "provider-a", "model-x", "default", &messages, "response-from-a").unwrap();
+
+        // provider-b should NOT see provider-a's cache entry.
+        assert!(cache::get_cached(&conn, "provider-b", "model-x", "default", &messages).is_none());
+
+        // Even with the same model, different provider is a miss.
+        assert!(cache::get_cached(&conn, "provider-b", "model-x", "default", &messages).is_none());
 
         drop(conn);
         std::fs::remove_dir_all(&dir).unwrap();
