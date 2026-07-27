@@ -4,7 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import * as ai from "@/lib/ai";
 import ChatPane from "@/components/ChatPane";
 
-export interface SessionTabsProps { workspaceRoot: string | null; selectedContext?: string | null; }
+export interface SessionTabsProps {
+  workspaceRoot: string | null;
+  workspaceGeneration: number;
+  selectedContext?: string | null;
+}
 
 const TAB_BUTTON = "group flex shrink-0 items-center gap-1 rounded-t px-2.5 py-1 text-xs font-medium transition-colors border-b-2 max-w-[140px]";
 const TAB_ACTIVE = "border-blue-500 bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100";
@@ -19,7 +23,7 @@ type TabsState = "uninitialized" | "loading" | "ready" | "failed";
  * or create sessions itself (that logic moved here from ChatPane's old
  * Phase 4A init effect, it was not duplicated).
  */
-export default function SessionTabs({ workspaceRoot, selectedContext }: SessionTabsProps) {
+export default function SessionTabs({ workspaceRoot, workspaceGeneration, selectedContext }: SessionTabsProps) {
   const [sessions, setSessions] = useState<ai.Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [tabsState, setTabsState] = useState<TabsState>("uninitialized");
@@ -30,6 +34,8 @@ export default function SessionTabs({ workspaceRoot, selectedContext }: SessionT
   // creating/deleting can be disabled while a response is streaming -
   // see the "streaming during session switch" limitation documented below.
   const [sending, setSending] = useState(false);
+  const workspaceGenerationRef = useRef(workspaceGeneration);
+  workspaceGenerationRef.current = workspaceGeneration;
 
   // Same StrictMode/re-render duplicate-init guard used by Phase 4A's
   // original effect in ChatPane - claimed synchronously before any await.
@@ -43,30 +49,40 @@ export default function SessionTabs({ workspaceRoot, selectedContext }: SessionT
       setTabsState("uninitialized");
       return;
     }
-    if (initializedForWorkspace.current === workspaceRoot) return;
-    initializedForWorkspace.current = workspaceRoot;
+    const workspaceKey = `${workspaceGeneration}:${workspaceRoot}`;
+    if (initializedForWorkspace.current === workspaceKey) return;
+    initializedForWorkspace.current = workspaceKey;
     setSessions([]);
     setActiveSessionId(null);
     setTabsState("loading");
+    setError(null);
 
+    let cancelled = false;
+    const generation = workspaceGeneration;
     (async () => {
       try {
-        const list = await ai.listSessions();
-        const session = list[0] ?? (await ai.createSession("New Chat"));
+        const list = await ai.listSessions(generation);
+        if (cancelled || workspaceGenerationRef.current !== generation) return;
+        const session = list[0] ?? (await ai.createSession(generation, "New Chat"));
+        if (cancelled || workspaceGenerationRef.current !== generation) return;
         setSessions(list[0] ? list : [session]);
         setActiveSessionId(session.id);
         setTabsState("ready");
       } catch (e) {
+        if (cancelled || workspaceGenerationRef.current !== generation) return;
         setError(`Could not load saved conversations: ${e}`);
         setTabsState("failed");
       }
     })();
-  }, [workspaceRoot]);
+    return () => { cancelled = true; };
+  }, [workspaceRoot, workspaceGeneration]);
 
   async function handleCreate() {
     if (sending) return;
+    const generation = workspaceGeneration;
     try {
-      const session = await ai.createSession("New Chat");
+      const session = await ai.createSession(generation, "New Chat");
+      if (workspaceGenerationRef.current !== generation) return;
       setSessions((prev) => [session, ...prev]);
       setActiveSessionId(session.id);
     } catch (e) {
@@ -88,8 +104,10 @@ export default function SessionTabs({ workspaceRoot, selectedContext }: SessionT
     const title = renameValue.trim();
     setRenamingId(null);
     if (!title || title === session.title) return;
+    const generation = workspaceGeneration;
     try {
-      await ai.updateSessionMetadata(session.id, title, session.last_message_preview ?? "");
+      await ai.updateSessionMetadata(generation, session.id, title, session.last_message_preview ?? "");
+      if (workspaceGenerationRef.current !== generation) return;
       setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, title } : s)));
     } catch (e) {
       // Original name stays visible since we never optimistically changed it.
@@ -100,8 +118,10 @@ export default function SessionTabs({ workspaceRoot, selectedContext }: SessionT
   async function handleDelete(session: ai.Session) {
     if (sending) return;
     const prevSessions = sessions;
+    const generation = workspaceGeneration;
     try {
-      await ai.deleteSession(session.id);
+      await ai.deleteSession(generation, session.id);
+      if (workspaceGenerationRef.current !== generation) return;
       const remaining = prevSessions.filter((s) => s.id !== session.id);
       setSessions(remaining);
       if (activeSessionId === session.id) {
@@ -174,6 +194,7 @@ export default function SessionTabs({ workspaceRoot, selectedContext }: SessionT
       <div className="min-h-0 flex-1">
         <ChatPane
           workspaceRoot={workspaceRoot}
+          workspaceGeneration={workspaceGeneration}
           selectedContext={selectedContext}
           activeSessionId={activeSessionId}
           sessionsReady={tabsState === "ready" || tabsState === "failed"}

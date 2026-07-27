@@ -58,10 +58,26 @@ pub fn agent_lifecycle_transition(
 pub async fn run_council_pass(
     core: State<'_, AgentCoreState>,
     app_handle: AppHandle,
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
     task_id: String,
     objective: String,
 ) -> Result<CouncilPassResult, String> {
-    orchestrator::run_council_pass(&core, app_handle, &task_id, &objective)
+    crate::database::with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |_root, _conn| Ok(()),
+    )
+    .map_err(|e| e.to_string())?;
+    orchestrator::run_council_pass(
+        &core,
+        app_handle,
+        workspace_generation,
+        &task_id,
+        &objective,
+    )
         .await
         .map_err(|e: CouncilError| e.to_string())
 }
@@ -70,10 +86,19 @@ pub async fn create_and_plan_task(
     core: State<'_, AgentCoreState>,
     state: State<'_, AppState>,
     db: State<'_, DbState>,
+    workspace_generation: u64,
     requirement_id: String,
     file_path: String,
 ) -> AppResult<crate::agent::AgentTask> {
-    orchestrator::create_and_plan_task(&core, state, db, requirement_id, file_path).await
+    orchestrator::create_and_plan_task(
+        &core,
+        state,
+        db,
+        workspace_generation,
+        requirement_id,
+        file_path,
+    )
+    .await
 }
 
 pub async fn create_and_plan_code_task(
@@ -84,16 +109,30 @@ pub async fn create_and_plan_code_task(
     orchestrator::create_and_plan_code_task(&core, db, objective).await
 }
 
-pub async fn approve_task(state: State<'_, AppState>, db: State<'_, DbState>, task_id: String) -> AppResult<crate::agent::AgentTask> {
-    orchestrator::approve_task(state, db, task_id).await
+pub async fn approve_task(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
+    task_id: String,
+) -> AppResult<crate::agent::AgentTask> {
+    orchestrator::approve_task(state, db, workspace_generation, task_id).await
 }
 
-pub fn reject_task(db: State<'_, DbState>, task_id: String) -> AppResult<()> {
-    orchestrator::reject_task(db, task_id)
+pub fn reject_task(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
+    task_id: String,
+) -> AppResult<()> {
+    orchestrator::reject_task(state, db, workspace_generation, task_id)
 }
 
-pub fn list_agent_tasks(db: State<'_, DbState>) -> AppResult<Vec<crate::agent::AgentTask>> {
-    orchestrator::list_agent_tasks(db)
+pub fn list_agent_tasks(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
+) -> AppResult<Vec<crate::agent::AgentTask>> {
+    orchestrator::list_agent_tasks(state, db, workspace_generation)
 }
 
 pub async fn start_v2_task(

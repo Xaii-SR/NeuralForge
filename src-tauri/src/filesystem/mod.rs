@@ -5,6 +5,8 @@ use crate::core::state::AppState;
 use serde::Serialize;
 use specta::Type;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
@@ -15,12 +17,109 @@ pub struct FileEntry {
     pub is_dir: bool,
 }
 
+#[derive(Serialize, Type, Clone)]
+pub struct WorkspaceInfo {
+    pub root: String,
+    pub generation: u64,
+}
+
 fn workspace_root(state: &State<AppState>) -> AppResult<PathBuf> {
+    let _activation = state.workspace_activation.lock().unwrap();
     let root_guard = state.workspace_root.lock().unwrap();
     let root = root_guard
         .as_ref()
         .ok_or_else(|| AppError::InvalidPath("no workspace open".into()))?;
     Ok(fs::canonicalize(root)?)
+}
+
+fn reject_workspace_root(root: &Path, target: &Path) -> AppResult<()> {
+    if target == root {
+        return Err(AppError::CommandRejected(
+            "the open workspace root cannot be deleted".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn write_if_unchanged(
+    root: &Path,
+    path: &str,
+    expected: &str,
+    contents: &str,
+) -> AppResult<PathBuf> {
+    write_if_unchanged_core(root, path, expected, contents, |_| {})
+}
+
+fn write_if_unchanged_core(
+    root: &Path,
+    path: &str,
+    expected: &str,
+    contents: &str,
+    before_write: impl FnOnce(&Path),
+) -> AppResult<PathBuf> {
+    let target = validate_within_workspace(root, path)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+    let mut file = options.open(&target)?;
+    let mut current = String::new();
+    file.read_to_string(&mut current)?;
+    if current != expected {
+        return Err(AppError::CommandRejected(
+            "the file changed after this proposal was created".to_string(),
+        ));
+    }
+    before_write(&target);
+    file.seek(SeekFrom::Start(0))?;
+    file.set_len(0)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    Ok(target)
+}
+
+fn remove_path(root: &Path, path: &str) -> AppResult<PathBuf> {
+    let target = validate_within_workspace(root, path)?;
+    reject_workspace_root(root, &target)?;
+    if target.is_dir() {
+        fs::remove_dir_all(&target)?;
+    } else {
+        fs::remove_file(&target)?;
+    }
+    Ok(target)
+}
+
+fn activate_prepared_workspace(
+    state: &AppState,
+    db: &crate::database::DbState,
+    request: u64,
+    root: PathBuf,
+    connection: rusqlite::Connection,
+) -> AppResult<u64> {
+    let _activation = state.workspace_activation.lock().unwrap();
+    if !state.is_latest_workspace_open(request) {
+        return Err(AppError::CommandRejected(
+            "a newer workspace open request superseded this one".to_string(),
+        ));
+    }
+    let mut root_guard = state.workspace_root.lock().unwrap();
+    let mut db_guard = db.conn.lock().unwrap();
+    *db_guard = Some(connection);
+    *root_guard = Some(root);
+    Ok(state.advance_workspace_generation())
+}
+
+fn prepare_workspace(path: &str) -> AppResult<(PathBuf, rusqlite::Connection)> {
+    let root = fs::canonicalize(path)?;
+    if !root.is_dir() {
+        return Err(AppError::InvalidPath(format!("{path} is not a directory")));
+    }
+    ensure_memory_scaffold(&root)?;
+    let connection = crate::database::open_for_workspace(&root)?;
+    Ok((root, connection))
 }
 
 /// For paths that must already exist (read/write/delete/rename source).
@@ -100,6 +199,20 @@ fn save_last_workspace_path(data_dir: &Path, workspace: &Path) -> std::io::Resul
     fs::write(data_dir.join(LAST_WORKSPACE_FILE), workspace.to_string_lossy().as_bytes())
 }
 
+fn save_last_workspace_if_current(
+    state: &AppState,
+    data_dir: &Path,
+    workspace: &Path,
+    generation: u64,
+) -> std::io::Result<bool> {
+    let _activation = state.workspace_activation.lock().unwrap();
+    if !state.matches_workspace_generation(generation) {
+        return Ok(false);
+    }
+    save_last_workspace_path(data_dir, workspace)?;
+    Ok(true)
+}
+
 /// Returns the remembered path only if it still exists as a directory -
 /// a moved/deleted workspace degrades to "nothing to restore", never an
 /// error surfaced at startup.
@@ -134,22 +247,26 @@ pub fn open_workspace(
     state: State<AppState>,
     db: State<crate::database::DbState>,
     path: String,
-) -> AppResult<String> {
-    let root = fs::canonicalize(&path)?;
-    if !root.is_dir() {
-        return Err(AppError::InvalidPath(format!("{path} is not a directory")));
-    }
-    *state.workspace_root.lock().unwrap() = Some(root.clone());
-    ensure_memory_scaffold(&root)?;
-    *db.conn.lock().unwrap() = Some(crate::database::open_for_workspace(&root)?);
-    tracing::info!(target: "filesystem", event = "workspace_opened", path = %root.display());
+) -> AppResult<WorkspaceInfo> {
+    let request = state.begin_workspace_open();
+    let (root, connection) = prepare_workspace(&path)?;
+    let generation =
+        activate_prepared_workspace(&state, &db, request, root.clone(), connection)?;
+    tracing::info!(
+        target: "filesystem",
+        event = "workspace_opened",
+        path = %root.display(),
+        generation
+    );
 
     // Remember this workspace for startup restoration (v1.4.0). Best-effort:
     // a failure to persist the preference must never fail the open itself.
     {
         use tauri::Manager;
         if let Ok(data_dir) = app.path().app_data_dir() {
-            if let Err(e) = save_last_workspace_path(&data_dir, &root) {
+            if let Err(e) =
+                save_last_workspace_if_current(&state, &data_dir, &root, generation)
+            {
                 tracing::warn!(target: "filesystem", event = "last_workspace_save_failed", error = %e);
             }
         }
@@ -201,7 +318,10 @@ pub fn open_workspace(
         }
     });
 
-    Ok(root.to_string_lossy().to_string())
+    Ok(WorkspaceInfo {
+        root: root.to_string_lossy().to_string(),
+        generation,
+    })
 }
 
 #[tauri::command]
@@ -220,6 +340,7 @@ pub fn read_file(state: State<AppState>, path: String) -> AppResult<String> {
 
 #[tauri::command]
 pub fn write_file(app: AppHandle, state: State<AppState>, path: String, contents: String) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let target = validate_within_workspace(&root, &path)?;
     fs::write(&target, contents)?;
@@ -229,7 +350,24 @@ pub fn write_file(app: AppHandle, state: State<AppState>, path: String, contents
 }
 
 #[tauri::command]
+pub fn write_file_if_unchanged(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    expected_contents: String,
+    contents: String,
+) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
+    let root = workspace_root(&state)?;
+    let target = write_if_unchanged(&root, &path, &expected_contents, &contents)?;
+    tracing::info!(target: "filesystem", event = "file_written_after_compare", path = %target.display());
+    let _ = emit_file_changed(&app, &target.to_string_lossy(), "modified");
+    Ok(())
+}
+
+#[tauri::command]
 pub fn create_file(app: AppHandle, state: State<AppState>, path: String) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let target = validate_new_path_in_workspace(&root, &path)?;
     fs::write(&target, "")?;
@@ -239,6 +377,7 @@ pub fn create_file(app: AppHandle, state: State<AppState>, path: String) -> AppR
 
 #[tauri::command]
 pub fn create_dir(app: AppHandle, state: State<AppState>, path: String) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let target = validate_new_path_in_workspace(&root, &path)?;
     fs::create_dir(&target)?;
@@ -248,13 +387,9 @@ pub fn create_dir(app: AppHandle, state: State<AppState>, path: String) -> AppRe
 
 #[tauri::command]
 pub fn delete_path(app: AppHandle, state: State<AppState>, path: String) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
-    let target = validate_within_workspace(&root, &path)?;
-    if target.is_dir() {
-        fs::remove_dir_all(&target)?;
-    } else {
-        fs::remove_file(&target)?;
-    }
+    let target = remove_path(&root, &path)?;
     tracing::warn!(target: "filesystem", event = "path_deleted", path = %target.display());
     let _ = emit_file_changed(&app, &target.to_string_lossy(), "deleted");
     Ok(())
@@ -262,6 +397,7 @@ pub fn delete_path(app: AppHandle, state: State<AppState>, path: String) -> AppR
 
 #[tauri::command]
 pub fn rename_path(app: AppHandle, state: State<AppState>, from: String, to: String) -> AppResult<()> {
+    let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let source = validate_within_workspace(&root, &from)?;
     let target = validate_new_path_in_workspace(&root, &to)?;
@@ -377,6 +513,230 @@ mod tests {
         assert_eq!(names, vec!["zdir", "A.txt", "b.txt"]);
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_is_never_deletable() {
+        let root = temp_workspace();
+        let with_separator = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
+
+        assert!(remove_path(&root, root.to_str().unwrap()).is_err());
+        assert!(remove_path(&root, &with_separator).is_err());
+        assert!(root.exists());
+
+        #[cfg(windows)]
+        {
+            let case_variant = root.to_string_lossy().to_uppercase();
+            assert!(remove_path(&root, &case_variant).is_err());
+            assert!(root.exists());
+        }
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_child_remains_deletable() {
+        let root = temp_workspace();
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        fs::write(child.join("data.txt"), "preserve root").unwrap();
+
+        remove_path(&root, child.to_str().unwrap()).unwrap();
+
+        assert!(!child.exists());
+        assert!(root.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_to_workspace_root_is_never_deletable() {
+        let root = temp_workspace();
+        let junction = root.join("root-junction");
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                junction.to_str().unwrap(),
+                root.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "test junction creation must succeed");
+
+        assert!(remove_path(&root, junction.to_str().unwrap()).is_err());
+        assert!(root.exists());
+
+        fs::remove_dir(&junction).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn compare_write_rejects_stale_content_without_writing() {
+        let root = temp_workspace();
+        let file = root.join("proposal.txt");
+        fs::write(&file, "newer content").unwrap();
+
+        let result = write_if_unchanged(
+            &root,
+            file.to_str().unwrap(),
+            "old content",
+            "proposal",
+        );
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "newer content");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn compare_write_applies_when_base_matches() {
+        let root = temp_workspace();
+        let file = root.join("proposal.txt");
+        fs::write(&file, "base").unwrap();
+
+        write_if_unchanged(&root, file.to_str().unwrap(), "base", "proposal").unwrap();
+
+        assert_eq!(fs::read_to_string(&file).unwrap(), "proposal");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn compare_write_holds_exclusive_handle_through_the_write() {
+        let root = temp_workspace();
+        let file = root.join("proposal.txt");
+        fs::write(&file, "base").unwrap();
+        let mut competing_write_was_rejected = false;
+
+        write_if_unchanged_core(
+            &root,
+            file.to_str().unwrap(),
+            "base",
+            "proposal",
+            |target| {
+                competing_write_was_rejected = fs::write(target, "racing edit").is_err();
+            },
+        )
+        .unwrap();
+
+        assert!(competing_write_was_rejected);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "proposal");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stale_overlapping_workspace_open_cannot_publish_state() {
+        let state = std::sync::Arc::new(AppState::default());
+        let db = std::sync::Arc::new(crate::database::DbState::default());
+        let first = state.begin_workspace_open();
+        let first_root = temp_workspace();
+        let second_root = temp_workspace();
+        let first_conn = crate::database::open_for_workspace(&first_root).unwrap();
+        let second_conn = crate::database::open_for_workspace(&second_root).unwrap();
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_state = state.clone();
+        let first_db = db.clone();
+        let first_ready = ready.clone();
+        let first_release = release.clone();
+        let first_root_for_thread = first_root.clone();
+        let stale_thread = std::thread::spawn(move || {
+            first_ready.wait();
+            first_release.wait();
+            activate_prepared_workspace(
+                &first_state,
+                &first_db,
+                first,
+                first_root_for_thread,
+                first_conn,
+            )
+        });
+
+        ready.wait();
+        let second = state.begin_workspace_open();
+        let generation = activate_prepared_workspace(
+            &state,
+            &db,
+            second,
+            second_root.clone(),
+            second_conn,
+        )
+        .unwrap();
+        release.wait();
+        assert!(stale_thread.join().unwrap().is_err());
+
+        assert_eq!(generation, 1);
+        assert_eq!(
+            state.workspace_root.lock().unwrap().as_ref(),
+            Some(&second_root)
+        );
+        drop(db.conn.lock().unwrap().take());
+        fs::remove_dir_all(first_root).unwrap();
+        fs::remove_dir_all(second_root).unwrap();
+    }
+
+    #[test]
+    fn failed_workspace_preparation_preserves_active_state() {
+        let state = AppState::default();
+        let db = crate::database::DbState::default();
+        let active_root = temp_workspace();
+        let request = state.begin_workspace_open();
+        let connection = crate::database::open_for_workspace(&active_root).unwrap();
+        activate_prepared_workspace(
+            &state,
+            &db,
+            request,
+            active_root.clone(),
+            connection,
+        )
+        .unwrap();
+        let missing = active_root.join("missing");
+
+        assert!(prepare_workspace(missing.to_str().unwrap()).is_err());
+        assert_eq!(
+            state.workspace_root.lock().unwrap().as_ref(),
+            Some(&active_root)
+        );
+        assert_eq!(state.workspace_generation(), 1);
+
+        drop(db.conn.lock().unwrap().take());
+        fs::remove_dir_all(active_root).unwrap();
+    }
+
+    #[test]
+    fn stale_workspace_open_cannot_overwrite_last_workspace_preference() {
+        let state = AppState::default();
+        let data_dir = temp_workspace();
+        let first = temp_workspace();
+        let second = temp_workspace();
+        *state.workspace_root.lock().unwrap() = Some(second.clone());
+        let first_generation = state.advance_workspace_generation();
+        let second_generation = state.advance_workspace_generation();
+
+        assert!(save_last_workspace_if_current(
+            &state,
+            &data_dir,
+            &second,
+            second_generation
+        )
+        .unwrap());
+        assert!(!save_last_workspace_if_current(
+            &state,
+            &data_dir,
+            &first,
+            first_generation
+        )
+        .unwrap());
+        assert_eq!(
+            PathBuf::from(load_last_workspace_path(&data_dir).unwrap()),
+            second
+        );
+
+        fs::remove_dir_all(data_dir).unwrap();
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
     }
 
     // ── Automatic indexing (v1.3.0 Phase 3) ─────────────────────────────

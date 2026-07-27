@@ -6,9 +6,10 @@ import DiffEditor from "@/components/editor/DiffEditor";
 import DiffActionBar from "@/components/editor/DiffActionBar";
 import InlinePromptWidget from "@/components/editor/InlinePromptWidget";
 import TabBar from "./TabBar";
-import { invoke } from "@tauri-apps/api/core";
 import EmptyState from "@/components/ui/EmptyState";
+import ErrorBanner from "@/components/ui/ErrorBanner";
 import { languageFromPath } from "@/lib/language";
+import * as fs from "@/lib/fs";
 import { useVersionCache } from "@/hooks/useVersionCache";
 import { useComposer } from "@/hooks/useComposer";
 import { useInlinePrompt } from "@/hooks/useInlinePrompt";
@@ -19,16 +20,18 @@ export interface EditorPaneProps {
   openFiles: OpenFile[];
   activePath: string | null;
   onSelect: (path: string) => void;
-  onClose: (path: string) => void;
+  onClose: (path: string) => void | Promise<void>;
   onChange: (path: string, value: string) => void;
-  onSave: (path: string) => void;
+  onSave: (path: string) => void | Promise<void>;
+  onExternalWrite: (path: string, expectedContent: string, content: string) => void;
+  readOnly?: boolean;
   activeComposerBlockId?: string | null;
   onDiffResolved?: (blockId: string, status: "accepted" | "rejected") => void;
 }
 
 export default function EditorPane({
   openFiles, activePath, onSelect, onClose, onChange, onSave,
-  activeComposerBlockId = null, onDiffResolved,
+  onExternalWrite, readOnly = false, activeComposerBlockId = null, onDiffResolved,
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
@@ -41,34 +44,61 @@ export default function EditorPane({
   const selectionRangeRef = useRef<any>(null);
   const [diffOriginal, setDiffOriginal] = useState<string>("");
   const [diffLanguage, setDiffLanguage] = useState("text");
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const openFilesRef = useRef(openFiles);
+  useEffect(() => { openFilesRef.current = openFiles; }, [openFiles]);
 
   const currentDiff = pendingDiffs[activeDiffIndex] ?? null;
   const isDiffReview = currentDiff !== null;
+  const diffIdentity = currentDiff?.id ?? "";
 
-  // When currentDiff changes, fetch the original file content
   useEffect(() => {
-    if (!currentDiff) return;
-    const f = openFiles.find((x) => x.path === currentDiff.filePath);
+    if (!currentDiff) {
+      setDiffOriginal("");
+      setDiffError(null);
+      return;
+    }
+    let cancelled = false;
+    setDiffError(null);
+    setDiffLoading(false);
+    const f = openFilesRef.current.find((file) => file.path === currentDiff.filePath);
     if (f) {
       setDiffOriginal(f.content);
       setDiffLanguage(languageFromPath(f.path));
     } else {
-      invoke<string>("read_file", { path: currentDiff.filePath })
-        .then(setDiffOriginal)
-        .catch(() => setDiffOriginal("// Could not read file"));
+      setDiffLoading(true);
+      fs.readFile(currentDiff.filePath)
+        .then((content) => {
+          if (!cancelled) setDiffOriginal(content);
+        })
+        .catch((error) => {
+          if (!cancelled) setDiffError(`Could not load the proposal base: ${error}`);
+        })
+        .finally(() => {
+          if (!cancelled) setDiffLoading(false);
+        });
       setDiffLanguage(languageFromPath(currentDiff.filePath));
     }
-  }, [currentDiff, openFiles]);
+    return () => { cancelled = true; };
+  }, [diffIdentity]);
 
   const handleDiffAccept = async () => {
-    if (!currentDiff) return;
+    if (!currentDiff || diffLoading || diffError) return;
+    const openFile = openFilesRef.current.find((file) => file.path === currentDiff.filePath);
+    if (openFile && openFile.content !== diffOriginal) {
+      setDiffError("This file changed after the proposal was created. Review it again before applying.");
+      return;
+    }
     try {
-      await invoke("write_file", { path: currentDiff.filePath, contents: currentDiff.newCode });
-      if (activeFile?.path === currentDiff.filePath) {
-        onChange(currentDiff.filePath, currentDiff.newCode);
+      await fs.writeFileIfUnchanged(currentDiff.filePath, diffOriginal, currentDiff.newCode);
+      if (openFile) {
+        onExternalWrite(currentDiff.filePath, diffOriginal, currentDiff.newCode);
       }
-    } catch { /* ignore */ }
-    removeActiveDiff();
+      removeActiveDiff();
+    } catch (error) {
+      setDiffError(`The proposal was not applied: ${error}`);
+    }
   };
 
   const handleDiffReject = () => {
@@ -180,6 +210,7 @@ export default function EditorPane({
       <div className="min-h-0 flex-1">
         {isDiffReview ? (
           <>
+            {diffError && <ErrorBanner message={diffError} onDismiss={() => setDiffError(null)} />}
             <DiffActionBar
               isDiffMode={true}
               onAccept={handleDiffAccept}
@@ -202,7 +233,7 @@ export default function EditorPane({
             originalPath={`original:${activeFile.path}`} modifiedPath={`modified:${activeFile.path}`} />
         ) : (
           <Editor path={activeFile.path} language={languageFromPath(activeFile.path)} value={activeFile.content}
-            onChange={(v) => onChange(activeFile.path, v)} onSave={() => onSave(activeFile.path)} />
+            onChange={(v) => onChange(activeFile.path, v)} onSave={() => onSave(activeFile.path)} readOnly={readOnly} />
         )}
       </div>
       {prompt.isOpen && (

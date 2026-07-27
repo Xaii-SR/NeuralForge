@@ -68,19 +68,9 @@ pub fn get_context_for_query(
     db: State<DbState>,
     query: String,
 ) -> AppResult<String> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    let db_guard = db.conn.lock().unwrap();
-    let conn = db_guard
-        .as_ref()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    Ok(context::build_context_prompt(&root, conn, &query))
+    crate::database::with_workspace_conn(&state, &db, |root, conn| {
+        Ok(context::build_context_prompt(root, conn, &query))
+    })
 }
 
 #[tauri::command]
@@ -90,32 +80,29 @@ pub fn get_enriched_context(
     query: String,
     max_tokens: usize,
 ) -> AppResult<String> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    let db_guard = db.conn.lock().unwrap();
-    let conn = db_guard
-        .as_ref()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    let memory = context::read_memory_context(&root);
-    let new_context = crate::database::search::enriched_context(conn, &root, &query, &memory, None, max_tokens)
+    crate::database::with_workspace_conn(&state, &db, |root, conn| {
+        let memory = context::read_memory_context(root);
+        let new_context = crate::database::search::enriched_context(
+            conn,
+            root,
+            &query,
+            &memory,
+            None,
+            max_tokens,
+        )
         .map_err(|e| AppError::Provider(e.to_string()))?;
 
-    // Diff against cached context for delta compression
-    let cached = crate::database::search::get_cached_context();
-    let delta = crate::database::search::compute_context_diff(&cached.unwrap_or_default(), &new_context);
-    crate::database::search::cache_context_response(&new_context);
+        let cached = crate::database::search::get_cached_context();
+        let delta =
+            crate::database::search::compute_context_diff(&cached.unwrap_or_default(), &new_context);
+        crate::database::search::cache_context_response(&new_context);
 
-    if delta.is_delta {
-        Ok(serde_json::to_string(&delta).unwrap_or(new_context))
-    } else {
-        Ok(new_context)
-    }
+        if delta.is_delta {
+            Ok(serde_json::to_string(&delta).unwrap_or(new_context))
+        } else {
+            Ok(new_context)
+        }
+    })
 }
 
 #[tauri::command]
@@ -305,25 +292,36 @@ where
 pub async fn chat_with_model(
     app: AppHandle,
     health: State<'_, HealthRegistry>,
+    state: State<'_, AppState>,
     db: State<'_, DbState>,
     request_id: String,
     model: String,
     messages: Vec<ollama::ChatMessage>,
+    workspace_generation: Option<u64>,
 ) -> AppResult<()> {
-    let (cached, config) = {
-        let guard = db.conn.lock().unwrap();
-        let conn = guard.as_ref();
-        let cached = conn.and_then(|conn| cache::get_cached(conn, &model, &messages));
-        let config = provider_router::resolve_provider_for_model(conn, &model);
-        (cached, config)
-    };
+    let workspace_generation =
+        workspace_generation.unwrap_or_else(|| state.workspace_generation());
+    let (cached, config) = crate::database::with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |_root, conn| {
+            let cached = cache::get_cached(conn, &model, &messages);
+            let config = provider_router::resolve_provider_for_model(Some(conn), &model);
+            Ok((cached, config))
+        },
+    )?;
     let was_cached = cached.is_some();
 
-    let fresh = chat_or_use_cache(&health, cached, &config, &model, messages.clone(), move |token, done| {
+    let token_request_id = request_id.clone();
+    let fresh = chat_or_use_cache(&health, cached, &config, &model, messages.clone(), |token, done| {
+        if !state.matches_workspace_generation(workspace_generation) {
+            return;
+        }
         let _ = app.emit(
             crate::core::events::AI_RESPONSE_TOKEN,
             serde_json::json!({
-                "request_id": request_id,
+                "request_id": token_request_id,
                 "token": token,
                 "done": done,
                 "from_cache": was_cached,
@@ -333,12 +331,21 @@ pub async fn chat_with_model(
     .await?;
 
     if let Some(response) = fresh {
-        let guard = db.conn.lock().unwrap();
-        if let Some(conn) = guard.as_ref() {
+        crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            workspace_generation,
+            |_root, conn| {
             if let Err(e) = cache::store_response(conn, &model, &messages, &response) {
                 tracing::warn!(target: "ai", event = "cache_store_failed", error = %e);
             }
-        }
+                Ok(())
+            },
+        )?;
+    } else if !state.matches_workspace_generation(workspace_generation) {
+        return Err(AppError::CommandRejected(
+            "workspace changed while chat generation was running".to_string(),
+        ));
     }
 
     Ok(())

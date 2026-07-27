@@ -23,8 +23,8 @@ export interface RequirementHistoryEntry {
   changed_at: number;
 }
 
-export function createRequirement(title: string, intent: string, acceptanceCriteria: string[]): Promise<RequirementContract> {
-  return invoke("create_requirement", { title, intent, acceptanceCriteria });
+export function createRequirement(title: string, intent: string, acceptanceCriteria: string[], workspaceGeneration?: number): Promise<RequirementContract> {
+  return invoke("create_requirement", { title, intent, acceptanceCriteria, workspaceGeneration });
 }
 
 export function updateRequirement(id: string, title: string, intent: string, acceptanceCriteria: string[]): Promise<RequirementContract> {

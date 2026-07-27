@@ -60,6 +60,7 @@ pub fn run() {
       filesystem::read_dir,
       filesystem::read_file,
       filesystem::write_file,
+      filesystem::write_file_if_unchanged,
       filesystem::create_file,
       filesystem::create_dir,
       filesystem::delete_path,

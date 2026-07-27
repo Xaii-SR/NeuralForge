@@ -9,7 +9,7 @@ export interface TabBarProps {
   tabs: Tab[];
   activePath: string | null;
   onSelect: (path: string) => void;
-  onClose: (path: string) => void;
+  onClose: (path: string) => void | Promise<void>;
 }
 
 export default function TabBar({ tabs, activePath, onSelect, onClose }: TabBarProps) {

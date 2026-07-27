@@ -219,7 +219,7 @@ export default function ComposerWindow({
                             {block.status === "idle" && block.file_path && block.file_path !== "unknown" && !block.file_path?.startsWith("exec") && (
                               <button
                                 onClick={() => {
-                                  if (setPendingDiffs) setPendingDiffs([{ filePath: block.file_path, newCode: block.code }]);
+                                  if (setPendingDiffs) setPendingDiffs([{ id: block.id, filePath: block.file_path, newCode: block.code }]);
                                   setApplyingBlockId(block.id);
                                   setTimeout(() => setApplyingBlockId(null), 1000);
                                 }}

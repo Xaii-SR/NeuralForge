@@ -17,8 +17,28 @@ use tauri::State;
 const LOCAL_USER: &str = "local";
 
 #[tauri::command]
-pub fn create_requirement(db: State<DbState>, title: String, intent: String, acceptance_criteria: Vec<String>) -> AppResult<RequirementContract> {
-    with_conn(&db, |conn| requirements::create(conn, &title, &intent, acceptance_criteria, LOCAL_USER))
+pub fn create_requirement(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: Option<u64>,
+    title: String,
+    intent: String,
+    acceptance_criteria: Vec<String>,
+) -> AppResult<RequirementContract> {
+    if let Some(generation) = workspace_generation {
+        crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            generation,
+            |_root, conn| {
+                requirements::create(conn, &title, &intent, acceptance_criteria, LOCAL_USER)
+            },
+        )
+    } else {
+        with_conn(&db, |conn| {
+            requirements::create(conn, &title, &intent, acceptance_criteria, LOCAL_USER)
+        })
+    }
 }
 
 #[tauri::command]

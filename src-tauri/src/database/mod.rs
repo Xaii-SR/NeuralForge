@@ -340,19 +340,47 @@ pub fn with_conn<T>(db: &State<DbState>, f: impl FnOnce(&Connection) -> AppResul
     f(conn)
 }
 
+pub fn with_workspace_conn<T>(
+    state: &crate::core::state::AppState,
+    db: &DbState,
+    f: impl FnOnce(&Path, &Connection) -> AppResult<T>,
+) -> AppResult<T> {
+    let _activation = state.workspace_activation.lock().unwrap();
+    let root_guard = state.workspace_root.lock().unwrap();
+    let root = root_guard
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    let db_guard = db.conn.lock().unwrap();
+    let conn = db_guard
+        .as_ref()
+        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    f(root, conn)
+}
+
+pub fn with_workspace_conn_at_generation<T>(
+    state: &crate::core::state::AppState,
+    db: &DbState,
+    expected_generation: u64,
+    f: impl FnOnce(&Path, &Connection) -> AppResult<T>,
+) -> AppResult<T> {
+    with_workspace_conn(state, db, |root, conn| {
+        if !state.matches_workspace_generation(expected_generation) {
+            return Err(AppError::CommandRejected(
+                "workspace changed while the request was running".to_string(),
+            ));
+        }
+        f(root, conn)
+    })
+}
+
 #[tauri::command]
 pub fn index_workspace(
     state: State<crate::core::state::AppState>,
     db: State<DbState>,
 ) -> AppResult<indexer::IndexStats> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    let stats = with_conn(&db, |conn| indexer::index_workspace(conn, &root))?;
+    let stats = with_workspace_conn(&state, &db, |root, conn| {
+        indexer::index_workspace(conn, root)
+    })?;
     tracing::info!(
         target: "database",
         event = "workspace_indexed",
@@ -371,8 +399,19 @@ pub fn search_workspace(db: State<DbState>, query: String) -> AppResult<Vec<sear
 /// path. Used by both chat context-building and agent task creation - see
 /// resolver::resolve_file_reference for the ranking rules.
 #[tauri::command]
-pub fn resolve_file_reference(db: State<DbState>, query: String) -> AppResult<resolver::ResolutionResult> {
-    with_conn(&db, |conn| resolver::resolve_file_reference(conn, &query))
+pub fn resolve_file_reference(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    query: String,
+    workspace_generation: Option<u64>,
+) -> AppResult<resolver::ResolutionResult> {
+    if let Some(generation) = workspace_generation {
+        with_workspace_conn_at_generation(&state, &db, generation, |_root, conn| {
+            resolver::resolve_file_reference(conn, &query)
+        })
+    } else {
+        with_conn(&db, |conn| resolver::resolve_file_reference(conn, &query))
+    }
 }
 
 // ── Session persistence commands (v1.3.0 Phase 2 - IPC layer only) ─────
@@ -390,9 +429,11 @@ pub fn resolve_file_reference(db: State<DbState>, query: String) -> AppResult<re
 // AppState.workspace_root, so sessions can never be scoped to anything
 // other than the actually-open workspace.
 //
-// get_session_messages/append_session_message/update_session_metadata/
-// delete_session are keyed by session_id, not workspace - same as their
-// Phase 1 functions - and deliberately do NOT add existence-check
+// Every session command first verifies the caller's workspace generation.
+// Within that selected workspace, get_session_messages/
+// append_session_message/update_session_metadata/delete_session remain
+// keyed by session_id - same as their Phase 1 functions - and deliberately
+// do NOT add existence-check
 // validation here: Phase 1 already made and tested explicit design
 // decisions for "unknown session_id" (get_session_messages returns an
 // empty Vec, update_session_metadata's UPDATE affects zero rows,
@@ -407,56 +448,93 @@ pub fn resolve_file_reference(db: State<DbState>, query: String) -> AppResult<re
 pub fn create_session(
     state: State<crate::core::state::AppState>,
     db: State<DbState>,
+    workspace_generation: u64,
     title: String,
     provider: Option<String>,
     model: Option<String>,
 ) -> AppResult<sessions::Session> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-    let workspace_path = root.to_string_lossy().to_string();
-    with_conn(&db, |conn| sessions::create_session(conn, &workspace_path, &title, provider.as_deref(), model.as_deref()))
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |root, conn| {
+        let workspace_path = root.to_string_lossy().to_string();
+        sessions::create_session(
+            conn,
+            &workspace_path,
+            &title,
+            provider.as_deref(),
+            model.as_deref(),
+        )
+    })
 }
 
 #[tauri::command]
-pub fn list_sessions(state: State<crate::core::state::AppState>, db: State<DbState>) -> AppResult<Vec<sessions::Session>> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-    let workspace_path = root.to_string_lossy().to_string();
-    with_conn(&db, |conn| sessions::list_sessions(conn, &workspace_path))
+pub fn list_sessions(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+) -> AppResult<Vec<sessions::Session>> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |root, conn| {
+        let workspace_path = root.to_string_lossy().to_string();
+        sessions::list_sessions(conn, &workspace_path)
+    })
 }
 
 #[tauri::command]
-pub fn get_session_messages(db: State<DbState>, session_id: String) -> AppResult<Vec<sessions::SessionMessage>> {
-    with_conn(&db, |conn| sessions::get_session_messages(conn, &session_id))
+pub fn get_session_messages(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+    session_id: String,
+) -> AppResult<Vec<sessions::SessionMessage>> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |_root, conn| {
+        sessions::get_session_messages(conn, &session_id)
+    })
 }
 
 #[tauri::command]
-pub fn append_session_message(db: State<DbState>, session_id: String, role: String, content: String, status: String) -> AppResult<()> {
-    with_conn(&db, |conn| sessions::append_message(conn, &session_id, &role, &content, &status))
+pub fn append_session_message(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+    session_id: String,
+    role: String,
+    content: String,
+    status: String,
+) -> AppResult<()> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |_root, conn| {
+        sessions::append_message(conn, &session_id, &role, &content, &status)
+    })
 }
 
 #[tauri::command]
-pub fn update_session_metadata(db: State<DbState>, session_id: String, title: String, last_message_preview: String) -> AppResult<()> {
-    with_conn(&db, |conn| sessions::update_session_metadata(conn, &session_id, &title, &last_message_preview))
+pub fn update_session_metadata(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+    session_id: String,
+    title: String,
+    last_message_preview: String,
+) -> AppResult<()> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |_root, conn| {
+        sessions::update_session_metadata(conn, &session_id, &title, &last_message_preview)
+    })
 }
 
 #[tauri::command]
-pub fn delete_session(db: State<DbState>, session_id: String) -> AppResult<()> {
-    with_conn(&db, |conn| sessions::delete_session(conn, &session_id))
+pub fn delete_session(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+    session_id: String,
+) -> AppResult<()> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |_root, conn| {
+        sessions::delete_session(conn, &session_id)
+    })
 }
 
 /// Sprint 7 hardening tests: migration safety and transaction atomicity.
 #[cfg(test)]
 mod hardening_tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> std::path::PathBuf {
@@ -465,6 +543,64 @@ mod hardening_tests {
         dir.push(format!("neuralforge_db_hardening_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn workspace_generation_guard_rejects_stale_session_and_governance_work() {
+        let root = temp_dir();
+        let state = std::sync::Arc::new(crate::core::state::AppState::default());
+        let db = std::sync::Arc::new(DbState::default());
+        *state.workspace_root.lock().unwrap() = Some(root.clone());
+        *db.conn.lock().unwrap() = Some(open_for_workspace(&root).unwrap());
+        let generation = state.advance_workspace_generation();
+        let side_effect_ran = std::sync::Arc::new(AtomicBool::new(false));
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let release = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let delayed_state = state.clone();
+        let delayed_db = db.clone();
+        let delayed_side_effect = side_effect_ran.clone();
+        let delayed_ready = ready.clone();
+        let delayed_release = release.clone();
+        let delayed = std::thread::spawn(move || {
+            delayed_ready.wait();
+            delayed_release.wait();
+            with_workspace_conn_at_generation(
+                &delayed_state,
+                &delayed_db,
+                generation,
+                |_root, _conn| {
+                    delayed_side_effect.store(true, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+        });
+
+        ready.wait();
+        state.advance_workspace_generation();
+        release.wait();
+        let stale = delayed.join().unwrap();
+        assert!(stale.is_err());
+        assert!(!side_effect_ran.load(Ordering::SeqCst));
+
+        let session = with_workspace_conn_at_generation(
+            &state,
+            &db,
+            state.workspace_generation(),
+            |workspace, conn| {
+                sessions::create_session(
+                    conn,
+                    &workspace.to_string_lossy(),
+                    "generation-bound",
+                    None,
+                    None,
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(session.title, "generation-bound");
+
+        drop(db.conn.lock().unwrap().take());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Migration safety, both directions the spec asks for: (a) a fresh

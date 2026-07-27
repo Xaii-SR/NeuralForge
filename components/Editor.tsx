@@ -11,9 +11,10 @@ export interface EditorProps {
   value: string;
   onChange: (value: string) => void;
   onSave: () => void;
+  readOnly?: boolean;
 }
 
-export default function Editor({ path, language, value, onChange, onSave }: EditorProps) {
+export default function Editor({ path, language, value, onChange, onSave, readOnly = false }: EditorProps) {
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const { theme } = useTheme();
@@ -100,6 +101,7 @@ export default function Editor({ path, language, value, onChange, onSave }: Edit
       onChange={(v) => onChange(v ?? "")}
       loading={<div className="h-full w-full bg-white dark:bg-[#1e1e1e]" />}
       options={{
+        readOnly,
         minimap: { enabled: true },
         fontSize: 13,
         automaticLayout: true,

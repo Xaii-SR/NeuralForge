@@ -16,6 +16,7 @@ type SessionState = "uninitialized" | "loading" | "ready" | "failed";
 
 export interface ChatPaneProps {
   workspaceRoot: string | null;
+  workspaceGeneration: number;
   selectedContext?: string | null;
   // v1.3.0 Phase 4B: session selection now lives in SessionTabs, which is
   // this component's only caller. ChatPane consumes the active session id
@@ -37,7 +38,7 @@ function workspaceName(workspaceRoot: string | null): string | null {
   return workspaceRoot.split(/[\\/]/).filter(Boolean).pop() ?? workspaceRoot;
 }
 
-export default function ChatPane({ workspaceRoot, selectedContext, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
+export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedContext, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
   const workspaceOpen = !!workspaceRoot;
   const connectedWorkspace = workspaceName(workspaceRoot);
   const [liveSelectedContext, setLiveSelectedContext] = useState<string | null>(selectedContext ?? null);
@@ -70,6 +71,17 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
   // request, even if AI_RESPONSE_TOKEN's done:true is (re)delivered more
   // than once for the same request_id.
   const persistedRequestIds = useRef<Set<string>>(new Set());
+  const workspaceGenerationRef = useRef(workspaceGeneration);
+  useEffect(() => {
+    if (workspaceGenerationRef.current === workspaceGeneration) return;
+    workspaceGenerationRef.current = workspaceGeneration;
+    activeRequestId.current = null;
+    streamingContentRef.current = "";
+    persistedRequestIds.current.clear();
+    setSending(false);
+    setMessages([]);
+    setSessionState(workspaceRoot ? "loading" : "uninitialized");
+  }, [workspaceGeneration, workspaceRoot]);
   useEffect(() => { setLiveSelectedContext(selectedContext ?? null); }, [selectedContext]);
   useEffect(() => {
     const onContextSelected = (event: Event) => setLiveSelectedContext((event as CustomEvent<string>).detail);
@@ -97,8 +109,9 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
     let cancelled = false;
     (async () => {
       try {
-        const history = await ai.getSessionMessages(activeSessionId);
-        if (cancelled) return;
+        const generation = workspaceGeneration;
+        const history = await ai.getSessionMessages(generation, activeSessionId);
+        if (cancelled || workspaceGenerationRef.current !== generation) return;
         setMessages(
           history.map((m) => ({
             role: m.role === "user" ? "user" : "assistant",
@@ -114,7 +127,7 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
       }
     })();
     return () => { cancelled = true; };
-  }, [activeSessionId, sessionsReady, workspaceOpen]);
+  }, [activeSessionId, sessionsReady, workspaceOpen, workspaceGeneration]);
 
   useEvent<TokenPayload>("AI_RESPONSE_TOKEN", (payload) => {
     if (payload.request_id !== activeRequestId.current) return;
@@ -127,9 +140,10 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
       activeRequestId.current = null;
       streamingContentRef.current = "";
       const sid = activeSessionIdRef.current;
+      const generation = workspaceGenerationRef.current;
       if (sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
         persistedRequestIds.current.add(finishedRequestId);
-        ai.appendSessionMessage(sid, "assistant", finalContent, "complete").catch((e) => {
+        ai.appendSessionMessage(generation, sid, "assistant", finalContent, "complete").catch((e) => {
           console.error("Failed to persist assistant message", e);
           setError((prev) => prev ?? `Response wasn't saved: ${e}`);
         });
@@ -166,14 +180,29 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
     // activeSessionId is guaranteed stable for the lifetime of this send -
     // see the streaming/session-switch limitation note near onSendingChange.
     const sid = activeSessionId;
+    const generation = workspaceGeneration;
     {
-      try { await ai.appendSessionMessage(sid, "user", um.content, "complete"); }
-      catch (e) { console.error("Failed to persist user message", e); setError(`Message wasn't saved: ${e}`); }
+      try {
+        await ai.appendSessionMessage(generation, sid, "user", um.content, "complete");
+        if (workspaceGenerationRef.current !== generation) return;
+      } catch (e) {
+        if (workspaceGenerationRef.current !== generation) return;
+        console.error("Failed to persist user message", e);
+        setError(`Message wasn't saved: ${e}`);
+        setSending(false);
+        activeRequestId.current = null;
+        return;
+      }
     }
 
     let mtu = selectedModel;
     if (autoMode) {
-      try { const sel = await ai.autoSelectModel(um.content); setAutoSelection(sel); mtu = sel.model; }
+      try {
+        const sel = await ai.autoSelectModel(um.content);
+        if (workspaceGenerationRef.current !== generation) return;
+        setAutoSelection(sel);
+        mtu = sel.model;
+      }
       catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; return; }
     } else { setAutoSelection(null); }
     if (!mtu) { setError("No model available"); setSending(false); activeRequestId.current = null; return; }
@@ -181,11 +210,12 @@ export default function ChatPane({ workspaceRoot, selectedContext, activeSession
     try {
       const contextQuery = liveSelectedContext ? `${um.content}\nSelected workspace context: ${liveSelectedContext}` : um.content;
       cp = await ai.getContextForQuery(contextQuery);
+      if (workspaceGenerationRef.current !== generation) return;
     } catch { cp = null; }
     const out: ai.ChatMessage[] = [];
     if (cp) out.push({ role: "system", content: cp });
     out.push(...nm.map((m) => ({ role: m.role, content: m.content })));
-    try { await ai.chatWithModel(rid, mtu, out); }
+    try { await ai.chatWithModel(rid, mtu, out, generation); }
     catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; }
   }
 

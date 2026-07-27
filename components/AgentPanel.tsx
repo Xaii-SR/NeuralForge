@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as agent from "@/lib/agent";
 import * as governance from "@/lib/governance";
 import * as ai from "@/lib/ai";
@@ -10,7 +10,10 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import AutoResizeTextarea from "@/components/ui/AutoResizeTextarea";
 import TaskReportView from "@/components/TaskReportView";
 
-export interface AgentPanelProps { workspaceOpen: boolean; }
+export interface AgentPanelProps {
+  workspaceOpen: boolean;
+  workspaceGeneration: number;
+}
 
 const STATUS_BADGE: Record<string, string> = {
   planning: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
@@ -27,7 +30,7 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_BADGE[status] ?? "bg-neutral-200 text-neutral-500"}`}>{status.replace("_", " ")}</span>;
 }
 
-export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
+export default function AgentPanel({ workspaceOpen, workspaceGeneration }: AgentPanelProps) {
   const [reqTitle, setReqTitle] = useState("");
   const [reqIntent, setReqIntent] = useState("");
   const [reqCriteria, setReqCriteria] = useState("");
@@ -40,20 +43,47 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
   const [approving, setApproving] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const workspaceGenerationRef = useRef(workspaceGeneration);
+  workspaceGenerationRef.current = workspaceGeneration;
 
-  async function refresh() { try { setTasks(await agent.listAgentTasks()); } catch { setTasks([]); } finally { setLoadingTasks(false); } }
+  async function refresh(generation = workspaceGenerationRef.current) {
+    try {
+      const next = await agent.listAgentTasks(generation);
+      if (workspaceGenerationRef.current === generation) setTasks(next);
+    } catch {
+      if (workspaceGenerationRef.current === generation) setTasks([]);
+    } finally {
+      if (workspaceGenerationRef.current === generation) setLoadingTasks(false);
+    }
+  }
 
-  useEffect(() => { if (workspaceOpen) refresh(); else setLoadingTasks(false); }, [workspaceOpen]);
+  useEffect(() => {
+    setTasks([]);
+    setSelectedId(null);
+    setCandidates(null);
+    setError(null);
+    setPlanning(false);
+    setResolving(false);
+    setApproving(false);
+    setLoadingTasks(workspaceOpen);
+    if (workspaceOpen) refresh(workspaceGeneration);
+  }, [workspaceOpen, workspaceGeneration]);
 
-  async function planEditFile(resolvedPath: string) {
+  async function planEditFile(resolvedPath: string, generation: number) {
     setPlanning(true); setError(null);
     try {
       const criteria = reqCriteria.split("\n").map((c) => c.trim()).filter((c) => c.length > 0);
-      const requirement = await governance.createRequirement(reqTitle, reqIntent, criteria);
-      const task = await agent.createAndPlanTask(requirement.id, resolvedPath);
+      const requirement = await governance.createRequirement(reqTitle, reqIntent, criteria, generation);
+      if (workspaceGenerationRef.current !== generation) return;
+      const task = await agent.createAndPlanTask(generation, requirement.id, resolvedPath);
+      if (workspaceGenerationRef.current !== generation) return;
       setSelectedId(task.id); setReqTitle(""); setReqIntent(""); setReqCriteria(""); setFilePath(""); setCandidates(null);
-      await refresh();
-    } catch (e) { setError(String(e)); } finally { setPlanning(false); }
+      await refresh(generation);
+    } catch (e) {
+      if (workspaceGenerationRef.current === generation) setError(String(e));
+    } finally {
+      if (workspaceGenerationRef.current === generation) setPlanning(false);
+    }
   }
 
   const editFileReady = reqTitle.trim().length > 0 && reqIntent.trim().length > 0 && reqCriteria.trim().length > 0;
@@ -62,22 +92,39 @@ export default function AgentPanel({ workspaceOpen }: AgentPanelProps) {
     if (planning || resolving) return;
     if (!editFileReady) return;
     if (!filePath.trim()) return;
+    const generation = workspaceGeneration;
     setError(null); setCandidates(null); setResolving(true);
     try {
-      const result = await ai.resolveFileReference(filePath);
-      if (result.resolved) await planEditFile(result.resolved);
+      const result = await ai.resolveFileReference(filePath, generation);
+      if (workspaceGenerationRef.current !== generation) return;
+      if (result.resolved) await planEditFile(result.resolved, generation);
       else if (result.candidates.length > 0) setCandidates(result.candidates);
       else setError(`No file found matching "${filePath}"`);
-    } catch (e) { setError(String(e)); } finally { setResolving(false); }
+    } catch (e) {
+      if (workspaceGenerationRef.current === generation) setError(String(e));
+    } finally {
+      if (workspaceGenerationRef.current === generation) setResolving(false);
+    }
   }
 
   async function handleApprove(taskId: string) {
+    const generation = workspaceGeneration;
     setApproving(true); setError(null);
-    try { await agent.approveTask(taskId); await refresh(); }
-    catch (e) { setError(String(e)); } finally { setApproving(false); }
+    try {
+      await agent.approveTask(generation, taskId);
+      if (workspaceGenerationRef.current === generation) await refresh(generation);
+    } catch (e) {
+      if (workspaceGenerationRef.current === generation) setError(String(e));
+    } finally {
+      if (workspaceGenerationRef.current === generation) setApproving(false);
+    }
   }
 
-  async function handleReject(taskId: string) { await agent.rejectTask(taskId); await refresh(); }
+  async function handleReject(taskId: string) {
+    const generation = workspaceGeneration;
+    await agent.rejectTask(generation, taskId);
+    if (workspaceGenerationRef.current === generation) await refresh(generation);
+  }
 
   if (!workspaceOpen) return <EmptyState icon="🤖" title="Open a folder to use the agent" hint="The Coder agent proposes file changes for your review before applying anything" />;
 

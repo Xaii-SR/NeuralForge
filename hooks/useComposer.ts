@@ -41,6 +41,7 @@ export function setTerminalBufferGetter(fn: () => string) { _terminalBufferFn = 
 export function getTerminalBuffer(): string { return _terminalBufferFn?.() ?? ""; }
 
 export interface PendingDiff {
+  id: string;
   filePath: string;
   newCode: string;
 }

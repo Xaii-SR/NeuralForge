@@ -84,9 +84,10 @@ export function getHardwareInfo(): Promise<HardwareInfo> {
 export function chatWithModel(
   requestId: string,
   model: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  workspaceGeneration?: number
 ): Promise<void> {
-  return invoke("chat_with_model", { requestId, model, messages });
+  return invoke("chat_with_model", { requestId, model, messages, workspaceGeneration });
 }
 
 export interface IndexStats {
@@ -131,8 +132,8 @@ export interface ResolutionResult {
   candidates: FileCandidate[];
 }
 
-export function resolveFileReference(query: string): Promise<ResolutionResult> {
-  return invoke("resolve_file_reference", { query });
+export function resolveFileReference(query: string, workspaceGeneration?: number): Promise<ResolutionResult> {
+  return invoke("resolve_file_reference", { query, workspaceGeneration });
 }
 
 export interface Preferences {
@@ -200,39 +201,41 @@ export interface SessionMessage {
 }
 
 export function createSession(
+  workspaceGeneration: number,
   title: string,
   provider?: string | null,
   model?: string | null
 ): Promise<Session> {
-  return invoke("create_session", { title, provider: provider ?? null, model: model ?? null });
+  return invoke("create_session", { workspaceGeneration, title, provider: provider ?? null, model: model ?? null });
 }
 
-export function listSessions(): Promise<Session[]> {
-  return invoke("list_sessions");
+export function listSessions(workspaceGeneration: number): Promise<Session[]> {
+  return invoke("list_sessions", { workspaceGeneration });
 }
 
-export function getSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  return invoke("get_session_messages", { sessionId });
+export function getSessionMessages(workspaceGeneration: number, sessionId: string): Promise<SessionMessage[]> {
+  return invoke("get_session_messages", { workspaceGeneration, sessionId });
 }
 
 export function appendSessionMessage(
+  workspaceGeneration: number,
   sessionId: string,
   role: string,
   content: string,
   status: string
 ): Promise<void> {
-  return invoke("append_session_message", { sessionId, role, content, status });
+  return invoke("append_session_message", { workspaceGeneration, sessionId, role, content, status });
 }
 
 export function updateSessionMetadata(
+  workspaceGeneration: number,
   sessionId: string,
   title: string,
   lastMessagePreview: string
 ): Promise<void> {
-  return invoke("update_session_metadata", { sessionId, title, lastMessagePreview });
+  return invoke("update_session_metadata", { workspaceGeneration, sessionId, title, lastMessagePreview });
 }
 
-export function deleteSession(sessionId: string): Promise<void> {
-  return invoke("delete_session", { sessionId });
+export function deleteSession(workspaceGeneration: number, sessionId: string): Promise<void> {
+  return invoke("delete_session", { workspaceGeneration, sessionId });
 }
-

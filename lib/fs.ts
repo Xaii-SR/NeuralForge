@@ -6,7 +6,12 @@ export interface FileEntry {
   is_dir: boolean;
 }
 
-export function openWorkspace(path: string): Promise<string> {
+export interface WorkspaceInfo {
+  root: string;
+  generation: number;
+}
+
+export function openWorkspace(path: string): Promise<WorkspaceInfo> {
   return invoke("open_workspace", { path });
 }
 
@@ -25,6 +30,10 @@ export function readFile(path: string): Promise<string> {
 
 export function writeFile(path: string, contents: string): Promise<void> {
   return invoke("write_file", { path, contents });
+}
+
+export function writeFileIfUnchanged(path: string, expectedContents: string, contents: string): Promise<void> {
+  return invoke("write_file_if_unchanged", { path, expectedContents, contents });
 }
 
 export function createFile(path: string): Promise<void> {

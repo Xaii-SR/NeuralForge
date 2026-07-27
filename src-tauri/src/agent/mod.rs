@@ -200,24 +200,10 @@ pub fn objective_from_requirement(req: &crate::governance::requirements::Require
 pub async fn create_and_plan_task(
     state: tauri::State<'_, crate::core::state::AppState>,
     db: tauri::State<'_, crate::database::DbState>,
+    workspace_generation: u64,
     requirement_id: String,
     file_path: String,
 ) -> AppResult<AgentTask> {
-    let root = state
-        .workspace_root
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-
-    let target = root.join(&file_path);
-    let canonical_root = std::fs::canonicalize(&root)?;
-    let canonical_target = std::fs::canonicalize(&target).map_err(|_| AppError::NotFound(file_path.clone()))?;
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(AppError::InvalidPath(format!("{file_path} is outside the workspace")));
-    }
-
-    let original_content = std::fs::read_to_string(&target)?;
     let id = uuid::Uuid::new_v4().to_string();
 
     // The requirement gate runs before the task row exists and long before
@@ -226,11 +212,21 @@ pub async fn create_and_plan_task(
     // Insert the row in PLANNING state before the (potentially slow) LLM
     // call, so the task is genuinely queryable/visible while in flight -
     // a crash or failure mid-plan still leaves a real, honest record.
-    let (objective, correlation_id) = {
-        let guard = db.conn.lock().unwrap();
-        let conn = guard
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    let (root, original_content, objective, correlation_id) =
+        crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            workspace_generation,
+            |root, conn| {
+        let target = root.join(&file_path);
+        let canonical_target = std::fs::canonicalize(&target)
+            .map_err(|_| AppError::NotFound(file_path.clone()))?;
+        if !canonical_target.starts_with(root) {
+            return Err(AppError::InvalidPath(format!(
+                "{file_path} is outside the workspace"
+            )));
+        }
+        let original_content = std::fs::read_to_string(&target)?;
         let requirement = crate::governance::requirements::get_active(conn, &requirement_id)?;
         let objective = objective_from_requirement(&requirement);
         insert_task(
@@ -246,15 +242,38 @@ pub async fn create_and_plan_task(
             Some(&requirement_id),
             Some(&requirement.correlation_id),
         )?;
-        (objective, requirement.correlation_id)
-    };
+        Ok((
+            root.to_path_buf(),
+            original_content,
+            objective,
+            requirement.correlation_id,
+        ))
+    },
+    )?;
 
     let plan_result = planner::plan_change(&objective, &file_path, &original_content).await;
+    let conn = crate::database::open_for_workspace(&root)?;
 
-    let guard = db.conn.lock().unwrap();
-    let conn = guard
-        .as_ref()
-        .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    if !state.matches_workspace_generation(workspace_generation) {
+        update_status(
+            &conn,
+            &id,
+            status::FAILED,
+            None,
+            Some("workspace changed while the task was planning"),
+        )?;
+        let _ = ledger::append(
+            &conn,
+            LedgerEvent::TaskPlanFailed,
+            Some(correlation_id.as_str()),
+            Some(requirement_id.as_str()),
+            Some(&id),
+            serde_json::json!({ "error": "workspace changed while the task was planning" }),
+        );
+        return Err(AppError::CommandRejected(
+            "workspace changed while the task was planning".to_string(),
+        ));
+    }
 
     match plan_result {
         Ok((proposed_content, risk_summary)) => {
@@ -267,31 +286,29 @@ pub async fn create_and_plan_task(
             tracing::info!(target: "agent", event = "task_planned", task_id = %id, requirement_id = %requirement_id, correlation_id = %correlation_id, agent = CODER_AGENT, file = %file_path, risk = %risk_summary);
 
             // Record ledger events for task lifecycle
-            if let Some(conn) = guard.as_ref() {
-                let _ = ledger::append(
-                    conn,
-                    LedgerEvent::TaskCreated,
-                    Some(correlation_id.as_str()),
-                    Some(requirement_id.as_str()),
-                    Some(&id),
-                    serde_json::json!({
-                        "objective": objective,
-                        "file_path": file_path,
-                        "risk_summary": risk_summary
-                    }),
-                );
-                let _ = ledger::append(
-                    conn,
-                    LedgerEvent::TaskPlanned,
-                    Some(correlation_id.as_str()),
-                    Some(requirement_id.as_str()),
-                    Some(&id),
-                    serde_json::json!({
-                        "status": status::AWAITING_APPROVAL,
-                        "planned_content_available": true
-                    }),
-                );
-            }
+            let _ = ledger::append(
+                &conn,
+                LedgerEvent::TaskCreated,
+                Some(correlation_id.as_str()),
+                Some(requirement_id.as_str()),
+                Some(&id),
+                serde_json::json!({
+                    "objective": objective,
+                    "file_path": file_path,
+                    "risk_summary": risk_summary
+                }),
+            );
+            let _ = ledger::append(
+                &conn,
+                LedgerEvent::TaskPlanned,
+                Some(correlation_id.as_str()),
+                Some(requirement_id.as_str()),
+                Some(&id),
+                serde_json::json!({
+                    "status": status::AWAITING_APPROVAL,
+                    "planned_content_available": true
+                }),
+            );
 
             Ok(AgentTask {
                 id,
@@ -313,11 +330,11 @@ pub async fn create_and_plan_task(
             })
         }
         Err(e) => {
-            update_status(conn, &id, status::FAILED, None, Some(&e.to_string()))?;
+            update_status(&conn, &id, status::FAILED, None, Some(&e.to_string()))?;
             
             // Record ledger event for task plan failure
             let _ = ledger::append(
-                conn,
+                &conn,
                 LedgerEvent::TaskPlanFailed,
                 if correlation_id.is_empty() { None } else { Some(correlation_id.as_str()) },
                 if requirement_id.is_empty() { None } else { Some(requirement_id.as_str()) },
@@ -455,13 +472,15 @@ fn ensure_task_type_is_approvable(task: &AgentTask) -> AppResult<()> {
 pub async fn approve_task(
     state: tauri::State<'_, crate::core::state::AppState>,
     db: tauri::State<'_, crate::database::DbState>,
+    workspace_generation: u64,
     task_id: String,
 ) -> AppResult<AgentTask> {
-    let (task, original_content, proposed_content) = {
-        let guard = db.conn.lock().unwrap();
-        let conn = guard
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
+    let (root, task, original_content, proposed_content) =
+        crate::database::with_workspace_conn_at_generation(
+            &state,
+            &db,
+            workspace_generation,
+            |root, conn| {
         let task = get_task(conn, &task_id)?;
         ensure_task_type_is_approvable(&task)?;
         let (original_content, proposed_content) = get_task_content(conn, &task_id)?;
@@ -480,8 +499,28 @@ pub async fn approve_task(
             }),
         );
         
-        (task, original_content, proposed_content)
-    };
+        Ok((
+            root.to_path_buf(),
+            task,
+            original_content,
+            proposed_content,
+        ))
+    },
+    )?;
+
+    if !state.matches_workspace_generation(workspace_generation) {
+        let conn = crate::database::open_for_workspace(&root)?;
+        update_status(
+            &conn,
+            &task_id,
+            status::FAILED,
+            None,
+            Some("workspace changed before the approved task could start"),
+        )?;
+        return Err(AppError::CommandRejected(
+            "workspace changed before the approved task could start".to_string(),
+        ));
+    }
 
     // Only governed file edits reach this point. Other task types are rejected
     // before approval state or ledger data changes.
@@ -492,27 +531,24 @@ pub async fn approve_task(
         Option<String>,
         Option<std::path::PathBuf>,
     ) = {
-        let root = state
-            .workspace_root
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
         let file_path = task.files.first().cloned().unwrap_or_default();
         let result = executor::apply_and_verify(&root, &file_path, &original_content, &proposed_content).await?;
         let final_status = if result.rolled_back { status::ROLLED_BACK } else { status::COMPLETED };
         let error = if result.rolled_back { Some(result.verification.clone()) } else { None };
         let rollback_note = if result.rolled_back { Some("original content restored after failed verification".to_string()) } else { None };
-        (final_status, result.verification, error, rollback_note, Some(root))
+        (final_status, result.verification, error, rollback_note, Some(root.clone()))
     };
 
-    {
-        let guard = db.conn.lock().unwrap();
-        let conn = guard
-            .as_ref()
-            .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-        record_task_outcome_atomic(conn, &task, &task_id, final_status, &verification, error.as_deref(), rollback_note.as_deref())?;
-    }
+    let origin_conn = crate::database::open_for_workspace(&root)?;
+    record_task_outcome_atomic(
+        &origin_conn,
+        &task,
+        &task_id,
+        final_status,
+        &verification,
+        error.as_deref(),
+        rollback_note.as_deref(),
+    )?;
 
     // The agent_history.md append is a plain file write - deliberately
     // outside (after) the DB transaction, per the audit remediation.
@@ -530,8 +566,13 @@ pub async fn approve_task(
         verification = %verification
     );
 
-    let guard = db.conn.lock().unwrap();
-    read_task_after_finish(guard.as_ref(), &task_id)
+    if !state.matches_workspace_generation(workspace_generation) {
+        return Err(AppError::CommandRejected(
+            "workspace changed while the approved task was executing; its result remained in the originating workspace".to_string(),
+        ));
+    }
+
+    read_task_after_finish(Some(&origin_conn), &task_id)
 }
 
 /// Audit remediation (post-Sprint-7): the final task read-back after
@@ -668,14 +709,19 @@ pub(crate) fn record_task_outcome_atomic(
 }
 
 #[tauri::command]
-pub fn reject_task(db: tauri::State<crate::database::DbState>, task_id: String) -> AppResult<()> {
-    let task = crate::database::with_conn(&db, |conn| {
+pub fn reject_task(
+    state: tauri::State<crate::core::state::AppState>,
+    db: tauri::State<crate::database::DbState>,
+    workspace_generation: u64,
+    task_id: String,
+) -> AppResult<()> {
+    crate::database::with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |_root, conn| {
         update_status(conn, &task_id, status::REJECTED, None, None)?;
-        get_task(conn, &task_id)
-    })?;
-    
-    // Record ledger event for task rejection
-    let _ = crate::database::with_conn(&db, |conn| {
+        let task = get_task(conn, &task_id)?;
         ledger::append(
             conn,
             LedgerEvent::TaskRejected,
@@ -685,16 +731,27 @@ pub fn reject_task(db: tauri::State<crate::database::DbState>, task_id: String) 
             serde_json::json!({
                 "reason": "user_rejection"
             }),
-        )
-    });
-    
+        )?;
+        Ok(())
+    },
+    )?;
+
     tracing::info!(target: "agent", event = "task_rejected", task_id = %task_id);
     Ok(())
 }
 
 #[tauri::command]
-pub fn list_agent_tasks(db: tauri::State<crate::database::DbState>) -> AppResult<Vec<AgentTask>> {
-    crate::database::with_conn(&db, list_tasks)
+pub fn list_agent_tasks(
+    state: tauri::State<crate::core::state::AppState>,
+    db: tauri::State<crate::database::DbState>,
+    workspace_generation: u64,
+) -> AppResult<Vec<AgentTask>> {
+    crate::database::with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |_root, conn| list_tasks(conn),
+    )
 }
 
 /// All tasks belonging to one DAG, in insertion order.

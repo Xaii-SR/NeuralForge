@@ -15,6 +15,7 @@ import GovernancePanel from "@/components/GovernancePanel";
 import WorkersPanel from "@/components/WorkersPanel";
 import PromptMaker from "@/components/PromptMaker";
 import BootstrapManager from "@/components/BootstrapManager";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import EmptyState from "@/components/ui/EmptyState";
 import ResizeHandle from "@/components/ui/ResizeHandle";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -73,7 +74,7 @@ export default function Home() {
               <button onClick={() => setCouncilOpen(false)} className="rounded px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
             </div>
             <div className="h-[500px]">
-              <CouncilPanel />
+              <CouncilPanel workspaceGeneration={workspace.workspaceGeneration} />
             </div>
             <div className="mt-4 flex justify-end border-t border-neutral-100 pt-3 dark:border-neutral-800">
               <button onClick={() => setCouncilOpen(false)} className="rounded px-4 py-1.5 text-xs font-medium text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">Close</button>
@@ -87,7 +88,7 @@ export default function Home() {
         </div>
         <ResizeHandle orientation="vertical" label="Resize file explorer" onPointerDown={layout.startDrag("sidebar")} onDoubleClick={() => layout.resetPanel("sidebar")} onNudge={(d) => layout.nudgePanel("sidebar", d)} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1"><EditorPane openFiles={workspace.openFiles} activePath={workspace.activePath} onSelect={workspace.setActivePath} onClose={workspace.closeFile} onChange={workspace.updateContent} onSave={workspace.saveFile} /></div>
+          <div className="min-h-0 flex-1"><EditorPane openFiles={workspace.openFiles} activePath={workspace.activePath} onSelect={workspace.setActivePath} onClose={workspace.closeFile} onChange={workspace.updateContent} onSave={workspace.saveFile} onExternalWrite={workspace.acceptExternalWrite} readOnly={workspace.editingLocked} /></div>
           <ResizeHandle orientation="horizontal" label="Resize bottom panel" onPointerDown={layout.startDrag("bottom")} onDoubleClick={() => layout.resetPanel("bottom")} onNudge={(d) => layout.nudgePanel("bottom", d)} />
           <div style={{ height: "var(--nf-bottom-h, 288px)" }} className="flex shrink-0 flex-col border-t border-neutral-200 dark:border-neutral-800">
             <div className="flex h-9 shrink-0 gap-1 border-b border-neutral-200 bg-neutral-50 px-2 dark:border-neutral-800 dark:bg-neutral-900">
@@ -98,7 +99,7 @@ export default function Home() {
             <div className="min-h-0 flex-1">
               {bottomTab === "terminal" && <div className="h-full"><Terminal /></div>}
               {bottomTab === "logs" && <div className="h-full"><LogViewer /></div>}
-              {bottomTab === "agent" && <div className="h-full"><AgentPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
+              {bottomTab === "agent" && <div className="h-full"><AgentPanel workspaceOpen={!!workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} /></div>}
               {bottomTab === "extensions" && <div className="h-full"><ExtensionsPanel /></div>}
               {bottomTab === "bootstrap" && <div className="h-full"><BootstrapPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
               {bottomTab === "governance" && <div className="h-full"><GovernancePanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
@@ -108,11 +109,14 @@ export default function Home() {
         </div>
         <ResizeHandle orientation="vertical" label="Resize chat panel" onPointerDown={layout.startDrag("chat")} onDoubleClick={() => layout.resetPanel("chat")} onNudge={(d) => layout.nudgePanel("chat", -d)} />
         <div style={{ width: "var(--nf-chat-w, 380px)" }} className="shrink-0 border-l border-neutral-200 dark:border-neutral-800">
-          <SessionTabs workspaceRoot={workspace.workspaceRoot} selectedContext={selectedContext} />
+          <SessionTabs workspaceRoot={workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} selectedContext={selectedContext} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">{lastEvent ?? "Ready"}</div>
       <BootstrapManager />
+      {workspace.pendingUnsaved && (
+        <UnsavedChangesDialog pending={workspace.pendingUnsaved} onResolve={workspace.resolveUnsaved} />
+      )}
     </main>
   );
 }

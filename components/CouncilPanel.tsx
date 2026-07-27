@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import CopyButton from "@/components/ui/CopyButton";
@@ -23,26 +23,36 @@ function StageOutput({ label, output }: { label: string; output: string }) {
   );
 }
 
-export default function CouncilPanel() {
+export default function CouncilPanel({ workspaceGeneration }: { workspaceGeneration: number }) {
   const [taskId, setTaskId] = useState("");
   const [objective, setObjective] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CouncilPassResult | null>(null);
+  const workspaceGenerationRef = useRef(workspaceGeneration);
+  workspaceGenerationRef.current = workspaceGeneration;
+
+  useEffect(() => {
+    setRunning(false);
+    setError(null);
+    setResult(null);
+  }, [workspaceGeneration]);
 
   async function handleRun() {
     if (!objective.trim() || running) return;
     setRunning(true);
     setError(null);
     setResult(null);
+    const generation = workspaceGeneration;
     try {
       const id = taskId.trim() || `council-${Date.now()}`;
-      const pass = await runCouncilPass(id, objective.trim());
+      const pass = await runCouncilPass(generation, id, objective.trim());
+      if (workspaceGenerationRef.current !== generation) return;
       setResult(pass);
     } catch (e: any) {
-      setError(String(e));
+      if (workspaceGenerationRef.current === generation) setError(String(e));
     }
-    setRunning(false);
+    if (workspaceGenerationRef.current === generation) setRunning(false);
   }
 
   return (

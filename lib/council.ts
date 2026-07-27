@@ -12,6 +12,6 @@ export interface CouncilPassResult {
 // Runs one real, sequential Architect -> Critic -> Judge pass against
 // `objective`, backed by agent_core::commands::run_council_pass. taskId is
 // caller-supplied (no existing task required) - a plain string is enough.
-export function runCouncilPass(taskId: string, objective: string): Promise<CouncilPassResult> {
-  return invoke("run_council_pass", { taskId, objective });
+export function runCouncilPass(workspaceGeneration: number, taskId: string, objective: string): Promise<CouncilPassResult> {
+  return invoke("run_council_pass", { workspaceGeneration, taskId, objective });
 }

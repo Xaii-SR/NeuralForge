@@ -49,7 +49,7 @@ export default function DiffEditor({ original, modified, language, originalPath,
         minimap: { enabled: true },
         scrollBeyondLastLine: false,
         renderSideBySide: true,
-        readOnly: false,
+        readOnly: true,
         originalEditable: false,
       }}
     />

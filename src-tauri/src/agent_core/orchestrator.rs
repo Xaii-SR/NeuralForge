@@ -58,10 +58,18 @@ pub async fn create_and_plan_task(
     core: &AgentCoreState,
     state: State<'_, AppState>,
     db: State<'_, DbState>,
+    workspace_generation: u64,
     requirement_id: String,
     file_path: String,
 ) -> AppResult<crate::agent::AgentTask> {
-    let task = crate::agent::create_and_plan_task(state, db, requirement_id, file_path).await?;
+    let task = crate::agent::create_and_plan_task(
+        state,
+        db,
+        workspace_generation,
+        requirement_id,
+        file_path,
+    )
+    .await?;
     record_backend(core, &task.id, ExecutionBackend::Governed);
     register_lifecycle(core, &task.id);
     Ok(task)
@@ -84,19 +92,29 @@ pub async fn create_and_plan_code_task(
 pub async fn approve_task(
     state: State<'_, AppState>,
     db: State<'_, DbState>,
+    workspace_generation: u64,
     task_id: String,
 ) -> AppResult<crate::agent::AgentTask> {
-    crate::agent::approve_task(state, db, task_id).await
+    crate::agent::approve_task(state, db, workspace_generation, task_id).await
 }
 
 /// Forwards to `agent::reject_task` unchanged.
-pub fn reject_task(db: State<'_, DbState>, task_id: String) -> AppResult<()> {
-    crate::agent::reject_task(db, task_id)
+pub fn reject_task(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
+    task_id: String,
+) -> AppResult<()> {
+    crate::agent::reject_task(state, db, workspace_generation, task_id)
 }
 
 /// Forwards to `agent::list_agent_tasks` unchanged.
-pub fn list_agent_tasks(db: State<'_, DbState>) -> AppResult<Vec<crate::agent::AgentTask>> {
-    crate::agent::list_agent_tasks(db)
+pub fn list_agent_tasks(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    workspace_generation: u64,
+) -> AppResult<Vec<crate::agent::AgentTask>> {
+    crate::agent::list_agent_tasks(state, db, workspace_generation)
 }
 
 // ── V2 pipeline (agent_v2) forwarding ───────────────────────────────────
@@ -280,15 +298,23 @@ where
 /// open or no DB connection exists - callers must treat that as "no
 /// context available", not an error; Council still runs with today's
 /// plain-objective prompt shape in that case.
-fn resolve_architect_context(app_handle: &AppHandle, objective: &str) -> Option<String> {
+fn resolve_architect_context(
+    app_handle: &AppHandle,
+    workspace_generation: u64,
+    objective: &str,
+) -> Result<Option<String>, CouncilError> {
     let app_state = app_handle.state::<AppState>();
-    let workspace_root = app_state.workspace_root.lock().ok()?.clone()?;
-
     let db = app_handle.state::<DbState>();
-    let guard = db.conn.lock().ok()?;
-    let conn = guard.as_ref()?;
-
-    Some(context::build_context_prompt(&workspace_root, conn, objective))
+    crate::database::with_workspace_conn_at_generation(
+        &app_state,
+        &db,
+        workspace_generation,
+        |root, conn| Ok(Some(context::build_context_prompt(root, conn, objective))),
+    )
+    .map_err(|e| CouncilError {
+        role: AgentRole::Architect,
+        reason: e.to_string(),
+    })
 }
 
 /// Prepends `context` (if any) to the Architect's `system_prompt` - Critic
@@ -314,16 +340,19 @@ fn architect_system_prompt_with_context(system_prompt: &str, context: Option<&st
 pub async fn run_council_pass(
     core: &AgentCoreState,
     app_handle: AppHandle,
+    workspace_generation: u64,
     task_id: &str,
     objective: &str,
 ) -> Result<CouncilPassResult, CouncilError> {
     // Fetched once per pass (not once per role) - Critic and Judge continue
     // to receive only the prior role(s)' real output plus the objective,
     // exactly as before this change.
-    let architect_context = resolve_architect_context(&app_handle, objective);
+    let architect_context =
+        resolve_architect_context(&app_handle, workspace_generation, objective)?;
+    let role_app_handle = app_handle.clone();
 
-    run_council_pass_with(core, task_id, objective, move |role, system_prompt, user_prompt| {
-        let app_handle = app_handle.clone();
+    let result = run_council_pass_with(core, task_id, objective, move |role, system_prompt, user_prompt| {
+        let app_handle = role_app_handle.clone();
         // Prepended to the Architect's *system* prompt only - the
         // "Objective: {objective}" user-prompt shape Critic/Judge already
         // build (in run_council_pass_with, untouched by this change) stays
@@ -334,19 +363,30 @@ pub async fn run_council_pass(
         };
         async move {
             let health = app_handle.state::<HealthRegistry>();
-            let providers = {
-                let db = app_handle.state::<DbState>();
-                let guard = db.conn.lock().map_err(|e| e.to_string())?;
-                guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
-                // guard dropped here, before the .await below - same
-                // Send-safety constraint agent_v2::generate documents.
-            };
+            let state = app_handle.state::<AppState>();
+            let db = app_handle.state::<DbState>();
+            let providers = crate::database::with_workspace_conn_at_generation(
+                &state,
+                &db,
+                workspace_generation,
+                |_root, conn| Ok(provider_registry::load_providers(conn)),
+            )
+            .map_err(|e| e.to_string())?;
             provider_router::generate_for_task(&providers, &health, TaskCapability::Reasoning, &system_prompt, &user_prompt)
                 .await
                 .map_err(|e| e.to_string())
         }
     })
-    .await
+    .await?;
+
+    let state = app_handle.state::<AppState>();
+    if !state.matches_workspace_generation(workspace_generation) {
+        return Err(CouncilError {
+            role: AgentRole::Judge,
+            reason: "workspace changed while the Council pass was running".to_string(),
+        });
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

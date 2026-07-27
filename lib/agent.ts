@@ -23,22 +23,22 @@ export interface AgentTask {
 
 /** Sprint 1: edit_file tasks are gated behind a validated requirement -
  * pass a requirement ID from lib/governance.ts, not a raw prompt. */
-export function createAndPlanTask(requirementId: string, filePath: string): Promise<AgentTask> {
-  return invoke("create_and_plan_task", { requirementId, filePath });
+export function createAndPlanTask(workspaceGeneration: number, requirementId: string, filePath: string): Promise<AgentTask> {
+  return invoke("create_and_plan_task", { workspaceGeneration, requirementId, filePath });
 }
 
 export function createAndPlanCodeTask(objective: string): Promise<AgentTask> {
   return invoke("create_and_plan_code_task", { objective });
 }
 
-export function approveTask(taskId: string): Promise<AgentTask> {
-  return invoke("approve_task", { taskId });
+export function approveTask(workspaceGeneration: number, taskId: string): Promise<AgentTask> {
+  return invoke("approve_task", { workspaceGeneration, taskId });
 }
 
-export function rejectTask(taskId: string): Promise<void> {
-  return invoke("reject_task", { taskId });
+export function rejectTask(workspaceGeneration: number, taskId: string): Promise<void> {
+  return invoke("reject_task", { workspaceGeneration, taskId });
 }
 
-export function listAgentTasks(): Promise<AgentTask[]> {
-  return invoke("list_agent_tasks");
+export function listAgentTasks(workspaceGeneration: number): Promise<AgentTask[]> {
+  return invoke("list_agent_tasks", { workspaceGeneration });
 }
