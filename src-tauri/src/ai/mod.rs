@@ -81,6 +81,9 @@ pub fn get_enriched_context(
     max_tokens: usize,
 ) -> AppResult<String> {
     crate::database::with_workspace_conn(&state, &db, |root, conn| {
+        let policy = crate::workspace_scanner::WorkspacePathPolicy::new(root)
+            .map_err(AppError::InvalidPath)?;
+        crate::database::indexer::purge_excluded_rows(conn, root, &policy)?;
         let memory = context::read_memory_context(root);
         let new_context = crate::database::search::enriched_context(
             conn,
@@ -137,37 +140,43 @@ pub fn clear_response_cache(db: State<DbState>) -> AppResult<usize> {
     cache::clear_cache(conn)
 }
 
-#[tauri::command]
-pub async fn test_openai_compatible_connection(
-    base_url: String,
-    api_key: String,
-) -> Result<bool, String> {
-    let provider = openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key);
-    Ok(provider.health_check().await)
-}
-
 /// Tests connectivity for any configured provider by dispatching to its
-/// real adapter's `health_check()` - see `provider_router::test_connection`
-/// for the dispatch logic. Supersedes always testing via
-/// `test_openai_compatible_connection` regardless of the provider's actual
-/// `provider_type` (that command is kept, unremoved, for any other caller
-/// that specifically wants the OpenAI-compatible check).
+/// real adapter without returning its stored credential to the renderer.
 #[tauri::command]
 pub async fn test_provider_connection(
-    provider_type: String,
-    base_url: String,
-    api_key: String,
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    provider_id: String,
 ) -> Result<bool, String> {
-    provider_router::test_connection(&provider_type, base_url, api_key).await
+    let provider = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
+        provider_registry::load_provider_by_id(conn, &provider_id)
+            .map_err(AppError::Provider)
+    })
+    .map_err(|error| error.to_string())?;
+    provider_router::test_connection(
+        &provider.provider_type,
+        provider.base_url,
+        provider.api_key,
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn list_openai_compatible_models(
-    base_url: String,
-    api_key: String,
+pub async fn list_provider_models(
+    state: State<'_, AppState>,
+    db: State<'_, DbState>,
+    provider_id: String,
 ) -> Result<Vec<openai_compatible::OpenAiModel>, String> {
-    let provider = openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key);
-    provider.list_models().await.map_err(|e| e.to_string())
+    let config = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
+        provider_registry::load_provider_by_id(conn, &provider_id)
+            .map_err(AppError::Provider)
+    })
+    .map_err(|error| error.to_string())?;
+    let provider = openai_compatible::OpenAiCompatibleProvider::new(
+        config.base_url,
+        config.api_key,
+    );
+    provider.list_models().await.map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -288,6 +297,19 @@ where
     Ok(Some(response))
 }
 
+fn prepare_chat_messages(
+    config: &provider_registry::ProviderConfig,
+    mut messages: Vec<ollama::ChatMessage>,
+    share_workspace_context: bool,
+) -> Vec<ollama::ChatMessage> {
+    if config.adapter_kind() != provider_registry::AdapterKind::Ollama
+        && !share_workspace_context
+    {
+        messages.retain(|message| !context::contains_workspace_context(&message.content));
+    }
+    context::budget_chat_messages(messages, config.capabilities.context_length)
+}
+
 #[tauri::command]
 pub async fn chat_with_model(
     app: AppHandle,
@@ -298,18 +320,29 @@ pub async fn chat_with_model(
     model: String,
     messages: Vec<ollama::ChatMessage>,
     workspace_generation: Option<u64>,
+    share_workspace_context: Option<bool>,
 ) -> AppResult<()> {
     let workspace_generation =
         workspace_generation.unwrap_or_else(|| state.workspace_generation());
-    let (cached, config) = crate::database::with_workspace_conn_at_generation(
+    let config = crate::database::with_workspace_conn_at_generation(
         &state,
         &db,
         workspace_generation,
         |_root, conn| {
-            let cached = cache::get_cached(conn, &model, &messages);
             let config = provider_router::resolve_provider_for_model(Some(conn), &model);
-            Ok((cached, config))
+            Ok(config)
         },
+    )?;
+    let messages = prepare_chat_messages(
+        &config,
+        messages,
+        share_workspace_context.unwrap_or(false),
+    );
+    let cached = crate::database::with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |_root, conn| Ok(cache::get_cached(conn, &model, &messages)),
     )?;
     let was_cached = cached.is_some();
 
@@ -354,6 +387,31 @@ pub async fn chat_with_model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_chat_drops_workspace_context_without_explicit_consent() {
+        let mut cloud = provider_registry::default_ollama_provider();
+        cloud.provider_type = "openai_compatible".to_string();
+        cloud.capabilities.context_length = 4096;
+        let messages = vec![
+            ollama::ChatMessage {
+                role: "system".into(),
+                content: "<untrusted_workspace_context>NF_CONTEXT_SENTINEL</untrusted_workspace_context>".into(),
+            },
+            ollama::ChatMessage {
+                role: "user".into(),
+                content: "hello".into(),
+            },
+        ];
+        let blocked = prepare_chat_messages(&cloud, messages.clone(), false);
+        assert!(!blocked
+            .iter()
+            .any(|message| message.content.contains("NF_CONTEXT_SENTINEL")));
+        let allowed = prepare_chat_messages(&cloud, messages, true);
+        assert!(allowed
+            .iter()
+            .any(|message| message.content.contains("NF_CONTEXT_SENTINEL")));
+    }
 
     /// Exercises the exact logic the chat_with_model command runs - not just
     /// the low-level HTTP stream - against a real running Ollama instance:

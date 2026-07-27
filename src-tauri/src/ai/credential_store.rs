@@ -11,35 +11,71 @@
 
 const SERVICE: &str = "neuralforge-provider-api-key";
 
+pub trait CredentialBackend {
+    fn store(&self, provider_id: &str, api_key: &str) -> Result<(), String>;
+    fn load(&self, provider_id: &str) -> Result<Option<String>, String>;
+    fn delete(&self, provider_id: &str) -> Result<(), String>;
+}
+
+pub struct KeyringCredentialBackend;
+
+impl CredentialBackend for KeyringCredentialBackend {
+    fn store(&self, provider_id: &str, api_key: &str) -> Result<(), String> {
+        if api_key.is_empty() {
+            return Ok(());
+        }
+        let entry = keyring::Entry::new(SERVICE, provider_id).map_err(|error| error.to_string())?;
+        entry.set_password(api_key).map_err(|error| error.to_string())
+    }
+
+    fn load(&self, provider_id: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(SERVICE, provider_id).map_err(|error| error.to_string())?;
+        match entry.get_password() {
+            Ok(api_key) => Ok(Some(api_key)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn delete(&self, provider_id: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(SERVICE, provider_id).map_err(|error| error.to_string())?;
+        match entry.delete_password() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
 /// Stores `api_key` in the OS keychain under `provider_id`. A no-op that
 /// succeeds if `api_key` is empty (nothing to protect) rather than writing
 /// an empty credential entry.
 pub fn store_api_key(provider_id: &str, api_key: &str) -> Result<(), String> {
-    if api_key.is_empty() {
-        return Ok(());
-    }
-    let entry = keyring::Entry::new(SERVICE, provider_id).map_err(|e| e.to_string())?;
-    entry.set_password(api_key).map_err(|e| e.to_string())
+    KeyringCredentialBackend.store(provider_id, api_key)
 }
 
-/// Reads `provider_id`'s API key back from the OS keychain. Returns an
-/// empty string (not an error) if no entry exists - a provider with no key
-/// configured yet (e.g. local Ollama) is a normal, expected state, not a
-/// failure.
+pub fn load_api_key_result(provider_id: &str) -> Result<Option<String>, String> {
+    KeyringCredentialBackend.load(provider_id)
+}
+
+/// Missing credentials are a normal state for local providers. Backend
+/// failures are intentionally collapsed only for internal routing callers;
+/// migrations use `load_api_key_result` and never scrub on an error.
 pub fn load_api_key(provider_id: &str) -> String {
-    let Ok(entry) = keyring::Entry::new(SERVICE, provider_id) else {
-        return String::new();
-    };
-    entry.get_password().unwrap_or_default()
+    load_api_key_result(provider_id)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// Removes `provider_id`'s stored API key, if any. A no-op, not an error,
 /// if no entry exists - matches `delete_provider_config`'s idempotent
 /// intent.
 pub fn delete_api_key(provider_id: &str) {
-    if let Ok(entry) = keyring::Entry::new(SERVICE, provider_id) {
-        let _ = entry.delete_password();
-    }
+    let _ = delete_api_key_result(provider_id);
+}
+
+pub fn delete_api_key_result(provider_id: &str) -> Result<(), String> {
+    KeyringCredentialBackend.delete(provider_id)
 }
 
 #[cfg(test)]

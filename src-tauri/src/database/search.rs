@@ -17,6 +17,11 @@ pub struct SearchResult {
     pub score: f64,
 }
 
+pub struct ResolvedContextBlock<'a> {
+    pub path: &'a str,
+    pub content: &'a str,
+}
+
 #[derive(Clone, Debug)]
 struct EnrichedItem {
     priority: u8,
@@ -322,13 +327,17 @@ fn extract_target_function(query: &str) -> Option<String> {
 
 pub fn enriched_context(
     conn: &Connection, _workspace_root: &Path, query: &str, memory: &str,
-    resolved_file: Option<&str>, max_tokens: usize,
+    resolved_file: Option<ResolvedContextBlock<'_>>, max_tokens: usize,
 ) -> AppResult<String> {
     let _intent = classify_intent(query);
     let target_var = extract_target_variable(query);
     let mut items: Vec<EnrichedItem> = Vec::new();
+    let resolved_path = resolved_file.as_ref().map(|resolved| resolved.path);
 
     let mut search_results = keyword_search(conn, query, 5).unwrap_or_default();
+    if let Some(path) = resolved_path {
+        search_results.retain(|result| result.path != path);
+    }
     smooth_scores(&mut search_results);
     let stitched = stitch_chunks(&search_results);
     let mut matched_paths: Vec<String> = Vec::new();
@@ -366,7 +375,13 @@ pub fn enriched_context(
         }
     }
 
-    if let Some(resolved) = resolved_file { items.push(EnrichedItem { priority: 2, label: "Referenced File".to_string(), content: resolved.to_string() }); }
+    if let Some(resolved) = resolved_file {
+        items.push(EnrichedItem {
+            priority: 2,
+            label: format!("Referenced File: {}", resolved.path),
+            content: resolved.content.to_string(),
+        });
+    }
     for file_path in &matched_paths {
         if let Ok(symbols) = get_symbol_summary(conn, file_path) {
             if !symbols.is_empty() { items.push(EnrichedItem { priority: 2, label: format!("Symbols in {}", file_path), content: symbols.join("\n") }); }
@@ -425,6 +440,7 @@ pub fn enriched_context(
             for result in &extra_results {
                 if used_tokens >= max_tokens { break; }
                 if existing_paths.contains(result.path.as_str()) { continue; }
+                if resolved_path == Some(result.path.as_str()) { continue; }
                 let symbols = get_symbol_boundaries(conn, &result.path);
                 let mut content = prune_blocks(&result.content, 800, &symbols);
                 if let Some(ref var) = target_var { content = prune_to_def_use(&content, var); }

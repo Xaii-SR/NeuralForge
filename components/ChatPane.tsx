@@ -215,7 +215,16 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
     const out: ai.ChatMessage[] = [];
     if (cp) out.push({ role: "system", content: cp });
     out.push(...nm.map((m) => ({ role: m.role, content: m.content })));
-    try { await ai.chatWithModel(rid, mtu, out, generation); }
+    try {
+      const appConfig = await getAppConfig();
+      await ai.chatWithModel(
+        rid,
+        mtu,
+        out,
+        generation,
+        appConfig.shareWorkspaceContextWithCloud,
+      );
+    }
     catch (e) { setError(String(e)); setSending(false); activeRequestId.current = null; }
   }
 

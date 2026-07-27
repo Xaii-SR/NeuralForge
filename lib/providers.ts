@@ -5,7 +5,7 @@ export interface ProviderConfig {
   name: string;
   provider_type: string;
   base_url: string;
-  api_key: string;
+  has_api_key: boolean;
   models: string[];
   enabled: boolean;
   is_default: boolean;
@@ -84,18 +84,14 @@ export function getModelConfig(key: string): Promise<ModelConfig | null> {
   return invoke("get_model_config", { key });
 }
 
-// OpenAI-compatible testing
-export function testOpenAiConnection(baseUrl: string, apiKey: string): Promise<boolean> {
-  return invoke("test_openai_compatible_connection", { baseUrl, apiKey });
+export function testProviderConnection(providerId: string): Promise<boolean> {
+  return invoke("test_provider_connection", { providerId });
 }
 
-// Dispatches to the correct adapter's real health check based on
-// providerType (ollama/openai_compatible/anthropic/gemini/...), instead of
-// always testing via the OpenAI-compatible client regardless of provider.
-export function testProviderConnection(providerType: string, baseUrl: string, apiKey: string): Promise<boolean> {
-  return invoke("test_provider_connection", { providerType, baseUrl, apiKey });
+export function listProviderModels(providerId: string): Promise<OpenAiModel[]> {
+  return invoke("list_provider_models", { providerId });
 }
 
-export function listOpenAiModels(baseUrl: string, apiKey: string): Promise<OpenAiModel[]> {
-  return invoke("list_openai_compatible_models", { baseUrl, apiKey });
+export function migrateLegacyApiKey(providerHint: string, apiKey: string): Promise<void> {
+  return invoke("migrate_legacy_api_key", { providerHint, apiKey });
 }

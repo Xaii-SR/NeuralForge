@@ -61,6 +61,7 @@ pub async fn run_council_pass(
     state: State<'_, AppState>,
     db: State<'_, DbState>,
     workspace_generation: u64,
+    share_workspace_context: bool,
     task_id: String,
     objective: String,
 ) -> Result<CouncilPassResult, String> {
@@ -75,6 +76,7 @@ pub async fn run_council_pass(
         &core,
         app_handle,
         workspace_generation,
+        share_workspace_context,
         &task_id,
         &objective,
     )

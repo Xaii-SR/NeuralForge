@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
 import EmptyState from "@/components/ui/EmptyState";
 
 interface LogEntry {
@@ -50,9 +49,8 @@ export default function LogViewer() {
   }, [refresh]);
 
   async function handleExport() {
-    const destination = await save({ defaultPath: "neuralforge-logs.txt" });
+    const destination = await invoke<string | null>("export_logs");
     if (destination) {
-      await invoke("export_logs", { destination });
       setExportStatus(`Exported to ${destination}`);
       setTimeout(() => setExportStatus(null), 4000);
     }

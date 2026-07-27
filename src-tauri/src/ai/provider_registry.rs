@@ -152,16 +152,12 @@ pub fn clamp_capabilities(provider_type: &str, requested: ProviderCapabilities) 
 
 /// Persistent provider configuration stored in SQLite.
 ///
-/// SECURITY NOTE (remediated): `api_key` here is the in-memory/IPC-facing
-/// value only. The `settings` table row for `SETTINGS_KEY_PROVIDERS` never
-/// contains a real key - `save_providers_raw` blanks `api_key` on every
-/// provider before serializing, and `load_providers_raw` fills it back in
-/// from the OS credential store (`ai::credential_store`, backed by the
-/// `keyring` crate: Windows Credential Manager / macOS Keychain / Linux
-/// libsecret) keyed by provider `id`. `add_provider_config`/
-/// `update_provider_config` write the real key to the keychain before it
-/// ever reaches `save_providers_raw`; `delete_provider_config` removes the
-/// keychain entry alongside the config row.
+/// SECURITY NOTE: `api_key` is internal routing state only. Tauri commands
+/// return `ProviderConfigView`, which exposes `has_api_key` but never the
+/// secret. New writes are verified in the OS credential store before the
+/// redacted settings row is committed. Legacy plaintext rows are scrubbed
+/// only after a verified keyring copy exists, so migration failure cannot
+/// erase the only credential copy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub id: String,
@@ -200,6 +196,37 @@ impl ProviderConfig {
     /// instead of re-deriving `provider_type == "ollama"`-style checks.
     pub fn adapter_kind(&self) -> AdapterKind {
         adapter_kind_for(&self.provider_type)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfigView {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: String,
+    pub has_api_key: bool,
+    pub models: Vec<String>,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub capabilities: ProviderCapabilities,
+    pub created_at: i64,
+}
+
+impl From<&ProviderConfig> for ProviderConfigView {
+    fn from(provider: &ProviderConfig) -> Self {
+        Self {
+            id: provider.id.clone(),
+            name: provider.name.clone(),
+            provider_type: provider.provider_type.clone(),
+            base_url: provider.base_url.clone(),
+            has_api_key: !provider.api_key.is_empty(),
+            models: provider.models.clone(),
+            enabled: provider.enabled,
+            is_default: provider.is_default,
+            capabilities: provider.capabilities.clone(),
+            created_at: provider.created_at,
+        }
     }
 }
 
@@ -291,8 +318,8 @@ pub fn default_ollama_provider() -> ProviderConfig {
     }
 }
 
-fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
-    let mut providers = conn
+fn load_persisted_providers(conn: &Connection) -> Vec<ProviderConfig> {
+    conn
         .query_row(
             "SELECT value FROM settings WHERE key = ?1",
             params![SETTINGS_KEY_PROVIDERS],
@@ -300,12 +327,86 @@ fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
         )
         .ok()
         .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
-        .unwrap_or_else(|| vec![default_ollama_provider()]);
+        .unwrap_or_else(|| vec![default_ollama_provider()])
+}
 
-    for provider in &mut providers {
-        provider.api_key = credential_store::load_api_key(&provider.id);
+fn persist_provider_configs(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {
+    let json = serde_json::to_string(providers)
+        .map_err(|error| AppError::Provider(format!("serialize providers: {error}")))?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![SETTINGS_KEY_PROVIDERS, json],
+    )
+    .map_err(|error| AppError::Provider(format!("save providers: {error}")))?;
+    Ok(())
+}
+
+fn load_providers_with_backend(
+    conn: &Connection,
+    backend: &impl credential_store::CredentialBackend,
+) -> Vec<ProviderConfig> {
+    if let Err(error) = crate::database::retry_pending_secure_scrub(conn) {
+        tracing::warn!(
+            target: "provider",
+            event = "pending_sensitive_storage_scrub_deferred",
+            error = %error
+        );
     }
-    providers
+    let mut persisted = load_persisted_providers(conn);
+    let mut hydrated = persisted.clone();
+    let mut scrubbed_legacy_key = false;
+
+    for (stored, runtime) in persisted.iter_mut().zip(hydrated.iter_mut()) {
+        let legacy_key = stored.api_key.clone();
+        let keyring_key = backend.load(&stored.id);
+        match keyring_key {
+            Ok(Some(api_key)) if legacy_key.is_empty() || api_key == legacy_key => {
+                runtime.api_key = api_key;
+                if !legacy_key.is_empty() {
+                    stored.api_key.clear();
+                    scrubbed_legacy_key = true;
+                }
+            }
+            Ok(Some(_)) => {
+                runtime.api_key = legacy_key;
+            }
+            Ok(None) if !legacy_key.is_empty() => {
+                let verified = backend
+                    .store(&stored.id, &legacy_key)
+                    .and_then(|_| backend.load(&stored.id))
+                    .map(|value| value.as_deref() == Some(legacy_key.as_str()))
+                    .unwrap_or(false);
+                if verified {
+                    runtime.api_key = legacy_key;
+                    stored.api_key.clear();
+                    scrubbed_legacy_key = true;
+                } else {
+                    runtime.api_key = legacy_key;
+                }
+            }
+            Ok(None) => runtime.api_key.clear(),
+            Err(_) => runtime.api_key = legacy_key,
+        }
+    }
+
+    if scrubbed_legacy_key {
+        if let Err(error) = crate::database::mark_secure_scrub_pending(conn)
+            .and_then(|_| persist_provider_configs(conn, &persisted))
+            .and_then(|_| crate::database::secure_scrub_storage(conn))
+        {
+            tracing::warn!(
+                target: "provider",
+                event = "legacy_credential_scrub_deferred",
+                error = %error
+            );
+        }
+    }
+    hydrated
+}
+
+fn load_providers_raw(conn: &Connection) -> Vec<ProviderConfig> {
+    load_providers_with_backend(conn, &credential_store::KeyringCredentialBackend)
 }
 
 /// Public read accessor for other `ai::` modules (routing, capability-based
@@ -315,9 +416,35 @@ pub fn load_providers(conn: &Connection) -> Vec<ProviderConfig> {
     load_providers_raw(conn)
 }
 
-fn save_providers_raw(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {
-    // Never persist a real api_key to disk - it lives only in the OS
-    // keychain (see this struct's SECURITY NOTE doc comment above).
+pub fn load_provider_by_id(conn: &Connection, provider_id: &str) -> Result<ProviderConfig, String> {
+    load_providers_raw(conn)
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| "provider not found".to_string())
+}
+
+fn save_providers_with_backend(
+    conn: &Connection,
+    providers: &[ProviderConfig],
+    backend: &impl credential_store::CredentialBackend,
+) -> AppResult<()> {
+    for provider in providers {
+        if provider.api_key.is_empty() {
+            continue;
+        }
+        backend
+            .store(&provider.id, &provider.api_key)
+            .map_err(|error| AppError::Provider(format!("store provider credential: {error}")))?;
+        let verified = backend
+            .load(&provider.id)
+            .map_err(|error| AppError::Provider(format!("verify provider credential: {error}")))?;
+        if verified.as_deref() != Some(provider.api_key.as_str()) {
+            return Err(AppError::Provider(
+                "credential verification failed; provider settings were not changed".to_string(),
+            ));
+        }
+    }
+
     let redacted: Vec<ProviderConfig> = providers
         .iter()
         .cloned()
@@ -326,15 +453,11 @@ fn save_providers_raw(conn: &Connection, providers: &[ProviderConfig]) -> AppRes
             p
         })
         .collect();
-    let json = serde_json::to_string(&redacted)
-        .map_err(|e| AppError::Provider(format!("serialize providers: {e}")))?;
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![SETTINGS_KEY_PROVIDERS, json],
-    )
-    .map_err(|e| AppError::Provider(format!("save providers: {e}")))?;
-    Ok(())
+    persist_provider_configs(conn, &redacted)
+}
+
+fn save_providers_raw(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {
+    save_providers_with_backend(conn, providers, &credential_store::KeyringCredentialBackend)
 }
 
 fn load_model_config(conn: &Connection, key: &str) -> Option<ModelConfig> {
@@ -364,10 +487,13 @@ fn save_model_config(conn: &Connection, key: &str, config: &ModelConfig) -> AppR
 // ═══════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub fn list_provider_configs(db: tauri::State<'_, crate::database::DbState>) -> Result<Vec<ProviderConfig>, String> {
+pub fn list_provider_configs(db: tauri::State<'_, crate::database::DbState>) -> Result<Vec<ProviderConfigView>, String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
-    Ok(load_providers_raw(conn))
+    Ok(load_providers_raw(conn)
+        .iter()
+        .map(ProviderConfigView::from)
+        .collect())
 }
 
 /// Builds a new `ProviderConfig` with capabilities clamped to what
@@ -398,17 +524,18 @@ pub fn add_provider_config(
     provider_type: String,
     base_url: String,
     api_key: String,
-) -> Result<ProviderConfig, String> {
+) -> Result<ProviderConfigView, String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
     let mut providers = load_providers_raw(conn);
 
     let new = build_provider_config(name, provider_type, base_url, api_key.clone(), providers.is_empty());
-    credential_store::store_api_key(&new.id, &api_key)?;
-
     providers.push(new.clone());
-    save_providers_raw(conn, &providers).map_err(|e| e.to_string())?;
-    Ok(new)
+    if let Err(error) = save_providers_raw(conn, &providers) {
+        credential_store::delete_api_key(&new.id);
+        return Err(error.to_string());
+    }
+    Ok(ProviderConfigView::from(&new))
 }
 
 #[tauri::command]
@@ -420,24 +547,90 @@ pub fn update_provider_config(
     api_key: Option<String>,
     enabled: Option<bool>,
     models: Option<Vec<String>>,
-) -> Result<ProviderConfig, String> {
+) -> Result<ProviderConfigView, String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
     let mut providers = load_providers_raw(conn);
 
+    if base_url.is_some() && api_key.as_deref().is_some_and(|key| !key.is_empty()) {
+        return Err(
+            "update the provider endpoint and credential in separate operations".to_string(),
+        );
+    }
     let provider = providers.iter_mut().find(|p| p.id == id).ok_or("provider not found")?;
     if let Some(n) = name { provider.name = n; }
     if let Some(u) = base_url { provider.base_url = u; }
     if let Some(k) = api_key {
-        credential_store::store_api_key(&provider.id, &k)?;
-        provider.api_key = k;
+        if !k.is_empty() {
+            provider.api_key = k;
+        }
     }
     if let Some(e) = enabled { provider.enabled = e; }
     if let Some(m) = models { provider.models = m; }
 
     let result = provider.clone();
-    save_providers_raw(conn, &providers).map_err(|e| e.to_string())?;
-    Ok(result)
+    save_providers_raw(conn, &providers).map_err(|error| error.to_string())?;
+    Ok(ProviderConfigView::from(&result))
+}
+
+#[tauri::command]
+pub fn migrate_legacy_api_key(
+    db: tauri::State<'_, crate::database::DbState>,
+    provider_hint: String,
+    api_key: String,
+) -> Result<(), String> {
+    if api_key.is_empty() {
+        return Ok(());
+    }
+    let guard = db.conn.lock().unwrap();
+    let conn = guard.as_ref().ok_or("no workspace open")?;
+    let mut providers = load_persisted_providers(conn);
+    let mut matches = providers
+        .iter()
+        .enumerate()
+        .filter(|(_, provider)| {
+            provider.id == provider_hint
+                || provider.provider_type == provider_hint
+                || (provider_hint == "openai" && provider.provider_type == "openai_compatible")
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        let cloud_providers = providers
+            .iter()
+            .enumerate()
+            .filter(|(_, provider)| provider.adapter_kind() != AdapterKind::Ollama)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if cloud_providers.len() == 1 {
+            matches = cloud_providers;
+        }
+    }
+    if matches.len() != 1 {
+        return Err("legacy credential could not be mapped to exactly one provider".to_string());
+    }
+    let provider = &mut providers[matches[0]];
+    let backend = credential_store::KeyringCredentialBackend;
+    let existing = credential_store::CredentialBackend::load(&backend, &provider.id)?;
+    if let Some(existing) = existing {
+        if existing != api_key {
+            return Err(
+                "legacy credential differs from the existing keyring value; migration was deferred"
+                    .to_string(),
+            );
+        }
+    } else {
+        credential_store::CredentialBackend::store(&backend, &provider.id, &api_key)?;
+    }
+    let verified = credential_store::CredentialBackend::load(&backend, &provider.id)?;
+    if verified.as_deref() != Some(api_key.as_str()) {
+        return Err("legacy credential verification failed".to_string());
+    }
+    provider.api_key.clear();
+    crate::database::mark_secure_scrub_pending(conn)
+        .and_then(|_| persist_provider_configs(conn, &providers))
+        .and_then(|_| crate::database::secure_scrub_storage(conn))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -452,8 +645,10 @@ pub fn delete_provider_config(
         return Err("cannot delete the last provider".to_string());
     }
     providers.retain(|p| p.id != id);
-    credential_store::delete_api_key(&id);
-    save_providers_raw(conn, &providers).map_err(|e| e.to_string())
+    save_providers_raw(conn, &providers).map_err(|error| error.to_string())?;
+    credential_store::delete_api_key_result(&id).map_err(|error| {
+        format!("provider removed, but credential cleanup failed: {error}")
+    })
 }
 
 #[tauri::command]
@@ -487,7 +682,38 @@ pub fn get_model_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::credential_store::CredentialBackend;
+    use std::collections::HashMap;
     use std::fs;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct MemoryCredentialBackend {
+        values: Mutex<HashMap<String, String>>,
+        fail_store: bool,
+    }
+
+    impl credential_store::CredentialBackend for MemoryCredentialBackend {
+        fn store(&self, provider_id: &str, api_key: &str) -> Result<(), String> {
+            if self.fail_store {
+                return Err("injected store failure".to_string());
+            }
+            self.values
+                .lock()
+                .unwrap()
+                .insert(provider_id.to_string(), api_key.to_string());
+            Ok(())
+        }
+
+        fn load(&self, provider_id: &str) -> Result<Option<String>, String> {
+            Ok(self.values.lock().unwrap().get(provider_id).cloned())
+        }
+
+        fn delete(&self, provider_id: &str) -> Result<(), String> {
+            self.values.lock().unwrap().remove(provider_id);
+            Ok(())
+        }
+    }
 
     fn temp_db() -> Connection {
         let mut d = std::env::temp_dir();
@@ -500,6 +726,30 @@ mod tests {
         crate::database::open_for_workspace(&d).unwrap()
     }
 
+    fn assert_sqlite_storage_excludes(conn: &Connection, sentinel: &str) {
+        let database_path: String = conn
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for path in [
+            std::path::PathBuf::from(&database_path),
+            std::path::PathBuf::from(format!("{database_path}-wal")),
+        ] {
+            if let Ok(bytes) = fs::read(&path) {
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|window| window == sentinel.as_bytes()),
+                    "{} retained credential plaintext",
+                    path.display(),
+                );
+            }
+        }
+    }
+
     #[test]
     fn default_ollama_provider_exists() {
         let conn = temp_db();
@@ -510,7 +760,8 @@ mod tests {
     #[test]
     fn add_and_list_providers() {
         let conn = temp_db();
-        let mut providers = load_providers_raw(&conn);
+        let mut providers = load_persisted_providers(&conn);
+        let backend = MemoryCredentialBackend::default();
 
         let new = ProviderConfig {
             id: "custom-1".into(),
@@ -526,10 +777,149 @@ mod tests {
         };
 
         providers.push(new);
-        save_providers_raw(&conn, &providers).unwrap();
+        save_providers_with_backend(&conn, &providers, &backend).unwrap();
 
-        let reloaded = load_providers_raw(&conn);
+        let reloaded = load_providers_with_backend(&conn, &backend);
         assert!(reloaded.iter().any(|p| p.name == "My Custom"));
+    }
+
+    fn legacy_provider(api_key: &str) -> ProviderConfig {
+        ProviderConfig {
+            id: "legacy-provider".into(),
+            name: "Legacy".into(),
+            provider_type: "openai_compatible".into(),
+            base_url: "https://example.invalid/v1".into(),
+            api_key: api_key.into(),
+            models: vec!["model-a".into()],
+            enabled: true,
+            is_default: true,
+            capabilities: ProviderCapabilities::default(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn provider_view_serialization_never_contains_api_key() {
+        let provider = legacy_provider("NF_PROVIDER_SENTINEL");
+        let serialized = serde_json::to_string(&ProviderConfigView::from(&provider)).unwrap();
+        assert!(!serialized.contains("NF_PROVIDER_SENTINEL"));
+        assert!(!serialized.contains("\"api_key\""));
+        assert!(serialized.contains("\"has_api_key\":true"));
+    }
+
+    #[test]
+    fn successful_legacy_migration_is_verified_then_scrubbed() {
+        let conn = temp_db();
+        persist_provider_configs(&conn, &[legacy_provider("NF_MIGRATION_SENTINEL")]).unwrap();
+        let backend = MemoryCredentialBackend::default();
+
+        let loaded = load_providers_with_backend(&conn, &backend);
+        assert_eq!(loaded[0].api_key, "NF_MIGRATION_SENTINEL");
+        assert_eq!(
+            backend.load("legacy-provider").unwrap().as_deref(),
+            Some("NF_MIGRATION_SENTINEL")
+        );
+        let persisted = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![SETTINGS_KEY_PROVIDERS],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(!persisted.contains("NF_MIGRATION_SENTINEL"));
+        assert_sqlite_storage_excludes(&conn, "NF_MIGRATION_SENTINEL");
+    }
+
+    #[test]
+    fn failed_legacy_migration_preserves_the_only_copy() {
+        let conn = temp_db();
+        persist_provider_configs(&conn, &[legacy_provider("NF_ONLY_COPY_SENTINEL")]).unwrap();
+        let backend = MemoryCredentialBackend {
+            fail_store: true,
+            ..MemoryCredentialBackend::default()
+        };
+
+        let loaded = load_providers_with_backend(&conn, &backend);
+        assert_eq!(loaded[0].api_key, "NF_ONLY_COPY_SENTINEL");
+        let persisted = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![SETTINGS_KEY_PROVIDERS],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(persisted.contains("NF_ONLY_COPY_SENTINEL"));
+    }
+
+    #[test]
+    fn restart_after_keyring_write_resumes_scrub_without_overwrite() {
+        let conn = temp_db();
+        persist_provider_configs(&conn, &[legacy_provider("NF_RESTART_SENTINEL")]).unwrap();
+        let backend = MemoryCredentialBackend::default();
+        backend
+            .store("legacy-provider", "NF_RESTART_SENTINEL")
+            .unwrap();
+
+        let loaded = load_providers_with_backend(&conn, &backend);
+        assert_eq!(loaded[0].api_key, "NF_RESTART_SENTINEL");
+        let persisted = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![SETTINGS_KEY_PROVIDERS],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(!persisted.contains("NF_RESTART_SENTINEL"));
+        assert_sqlite_storage_excludes(&conn, "NF_RESTART_SENTINEL");
+    }
+
+    #[test]
+    fn interrupted_physical_scrub_retries_when_database_reopens() {
+        let conn = temp_db();
+        let database_path: String = conn
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let workspace = std::path::Path::new(&database_path)
+            .parent()
+            .and_then(std::path::Path::parent)
+            .unwrap()
+            .to_path_buf();
+        persist_provider_configs(&conn, &[legacy_provider("NF_INTERRUPTED_SENTINEL")]).unwrap();
+        crate::database::mark_secure_scrub_pending(&conn).unwrap();
+        persist_provider_configs(&conn, &[legacy_provider("")]).unwrap();
+        drop(conn);
+
+        let reopened = crate::database::open_for_workspace(&workspace).unwrap();
+        assert_sqlite_storage_excludes(&reopened, "NF_INTERRUPTED_SENTINEL");
+    }
+
+    #[test]
+    fn mismatched_keyring_value_never_erases_the_legacy_copy() {
+        let conn = temp_db();
+        persist_provider_configs(&conn, &[legacy_provider("NF_VALID_LEGACY")]).unwrap();
+        let backend = MemoryCredentialBackend::default();
+        backend
+            .store("legacy-provider", "NF_STALE_KEYRING")
+            .unwrap();
+
+        let loaded = load_providers_with_backend(&conn, &backend);
+        assert_eq!(loaded[0].api_key, "NF_VALID_LEGACY");
+        let persisted = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![SETTINGS_KEY_PROVIDERS],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert!(persisted.contains("NF_VALID_LEGACY"));
+        assert_eq!(
+            backend.load("legacy-provider").unwrap().as_deref(),
+            Some("NF_STALE_KEYRING"),
+        );
     }
 
     #[test]

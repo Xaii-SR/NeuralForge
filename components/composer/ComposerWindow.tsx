@@ -52,7 +52,7 @@ export default function ComposerWindow({
   useEffect(() => {
     if (!mention.isOpen || !debouncedQuery) { setSuggestedItems([]); return; }
     Promise.all([
-      invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10, workspaceRoot: "" }),
+      invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10 }),
       invoke<string[]>("list_cached_docs"),
     ]).then(([files, docs]) => {
       const fileItems: MentionItem[] = files.map((f) => ({ label: f, type: "file" }));

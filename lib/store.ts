@@ -1,3 +1,5 @@
+import { migrateLegacyApiKey } from "@/lib/providers";
+
 export type AIProviderId = string;
 
 export interface AIConfig {
@@ -8,6 +10,7 @@ export interface AIConfig {
   temperature: number;
   context: number;
   apiKeyRef?: string;
+  shareWorkspaceContextWithCloud: boolean;
   effort: "Light" | "Medium" | "High" | "Extra High";
 }
 
@@ -41,20 +44,49 @@ export async function migrateConfig(old: any): Promise<AIConfig> {
     model: "qwen2.5-coder:7b",
     temperature: 0.2,
     context: 8192,
+    shareWorkspaceContextWithCloud: false,
     effort: "High",
   };
-  if (!old) return defaultCfg;
+  const source = old ?? defaultCfg;
+  const legacyApiKey = typeof source.apiKey === "string" && source.apiKey
+    ? source.apiKey
+    : localStorage.getItem("nf_api_key_backup");
+  let credentialMigrated = false;
+  if (legacyApiKey) {
+    const providerHint = typeof source.provider === "string" && source.provider
+      ? source.provider
+      : defaultCfg.provider;
+    try {
+      await migrateLegacyApiKey(providerHint, legacyApiKey);
+      credentialMigrated = true;
+    } catch {
+      credentialMigrated = false;
+    }
+  }
 
-  if (!old.version) {
-    const migrated = { ...defaultCfg, ...old, version: STORE_VERSION, effort: old.effort || "High" } as AIConfig;
-    if (old.apiKey) {
-      localStorage.setItem("nf_api_key_backup", old.apiKey);
-      delete (migrated as any).apiKey;
+  if (!source.version) {
+    const migrated = { ...defaultCfg, ...source, version: STORE_VERSION, effort: source.effort || "High" } as AIConfig;
+    if (credentialMigrated) {
       migrated.apiKeyRef = "migrated-key";
+    }
+    delete (migrated as AIConfig & { apiKey?: string }).apiKey;
+    if (!legacyApiKey || credentialMigrated) {
+      localStorage.removeItem("nf_api_key_backup");
+      localStorage.setItem("nf_app_config", JSON.stringify(migrated));
     }
     return migrated;
   }
-  return { ...old, effort: old.effort || "High" } as AIConfig;
+  const migrated = { ...source, effort: source.effort || "High" } as AIConfig & { apiKey?: string };
+  delete migrated.apiKey;
+  if (credentialMigrated) {
+    migrated.apiKeyRef = "migrated-key";
+    localStorage.removeItem("nf_api_key_backup");
+    localStorage.setItem("nf_app_config", JSON.stringify(migrated));
+  }
+  return {
+    ...migrated,
+    shareWorkspaceContextWithCloud: migrated.shareWorkspaceContextWithCloud ?? false,
+  };
 }
 
 export async function getAppConfig(): Promise<AIConfig> {
@@ -63,6 +95,10 @@ export async function getAppConfig(): Promise<AIConfig> {
 }
 
 export async function saveAppConfig(config: AIConfig): Promise<void> {
+  const existing = safeJSONParse(localStorage.getItem("nf_app_config"));
+  if (existing?.apiKey || localStorage.getItem("nf_api_key_backup")) {
+    throw new Error("Provider credential migration must complete before settings can be saved.");
+  }
   config.version = STORE_VERSION;
   localStorage.setItem("nf_app_config", JSON.stringify(config));
 }

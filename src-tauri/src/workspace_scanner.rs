@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use ignore::gitignore::GitignoreBuilder;
 
 /// Default patterns to always ignore.
 const DEFAULT_IGNORES: &[&str] = &[
@@ -50,61 +50,138 @@ const DEFAULT_IGNORES: &[&str] = &[
 /// Maximum file size to scan in bytes (10 MB).
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
-/// Parses a `.gitignore`-style file and returns a set of patterns.
-fn parse_ignore_file(path: &Path) -> Vec<String> {
-    match fs::read_to_string(path) {
-        Ok(content) => content
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+fn is_sensitive_name(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    name == ".env"
+        || name.starts_with(".env.")
+        || matches!(
+            name.as_str(),
+            ".npmrc"
+                | ".pypirc"
+                | ".netrc"
+                | ".git-credentials"
+                | "credentials.json"
+                | "service-account.json"
+                | "service_account.json"
+                | "id_rsa"
+                | "id_dsa"
+                | "id_ecdsa"
+                | "id_ed25519"
+        )
+        || name.contains("credentials")
+        || name.contains("service-account")
+        || name.contains("service_account")
+        || name.starts_with("secret.")
+        || name.starts_with("secrets.")
+        || matches!(extension.as_str(), "pem" | "key" | "p12" | "pfx")
 }
 
-/// Checks whether a pattern matches a given path component.
-fn pattern_matches(pattern: &str, name: &str) -> bool {
-    // Exact match
-    if pattern == name { return true; }
-    // Glob match (simple: *.ext)
-    if pattern.starts_with("*.") {
-        let ext = &pattern[1..]; // ".ext"
-        return name.ends_with(ext);
-    }
-    // Directory slash match
-    if pattern.ends_with('/') {
-        let dir = &pattern[..pattern.len()-1];
-        return name == dir;
-    }
-    false
+fn has_sensitive_directory(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .as_str(),
+            ".ssh"
+                | ".gnupg"
+                | ".aws"
+                | ".azure"
+                | ".kube"
+                | ".docker"
+                | "secrets"
+                | ".secrets"
+                | "credentials"
+        )
+    })
 }
 
-    /// Checks whether a relative path matches any ignore pattern.
-fn is_ignored(relative: &Path, name: &str, patterns: &[String], base_ignores: &[&str]) -> bool {
-    let rel_str = relative.to_string_lossy();
-    let normalized = rel_str.replace('\\', "/");
+fn matches_default_ignore(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    DEFAULT_IGNORES.iter().any(|pattern| {
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            name.ends_with(suffix)
+        } else {
+            path.components()
+                .any(|component| component.as_os_str() == *pattern)
+        }
+    })
+}
 
-    // Check all parent directories against directory-specific patterns (e.g. "secrets/")
-    for ancestor in relative.ancestors().skip(1) {
-        if let Some(a_name) = ancestor.file_name().and_then(|n| n.to_str()) {
-            for p in patterns {
-                if pattern_matches(p, a_name) { return true; }
+pub struct WorkspacePathPolicy {
+    root: PathBuf,
+}
+
+impl WorkspacePathPolicy {
+    pub fn new(root: &Path) -> Result<Self, String> {
+        let policy = Self {
+            root: root.to_path_buf(),
+        };
+        policy.build_ignores_for(Path::new(""))?;
+        Ok(policy)
+    }
+
+    fn build_ignores_for(&self, relative: &Path) -> Result<ignore::gitignore::Gitignore, String> {
+        let mut builder = GitignoreBuilder::new(&self.root);
+        let mut ignore_files = vec![self.root.join(".gitignore")];
+        let mut parents = relative
+            .parent()
+            .into_iter()
+            .flat_map(Path::ancestors)
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .collect::<Vec<_>>();
+        parents.reverse();
+        ignore_files.extend(
+            parents
+                .into_iter()
+                .map(|parent| self.root.join(parent).join(".gitignore")),
+        );
+        ignore_files.push(self.root.join(".neuralforgeignore"));
+
+        for path in ignore_files {
+            if path.exists() {
+                if let Some(error) = builder.add(&path) {
+                    return Err(format!("Failed to parse {}: {error}", path.display()));
+                }
             }
         }
+        builder
+            .build()
+            .map_err(|error| format!("Failed to build workspace ignore policy: {error}"))
     }
 
-    // Check filename and full relative path
-    for p in patterns {
-        if pattern_matches(p, &normalized) || pattern_matches(p, name) {
+    pub fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
+        let relative = path.strip_prefix(&self.root).unwrap_or(path);
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+
+        if matches_default_ignore(relative) || has_sensitive_directory(relative) {
             return true;
         }
+        if !is_dir && (name == ".gitignore" || name == ".neuralforgeignore" || is_sensitive_name(relative)) {
+            return true;
+        }
+        self.build_ignores_for(relative)
+            .map(|ignores| {
+                ignores
+                    .matched_path_or_any_parents(relative, is_dir)
+                    .is_ignore()
+            })
+            .unwrap_or(true)
     }
-
-    for p in base_ignores {
-        if pattern_matches(p, name) || pattern_matches(p, &normalized) { return true; }
-    }
-
-    false
 }
 
 /// Result of a workspace scan.
@@ -120,25 +197,15 @@ pub fn scan_workspace(root: &Path) -> Result<ScanResult, String> {
     let mut files = Vec::new();
     let mut skipped = 0usize;
     let mut total_bytes = 0u64;
-
-    // Merge root-level ignore files
-    let mut patterns: Vec<String> = Vec::new();
-    for name in &[".gitignore", ".neuralforgeignore"] {
-        let p = root.join(name);
-        if p.exists() {
-            patterns.extend(parse_ignore_file(&p));
-        }
-    }
-
-    scan_dir(root, root, &patterns, &mut files, &mut skipped, &mut total_bytes)?;
+    let policy = WorkspacePathPolicy::new(root)?;
+    scan_dir(root, &policy, &mut files, &mut skipped, &mut total_bytes)?;
 
     Ok(ScanResult { files, skipped_count: skipped, total_bytes })
 }
 
 fn scan_dir(
-    root: &Path,
     dir: &Path,
-    patterns: &[String],
+    policy: &WorkspacePathPolicy,
     files: &mut Vec<PathBuf>,
     skipped: &mut usize,
     total_bytes: &mut u64,
@@ -148,17 +215,8 @@ fn scan_dir(
     for entry in entries {
         let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
         let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
 
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-
-        // Skip ignore/config files
-        if name == ".gitignore" || name == ".neuralforgeignore" {
-            *skipped += 1;
-            continue;
-        }
-
-        if is_ignored(relative, &name, patterns, DEFAULT_IGNORES) {
+        if policy.is_excluded(&path, path.is_dir()) {
             *skipped += 1;
             continue;
         }
@@ -169,7 +227,7 @@ fn scan_dir(
                 *skipped += 1;
                 continue;
             }
-            scan_dir(root, &path, patterns, files, skipped, total_bytes)?;
+            scan_dir(&path, policy, files, skipped, total_bytes)?;
         } else {
             let meta = entry.metadata().map_err(|e| format!("Metadata error: {}", e))?;
             if meta.len() > MAX_FILE_SIZE {
@@ -187,7 +245,6 @@ fn scan_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
     fn temp_dir() -> PathBuf {
         let mut d = std::env::temp_dir();
@@ -227,6 +284,66 @@ mod tests {
         let result = scan_workspace(&dir).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(result.files[0].ends_with("lib.rs"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn gitignore_negation_restores_non_secret_file() {
+        let dir = temp_dir();
+        fs::write(dir.join(".gitignore"), "*.txt\n!keep.txt\n").unwrap();
+        fs::write(dir.join("drop.txt"), "ignored").unwrap();
+        fs::write(dir.join("keep.txt"), "kept").unwrap();
+
+        let result = scan_workspace(&dir).unwrap();
+        assert_eq!(result.files, vec![dir.join("keep.txt")]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn secret_policy_cannot_be_negated() {
+        let dir = temp_dir();
+        fs::write(dir.join(".gitignore"), "!.env\n!private.pem\n").unwrap();
+        fs::write(dir.join(".env"), "NF_SENTINEL=secret").unwrap();
+        fs::write(dir.join("private.pem"), "NF_SENTINEL_PEM").unwrap();
+        fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
+
+        let result = scan_workspace(&dir).unwrap();
+        assert_eq!(result.files, vec![dir.join("main.rs")]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn respects_nested_gitignore_files() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("src").join("generated")).unwrap();
+        fs::write(
+            dir.join("src").join(".gitignore"),
+            "generated/\nprivate.txt\n",
+        )
+        .unwrap();
+        fs::write(dir.join("src").join("private.txt"), "ignored").unwrap();
+        fs::write(dir.join("src").join("keep.rs"), "pub fn keep() {}").unwrap();
+        fs::write(
+            dir.join("src").join("generated").join("generated.rs"),
+            "ignored",
+        )
+        .unwrap();
+
+        let result = scan_workspace(&dir).unwrap();
+        assert_eq!(result.files, vec![dir.join("src").join("keep.rs")]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sensitive_directories_cannot_be_negated() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join(".ssh")).unwrap();
+        fs::write(dir.join(".gitignore"), "!.ssh/id_custom\n").unwrap();
+        fs::write(dir.join(".ssh").join("id_custom"), "NF_PRIVATE_KEY").unwrap();
+        fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
+
+        let result = scan_workspace(&dir).unwrap();
+        assert_eq!(result.files, vec![dir.join("main.rs")]);
         fs::remove_dir_all(&dir).unwrap();
     }
 

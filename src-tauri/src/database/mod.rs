@@ -259,6 +259,8 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // promotion_requests, files.id from chunks, etc.) are guaranteed.
     conn.execute_batch("PRAGMA foreign_keys = ON")
         .map_err(|e| AppError::Provider(format!("failed to enable foreign keys: {e}")))?;
+    conn.query_row("PRAGMA secure_delete = ON", [], |_row| Ok(()))
+        .map_err(|e| AppError::Provider(format!("failed to enable secure deletion: {e}")))?;
     // v1.3.0 crash fix: automatic indexing now runs on a background thread
     // with its own Connection to this same file (see filesystem::open_workspace),
     // so two connections can be live at once. Without a busy timeout, a write
@@ -278,6 +280,13 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
         .map_err(|e| AppError::Provider(format!("failed to configure SQLite synchronous mode: {e}")))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
+    if let Err(error) = retry_pending_secure_scrub(&conn) {
+        tracing::warn!(
+            target: "database",
+            event = "pending_sensitive_storage_scrub_deferred",
+            error = %error
+        );
+    }
 
     // Additive columns for DBs created before these features existed. The
     // CREATE TABLE above already includes them for brand-new DBs, so these
@@ -308,6 +317,65 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     let _ = conn.execute("ALTER TABLE files ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0", []);
 
     Ok(conn)
+}
+
+const SECURE_SCRUB_PENDING_KEY: &str = "secure_scrub_pending";
+
+pub(crate) fn mark_secure_scrub_pending(conn: &Connection) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [SECURE_SCRUB_PENDING_KEY],
+    )
+    .map_err(|error| {
+        AppError::Provider(format!("failed to mark sensitive storage for scrubbing: {error}"))
+    })?;
+    Ok(())
+}
+
+fn secure_scrub_is_pending(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM settings WHERE key = ?1)",
+        [SECURE_SCRUB_PENDING_KEY],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
+pub(crate) fn retry_pending_secure_scrub(conn: &Connection) -> AppResult<()> {
+    if secure_scrub_is_pending(conn) {
+        secure_scrub_storage(conn)?;
+    }
+    Ok(())
+}
+
+fn checkpoint_sensitive_wal(conn: &Connection) -> AppResult<()> {
+    let busy = conn
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get::<_, i64>(0))
+        .map_err(|error| {
+            AppError::Provider(format!("failed to checkpoint sensitive SQLite data: {error}"))
+        })?;
+    if busy != 0 {
+        return Err(AppError::Provider(
+            "sensitive SQLite WAL checkpoint is busy; scrub remains pending".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn secure_scrub_storage(conn: &Connection) -> AppResult<()> {
+    checkpoint_sensitive_wal(conn)?;
+    conn.execute_batch("VACUUM")
+        .map_err(|error| AppError::Provider(format!("failed to vacuum sensitive SQLite data: {error}")))?;
+    checkpoint_sensitive_wal(conn)?;
+    conn.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        [SECURE_SCRUB_PENDING_KEY],
+    )
+    .map_err(|error| {
+        AppError::Provider(format!("failed to clear sensitive storage scrub marker: {error}"))
+    })?;
+    Ok(())
 }
 
 /// Sprint 7 hardening: runs `f` as ONE SQLite transaction. Multi-statement
@@ -390,11 +458,6 @@ pub fn index_workspace(
     Ok(stats)
 }
 
-#[tauri::command]
-pub fn search_workspace(db: State<DbState>, query: String) -> AppResult<Vec<search::SearchResult>> {
-    with_conn(&db, |conn| search::keyword_search(conn, &query, 20))
-}
-
 /// Cursor-style "find the file the user meant" without requiring an exact
 /// path. Used by both chat context-building and agent task creation - see
 /// resolver::resolve_file_reference for the ranking rules.
@@ -403,21 +466,25 @@ pub fn resolve_file_reference(
     state: State<crate::core::state::AppState>,
     db: State<DbState>,
     query: String,
-    workspace_generation: Option<u64>,
+    workspace_generation: u64,
 ) -> AppResult<resolver::ResolutionResult> {
-    if let Some(generation) = workspace_generation {
-        with_workspace_conn_at_generation(&state, &db, generation, |_root, conn| {
+    with_workspace_conn_at_generation(
+        &state,
+        &db,
+        workspace_generation,
+        |root, conn| {
+            let policy = crate::workspace_scanner::WorkspacePathPolicy::new(root)
+                .map_err(AppError::InvalidPath)?;
+            indexer::purge_excluded_rows(conn, root, &policy)?;
             resolver::resolve_file_reference(conn, &query)
-        })
-    } else {
-        with_conn(&db, |conn| resolver::resolve_file_reference(conn, &query))
-    }
+        },
+    )
 }
 
 // ── Session persistence commands (v1.3.0 Phase 2 - IPC layer only) ─────
 //
 // Thin wrappers only, matching this file's own index_workspace/
-// search_workspace/resolve_file_reference precedent immediately above:
+// index_workspace/resolve_file_reference precedent immediately above:
 // receive parameters, obtain a connection via with_conn, call a
 // database::sessions:: function, return its result. All real logic (row
 // mapping, malformed-row skipping, cascade-delete semantics) stays in

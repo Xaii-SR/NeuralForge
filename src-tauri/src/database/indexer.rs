@@ -10,10 +10,6 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
-const EXCLUDED_DIRS: &[&str] = &[
-    "node_modules", ".next", "out", "target", "dist", "logs", "models", ".git", ".neuralforge",
-];
-
 const MAX_FILE_BYTES: u64 = 1_000_000;
 const CHUNK_LINES: usize = 40;
 const CHUNK_OVERLAP: usize = 5;
@@ -106,10 +102,6 @@ fn hash_content(content: &str) -> String {
 fn is_probably_text(bytes: &[u8]) -> bool {
     let sample = &bytes[..bytes.len().min(4096)];
     !sample.contains(&0)
-}
-
-fn should_skip_dir(name: &str) -> bool {
-    EXCLUDED_DIRS.contains(&name)
 }
 
 fn classify_language(path: &Path) -> &'static str {
@@ -532,16 +524,65 @@ fn store_dependencies(conn: &Connection, deps: &[Dependency], ref_path: &str) {
     }
 }
 
+fn delete_indexed_file(conn: &Connection, rel_path: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![rel_path])
+        .map_err(|error| AppError::Provider(format!("failed to purge symbols for {rel_path}: {error}")))?;
+    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![rel_path])
+        .map_err(|error| AppError::Provider(format!("failed to purge dependencies for {rel_path}: {error}")))?;
+    conn.execute("DELETE FROM files WHERE path = ?1", params![rel_path])
+        .map_err(|error| AppError::Provider(format!("failed to purge indexed file {rel_path}: {error}")))?;
+    Ok(())
+}
+
+pub(crate) fn purge_excluded_rows(
+    conn: &Connection,
+    workspace_root: &Path,
+    policy: &crate::workspace_scanner::WorkspacePathPolicy,
+) -> AppResult<usize> {
+    crate::database::retry_pending_secure_scrub(conn)?;
+    let mut statement = conn
+        .prepare("SELECT path FROM files")
+        .map_err(|error| AppError::Provider(format!("failed to inspect indexed paths: {error}")))?;
+    let indexed_paths = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| AppError::Provider(format!("failed to read indexed paths: {error}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| AppError::Provider(format!("failed to collect indexed paths: {error}")))?;
+    drop(statement);
+
+    let excluded = indexed_paths
+        .into_iter()
+        .filter(|path| policy.is_excluded(&workspace_root.join(path), false))
+        .collect::<Vec<_>>();
+    if excluded.is_empty() {
+        return Ok(0);
+    }
+
+    crate::database::mark_secure_scrub_pending(conn)?;
+    crate::database::in_transaction(conn, |transaction| {
+        for path in &excluded {
+            delete_indexed_file(transaction, path)?;
+        }
+        Ok(())
+    })?;
+    crate::database::secure_scrub_storage(conn)?;
+    Ok(excluded.len())
+}
+
 pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<IndexStats> {
     let mut stats = IndexStats::default();
     stats.languages_detected = HashMap::new();
     stats.last_index_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let policy = crate::workspace_scanner::WorkspacePathPolicy::new(workspace_root)
+        .map_err(AppError::InvalidPath)?;
+    purge_excluded_rows(conn, workspace_root, &policy)?;
     let walker = WalkDir::new(workspace_root).into_iter().filter_entry(|entry| {
-        if entry.file_type().is_dir() { let name = entry.file_name().to_string_lossy(); return !should_skip_dir(&name); } true
+        !policy.is_excluded(entry.path(), entry.file_type().is_dir())
     });
     for entry in walker.filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() { continue; }
         let path = entry.path();
+        if policy.is_excluded(path, false) { continue; }
         let Ok(metadata) = entry.metadata() else { continue };
         let file_size = metadata.len();
         if file_size > MAX_FILE_BYTES { stats.files_skipped_size += 1; continue; }
@@ -597,6 +638,14 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
 pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &str) -> AppResult<IndexStats> {
     let mut stats = IndexStats::default();
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let policy = crate::workspace_scanner::WorkspacePathPolicy::new(workspace_root)
+        .map_err(AppError::InvalidPath)?;
+    if policy.is_excluded(&workspace_root.join(rel_path), false) {
+        crate::database::in_transaction(conn, |transaction| {
+            delete_indexed_file(transaction, rel_path)
+        })?;
+        return Ok(stats);
+    }
     conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![rel_path]).ok();
     conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![rel_path]).ok();
     let stale_file_id: Option<i64> = conn.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get(0)).ok();
@@ -838,5 +887,112 @@ export { type } from './types';"#;
         let file_ref_cnt: i64 = conn.query_row("SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'file_reference'", [], |r| r.get(0)).unwrap();
         assert_eq!(file_ref_cnt, 1);
         drop(conn); std::fs::remove_dir_all(&dir).ok();
+    }
+    #[test]
+    fn secret_files_never_enter_files_chunks_or_fts() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_secret_index_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "NF_ENV_SENTINEL=secret").unwrap();
+        std::fs::write(dir.join(".npmrc"), "//registry/:_authToken=NF_NPM_SENTINEL").unwrap();
+        std::fs::write(dir.join("private.pem"), "NF_PEM_SENTINEL").unwrap();
+        std::fs::write(dir.join("credentials.json"), r#"{"token":"NF_JSON_SENTINEL"}"#).unwrap();
+        std::fs::write(dir.join("main.rs"), "pub fn safe() {}").unwrap();
+
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+        index_workspace(&conn, &dir).unwrap();
+        let files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0)).unwrap();
+        let secret_chunks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE content LIKE '%NF_%_SENTINEL%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let secret_fts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'SENTINEL'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(files, 1);
+        assert_eq!(secret_chunks, 0);
+        assert_eq!(secret_fts, 0);
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn historical_secret_rows_are_purged_without_touching_sessions() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_secret_purge_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "NF_HISTORICAL_SENTINEL=secret").unwrap();
+        std::fs::write(dir.join("main.rs"), "pub fn safe() {}").unwrap();
+
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+        conn.execute(
+            "INSERT INTO files (path, content_hash, indexed_at) VALUES ('.env', 'legacy', 1)",
+            [],
+        )
+        .unwrap();
+        let file_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO chunks (file_id, path, start_line, end_line, content)
+             VALUES (?1, '.env', 1, 1, 'NF_HISTORICAL_SENTINEL')",
+            params![file_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, title, workspace_path, created_at, updated_at)
+             VALUES ('session-1', 'Keep me', ?1, 1, 1)",
+            params![dir.to_string_lossy()],
+        )
+        .unwrap();
+
+        index_workspace(&conn, &dir).unwrap();
+
+        let secret_files: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE path = '.env'", [], |row| row.get(0))
+            .unwrap();
+        let secret_fts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'HISTORICAL'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions WHERE id = 'session-1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(secret_files, 0);
+        assert_eq!(secret_fts, 0);
+        assert_eq!(sessions, 1);
+        let database_path: String = conn
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for path in [
+            std::path::PathBuf::from(&database_path),
+            std::path::PathBuf::from(format!("{database_path}-wal")),
+        ] {
+            if let Ok(bytes) = std::fs::read(&path) {
+                assert!(
+                    !bytes
+                        .windows(b"NF_HISTORICAL_SENTINEL".len())
+                        .any(|window| window == b"NF_HISTORICAL_SENTINEL"),
+                    "{} retained excluded content",
+                    path.display(),
+                );
+            }
+        }
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

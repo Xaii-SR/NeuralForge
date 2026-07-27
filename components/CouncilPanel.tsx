@@ -5,6 +5,7 @@ import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import CopyButton from "@/components/ui/CopyButton";
 import { runCouncilPass, type CouncilPassResult } from "@/lib/council";
+import { getAppConfig } from "@/lib/store";
 
 const VERDICT_BADGE: Record<string, string> = {
   Accept: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400",
@@ -46,7 +47,13 @@ export default function CouncilPanel({ workspaceGeneration }: { workspaceGenerat
     const generation = workspaceGeneration;
     try {
       const id = taskId.trim() || `council-${Date.now()}`;
-      const pass = await runCouncilPass(generation, id, objective.trim());
+      const config = await getAppConfig();
+      const pass = await runCouncilPass(
+        generation,
+        config.shareWorkspaceContextWithCloud,
+        id,
+        objective.trim(),
+      );
       if (workspaceGenerationRef.current !== generation) return;
       setResult(pass);
     } catch (e: any) {

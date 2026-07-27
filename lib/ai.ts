@@ -85,9 +85,16 @@ export function chatWithModel(
   requestId: string,
   model: string,
   messages: ChatMessage[],
-  workspaceGeneration?: number
+  workspaceGeneration?: number,
+  shareWorkspaceContext?: boolean,
 ): Promise<void> {
-  return invoke("chat_with_model", { requestId, model, messages, workspaceGeneration });
+  return invoke("chat_with_model", {
+    requestId,
+    model,
+    messages,
+    workspaceGeneration,
+    shareWorkspaceContext,
+  });
 }
 
 export interface IndexStats {
@@ -97,20 +104,8 @@ export interface IndexStats {
   chunks_created: number;
 }
 
-export interface SearchResult {
-  path: string;
-  start_line: number;
-  end_line: number;
-  content: string;
-  score: number;
-}
-
 export function indexWorkspace(): Promise<IndexStats> {
   return invoke("index_workspace");
-}
-
-export function searchWorkspace(query: string): Promise<SearchResult[]> {
-  return invoke("search_workspace", { query });
 }
 
 export function getContextForQuery(query: string): Promise<string> {
@@ -132,7 +127,7 @@ export interface ResolutionResult {
   candidates: FileCandidate[];
 }
 
-export function resolveFileReference(query: string, workspaceGeneration?: number): Promise<ResolutionResult> {
+export function resolveFileReference(query: string, workspaceGeneration: number): Promise<ResolutionResult> {
   return invoke("resolve_file_reference", { query, workspaceGeneration });
 }
 

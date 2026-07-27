@@ -1,6 +1,7 @@
 use crate::core::errors::AppResult;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::prelude::*;
@@ -51,8 +52,24 @@ pub fn get_recent_logs(app: AppHandle, lines: usize) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
-pub fn export_logs(app: AppHandle, destination: String) -> AppResult<()> {
+pub async fn export_logs(app: AppHandle) -> AppResult<Option<String>> {
     let path = log_file_path(&app)?;
-    std::fs::copy(path, destination)?;
-    Ok(())
+    let dialog_app = app.clone();
+    let destination = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .file()
+            .set_file_name("neuralforge-logs.txt")
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|error| crate::core::errors::AppError::InvalidPath(error.to_string()))?;
+    let Some(destination) = destination else {
+        return Ok(None);
+    };
+    let destination = destination
+        .into_path()
+        .map_err(|error| crate::core::errors::AppError::InvalidPath(error.to_string()))?;
+    std::fs::copy(path, &destination)?;
+    Ok(Some(destination.to_string_lossy().to_string()))
 }

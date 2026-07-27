@@ -341,14 +341,18 @@ pub async fn run_council_pass(
     core: &AgentCoreState,
     app_handle: AppHandle,
     workspace_generation: u64,
+    share_workspace_context: bool,
     task_id: &str,
     objective: &str,
 ) -> Result<CouncilPassResult, CouncilError> {
     // Fetched once per pass (not once per role) - Critic and Judge continue
     // to receive only the prior role(s)' real output plus the objective,
     // exactly as before this change.
-    let architect_context =
-        resolve_architect_context(&app_handle, workspace_generation, objective)?;
+    let architect_context = if share_workspace_context {
+        resolve_architect_context(&app_handle, workspace_generation, objective)?
+    } else {
+        None
+    };
     let role_app_handle = app_handle.clone();
 
     let result = run_council_pass_with(core, task_id, objective, move |role, system_prompt, user_prompt| {

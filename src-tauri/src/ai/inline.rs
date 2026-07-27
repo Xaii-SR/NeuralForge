@@ -1,5 +1,6 @@
 use crate::ai::completion;
 use crate::ai::health::HealthRegistry;
+use crate::ai::provider_registry::{self, AdapterKind};
 use crate::ai::provider_router;
 use crate::ai::providers::ollama;
 use crate::database::DbState;
@@ -16,10 +17,9 @@ pub struct InlineStreamPayload {
 /// Generates inline code edits based on a user's prompt and selected code.
 /// Streams real tokens via the `inline-stream` Tauri event, routed through
 /// `ai::provider_router::stream_chat` - the same unified dispatch every
-/// other AI feature uses. Model discovery still lists real installed Ollama
-/// models directly (that's this feature's own "which model" policy, not
-/// provider communication); `provider_router::resolve_provider_for_model`
-/// then decides which adapter actually serves that model id.
+/// other AI feature uses. Selected editor text is restricted to an enabled
+/// local Ollama provider; cloud transmission requires an explicit consented
+/// workflow and is not part of this command.
 #[tauri::command]
 pub async fn stream_inline_edit(
     app: AppHandle,
@@ -46,7 +46,13 @@ pub async fn stream_inline_edit(
 
     let config = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        provider_router::resolve_provider_for_model(guard.as_ref(), &model)
+        guard
+            .as_ref()
+            .map(provider_registry::load_providers)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|provider| provider.enabled && provider.adapter_kind() == AdapterKind::Ollama)
+            .unwrap_or_else(provider_registry::default_ollama_provider)
         // guard dropped here, before the streaming call's .await points -
         // a held MutexGuard can't cross an await (see provider_router's
         // doc comments on this exact constraint)

@@ -169,7 +169,7 @@ export default function ProviderManager() {
   async function handleTestConnection(config: ProviderConfig) {
     setTesting(true); setTestResult(null);
     try {
-      const ok = await providers.testProviderConnection(config.provider_type, config.base_url, config.api_key);
+      const ok = await providers.testProviderConnection(config.id);
       setTestResult(ok ? "✓ Connection successful" : "✗ Connection failed");
     } catch (e: any) { setTestResult(`✗ ${e}`); }
     setTesting(false);
@@ -178,7 +178,7 @@ export default function ProviderManager() {
   async function handleDiscoverModels(config: ProviderConfig) {
     setDiscovering(true); setTestResult(null);
     try {
-      const models = await providers.listOpenAiModels(config.base_url, config.api_key);
+      const models = await providers.listProviderModels(config.id);
       const modelNames = models.map((m) => m.id);
       setDiscoveredModels(modelNames);
       // Save discovered models to the provider config
@@ -240,7 +240,10 @@ export default function ProviderManager() {
                   <button onClick={() => handleToggle(cfg.id, cfg.enabled)} className={`h-3 w-3 rounded-full ${cfg.enabled ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-600"}`} title={cfg.enabled ? "Disable" : "Enable"} />
                   <div>
                     <div className="font-medium text-neutral-700 dark:text-neutral-200">{cfg.name}</div>
-                    <div className="text-[10px] text-neutral-400">{cfg.provider_type} · {cfg.base_url}</div>
+                    <div className="text-[10px] text-neutral-400">
+                      {cfg.provider_type} · {cfg.base_url}
+                      {cfg.provider_type !== "ollama" && ` · ${cfg.has_api_key ? "credential stored" : "no credential"}`}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-1">

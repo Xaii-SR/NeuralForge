@@ -30,6 +30,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [installedModels, setInstalledModels] = useState<string[]>([]);
   const [endpoint, setEndpoint] = useState("http://localhost:11434");
   const [effort, setEffort] = useState<"Light" | "Medium" | "High" | "Extra High">("High");
+  const [shareWorkspaceContextWithCloud, setShareWorkspaceContextWithCloud] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       setSelectedModel(config.model);
       setEndpoint(config.endpoint);
       setEffort(config.effort);
+      setShareWorkspaceContextWithCloud(config.shareWorkspaceContextWithCloud);
     });
   }, []);
 
@@ -98,6 +100,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
       model: selectedModel,
       endpoint,
       effort,
+      shareWorkspaceContextWithCloud,
     });
 
     window.dispatchEvent(new Event("nf_settings_updated"));
@@ -157,6 +160,20 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="mb-2 text-[11px] text-neutral-400 dark:text-neutral-500">
               Any model added here becomes selectable across the app; chat automatically routes to whichever provider owns the model. Ollama remains the default when a model isn&apos;t found below.
             </div>
+            <label className="mb-3 flex items-start gap-2 rounded border border-neutral-200 p-2.5 dark:border-neutral-700">
+              <input
+                type="checkbox"
+                checked={shareWorkspaceContextWithCloud}
+                onChange={(event) => setShareWorkspaceContextWithCloud(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="block text-xs font-medium">Share workspace context with cloud providers</span>
+                <span className="block text-[11px] text-neutral-400 dark:text-neutral-500">
+                  Off by default. When enabled, retrieved code and project memory may be sent to the selected remote provider.
+                </span>
+              </span>
+            </label>
             <ProviderManager />
           </div>
           <div className="mb-5"><div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Response Cache</div><div className="flex items-center gap-2"><button onClick={handleClearCache} className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">Clear Cache</button>{cacheStatus && <span className="text-xs text-neutral-500">{cacheStatus}</span>}</div></div>

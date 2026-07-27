@@ -1,4 +1,6 @@
+use crate::core::state::AppState;
 use std::path::Path;
+use tauri::State;
 
 /// Sanitizes a `name` parameter for safe filesystem usage.
 /// Rejects or strips `..`, `/`, `\`, and non-alphanumeric characters.
@@ -91,8 +93,14 @@ pub async fn fetch_and_cache_doc(name: String, url: String) -> Result<String, St
 
 /// Returns a list of all cached documentation names (without .md extension).
 #[tauri::command]
-pub fn list_cached_docs() -> Result<Vec<String>, String> {
-    let docs_dir = Path::new(".neuralforge").join("docs");
+pub fn list_cached_docs(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let root = state
+        .workspace_root
+        .lock()
+        .map_err(|_| "workspace state lock poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+    let docs_dir = root.join(".neuralforge").join("docs");
     if !docs_dir.exists() {
         return Ok(vec![]);
     }
@@ -113,9 +121,15 @@ pub fn list_cached_docs() -> Result<Vec<String>, String> {
 
 /// Reads the full Markdown content of a cached documentation file.
 #[tauri::command]
-pub fn read_cached_doc(name: String) -> Result<String, String> {
+pub fn read_cached_doc(state: State<'_, AppState>, name: String) -> Result<String, String> {
     let safe_name = sanitize_name(&name)?;
-    let file_path = Path::new(".neuralforge").join("docs").join(format!("{safe_name}.md"));
+    let root = state
+        .workspace_root
+        .lock()
+        .map_err(|_| "workspace state lock poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "no workspace open".to_string())?;
+    let file_path = root.join(".neuralforge").join("docs").join(format!("{safe_name}.md"));
     std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read doc '{}': {}", safe_name, e))
 }
