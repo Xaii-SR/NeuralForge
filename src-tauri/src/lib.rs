@@ -118,6 +118,7 @@ pub fn run() {
       database::get_session_messages,
       database::append_session_message,
       database::update_session_metadata,
+      database::append_session_message_with_metadata,
       database::delete_session,
       governance::create_requirement,
       governance::update_requirement,

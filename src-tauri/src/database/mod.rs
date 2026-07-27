@@ -585,6 +585,22 @@ pub fn update_session_metadata(
     })
 }
 
+/// NF-SESSION-001: atomic append + metadata update.
+#[tauri::command]
+pub fn append_session_message_with_metadata(
+    state: State<crate::core::state::AppState>,
+    db: State<DbState>,
+    workspace_generation: u64,
+    session_id: String,
+    role: String,
+    content: String,
+    status: String,
+) -> AppResult<()> {
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |_root, conn| {
+        sessions::append_message_with_metadata(conn, &session_id, &role, &content, &status)
+    })
+}
+
 #[tauri::command]
 pub fn delete_session(
     state: State<crate::core::state::AppState>,

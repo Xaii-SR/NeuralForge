@@ -149,6 +149,36 @@ pub fn append_message(conn: &Connection, session_id: &str, role: &str, content: 
     Ok(())
 }
 
+/// NF-SESSION-001: atomically appends a message and updates the parent
+/// session's metadata in a single transaction. This prevents the race
+/// where the assistant message is written but metadata update fails,
+/// leaving history incomplete.
+pub fn append_message_with_metadata(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    status: &str,
+) -> AppResult<()> {
+    let preview_len = 200usize;
+    let preview = content.chars().take(preview_len).collect::<String>();
+    let ts = now_secs();
+
+    conn.execute(
+        "INSERT INTO session_messages (session_id, role, content, status, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![session_id, role, content, status, ts],
+    )
+    .map_err(|e| AppError::Provider(format!("failed to append message: {e}")))?;
+
+    conn.execute(
+        "UPDATE sessions SET last_message_preview = ?1, updated_at = ?2 WHERE id = ?3",
+        params![preview, ts, session_id],
+    )
+    .map_err(|e| AppError::Provider(format!("failed to update session metadata: {e}")))?;
+
+    Ok(())
+}
+
 /// Lists every message for `session_id`, oldest first (chronological
 /// conversation order).
 pub fn get_session_messages(conn: &Connection, session_id: &str) -> AppResult<Vec<SessionMessage>> {
@@ -328,5 +358,26 @@ mod tests {
         // operation: "make sure it's gone" succeeds whether or not it
         // existed to begin with.
         assert!(delete_session(&conn, "does-not-exist").is_ok());
+    }
+
+    /// NF-SESSION-001: append_message_with_metadata is atomic - both message
+    /// and metadata update succeed or both fail.
+    #[test]
+    fn append_message_with_metadata_updates_both_tables() {
+        let conn = temp_conn();
+        let session = create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
+        let session_id = session.id.clone();
+
+        append_message_with_metadata(&conn, &session_id, "assistant", "Hello world!", "complete").unwrap();
+
+        // Message exists.
+        let msgs = get_session_messages(&conn, &session_id).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "Hello world!");
+        assert_eq!(msgs[0].role, "assistant");
+
+        // Metadata updated: preview is trimmed to 200 chars.
+        let sessions = list_sessions(&conn, "/ws").unwrap();
+        assert_eq!(sessions[0].last_message_preview, Some("Hello world!".to_string()));
     }
 }

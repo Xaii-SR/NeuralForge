@@ -240,6 +240,17 @@ export function appendSessionMessage(
   return invoke("append_session_message", { workspaceGeneration, sessionId, role, content, status });
 }
 
+/// NF-SESSION-001: atomic append + metadata update.
+export function appendSessionMessageWithMetadata(
+  workspaceGeneration: number,
+  sessionId: string,
+  role: string,
+  content: string,
+  status: string
+): Promise<void> {
+  return invoke("append_session_message_with_metadata", { workspaceGeneration, sessionId, role, content, status });
+}
+
 export function updateSessionMetadata(
   workspaceGeneration: number,
   sessionId: string,

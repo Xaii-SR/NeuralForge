@@ -209,7 +209,7 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
       if (payload.status === "cancelled") setError("Generation cancelled.");
       if (payload.status === "success" && sid && finalContent && !persistedRequestIds.current.has(finishedRequestId)) {
         persistedRequestIds.current.add(finishedRequestId);
-        ai.appendSessionMessage(generation, sid, "assistant", finalContent, "complete").catch((e) => {
+        ai.appendSessionMessageWithMetadata(generation, sid, "assistant", finalContent, "complete").catch((e) => {
           console.error("Failed to persist assistant message", e);
           setError((prev) => prev ?? `Response wasn't saved: ${e}`);
         });
