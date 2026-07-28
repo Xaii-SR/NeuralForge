@@ -504,24 +504,28 @@ fn chunk_lines(content: &str) -> Vec<(usize, usize, String)> {
     chunks
 }
 
-fn store_symbols(conn: &Connection, symbols: &[Symbol], ref_path: &str) {
-    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![ref_path]).ok();
+fn store_symbols(conn: &Connection, symbols: &[Symbol], ref_path: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![ref_path])
+        .map_err(|e| AppError::Provider(format!("failed to clear stale symbols for {ref_path}: {e}")))?;
     for sym in symbols {
-        if let Err(e) = conn.execute(
+        conn.execute(
             "INSERT INTO symbols (file_path, language, module_path, qualified_name, name, kind, start_line, end_line, visibility, signature, documentation, symbol_hash, import_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![sym.file_path, sym.language, sym.module_path, sym.qualified_name, sym.name, sym.kind, sym.start_line, sym.end_line, sym.visibility, sym.signature, sym.documentation, sym.symbol_hash, sym.import_source],
-        ) { tracing::warn!(target: "database", event = "symbol_insert_failed", error = %e, symbol = %sym.name); }
+        ).map_err(|e| AppError::Provider(format!("failed to insert symbol {} for {ref_path}: {e}", sym.name)))?;
     }
+    Ok(())
 }
 
-fn store_dependencies(conn: &Connection, deps: &[Dependency], ref_path: &str) {
-    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![ref_path]).ok();
+fn store_dependencies(conn: &Connection, deps: &[Dependency], ref_path: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![ref_path])
+        .map_err(|e| AppError::Provider(format!("failed to clear stale dependencies for {ref_path}: {e}")))?;
     for dep in deps {
-        if let Err(e) = conn.execute(
+        conn.execute(
             "INSERT INTO dependencies (source_file, target_file, source_symbol, target_symbol, dependency_type, import_source, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![dep.source_file, dep.target_file, dep.source_symbol, dep.target_symbol, dep.dependency_type, dep.import_source, dep.created_at],
-        ) { tracing::warn!(target: "database", event = "dependency_insert_failed", error = %e, import = %dep.import_source.as_deref().unwrap_or("")); }
+        ).map_err(|e| AppError::Provider(format!("failed to insert dependency {} for {ref_path}: {e}", dep.import_source.as_deref().unwrap_or(""))))?;
     }
+    Ok(())
 }
 
 fn delete_indexed_file(conn: &Connection, rel_path: &str) -> AppResult<()> {
@@ -608,29 +612,56 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
         let language = classify_language(path);
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         let line_count = content.lines().count() as i64;
-        *stats.languages_detected.entry(language.to_string()).or_insert(0) += 1;
-        stats.total_bytes_indexed += file_size;
         let symbols = extract_symbols(&content, &rel_path, language);
-        stats.symbols_extracted += symbols.len() as u64;
         let deps = extract_dependencies(&content, &rel_path, language, now);
-        stats.dependencies_extracted += deps.len() as u64;
-        let file_id: i64 = if let Some(id) = conn.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
-            conn.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE id = ?7",
-                params![hash, now, file_size as i64, modified_at, language, line_count, id]).ok();
-            conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![id]).ok(); id
-        } else {
-            conn.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![rel_path, hash, now, file_size as i64, modified_at, language, line_count]).ok();
-            conn.last_insert_rowid()
-        };
-        for (start_line, end_line, text) in chunk_lines(&content) {
-            conn.execute("INSERT INTO chunks (file_id, path, start_line, end_line, content) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![file_id, rel_path, start_line as i64, end_line as i64, text]).ok();
-            stats.chunks_created += 1;
+        let chunks = chunk_lines(&content);
+
+        // NF-IDX-001: a file's metadata row, chunks, symbols, and dependencies
+        // must commit together or not at all. Previously each write used
+        // `.ok()` and discarded errors, so a lock/disk/insert failure partway
+        // through could leave a fresh content_hash paired with stale or
+        // missing chunks/symbols - and a later unchanged-hash check would
+        // skip repairing it forever.
+        let write_result: AppResult<()> = crate::database::in_transaction(conn, |tx| {
+            let file_id: i64 = if let Some(id) = tx.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
+                tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![id])
+                    .map_err(|e| AppError::Provider(format!("failed to clear stale chunks for {rel_path}: {e}")))?;
+                id
+            } else {
+                tx.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![rel_path, hash, now, file_size as i64, modified_at, language, line_count])
+                    .map_err(|e| AppError::Provider(format!("failed to insert file row for {rel_path}: {e}")))?;
+                tx.last_insert_rowid()
+            };
+            for (start_line, end_line, text) in &chunks {
+                tx.execute("INSERT INTO chunks (file_id, path, start_line, end_line, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![file_id, rel_path, *start_line as i64, *end_line as i64, text])
+                    .map_err(|e| AppError::Provider(format!("failed to insert chunk for {rel_path}: {e}")))?;
+            }
+            store_symbols(tx, &symbols, &rel_path)?;
+            store_dependencies(tx, &deps, &rel_path)?;
+            // Hash is written last so a mid-transaction failure (rolled back
+            // in full) can never leave a fresh hash paired with stale content.
+            tx.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE path = ?7",
+                params![hash, now, file_size as i64, modified_at, language, line_count, rel_path])
+                .map_err(|e| AppError::Provider(format!("failed to finalize file row for {rel_path}: {e}")))?;
+            Ok(())
+        });
+
+        match write_result {
+            Ok(()) => {
+                *stats.languages_detected.entry(language.to_string()).or_insert(0) += 1;
+                stats.total_bytes_indexed += file_size;
+                stats.symbols_extracted += symbols.len() as u64;
+                stats.dependencies_extracted += deps.len() as u64;
+                stats.chunks_created += chunks.len() as u64;
+                stats.files_indexed += 1;
+            }
+            Err(e) => {
+                tracing::warn!(target: "database", event = "file_index_transaction_failed", error = %e, file = %rel_path);
+                stats.files_failed += 1;
+            }
         }
-        store_symbols(conn, &symbols, &rel_path);
-        store_dependencies(conn, &deps, &rel_path);
-        stats.files_indexed += 1;
     }
     Ok(stats)
 }
@@ -646,42 +677,72 @@ pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &
         })?;
         return Ok(stats);
     }
-    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![rel_path]).ok();
-    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![rel_path]).ok();
-    let stale_file_id: Option<i64> = conn.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get(0)).ok();
-    if let Some(file_id) = stale_file_id { conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id]).ok(); }
     let full_path = workspace_root.join(rel_path);
     let Ok(bytes) = std::fs::read(&full_path) else {
-        conn.execute("DELETE FROM files WHERE path = ?1", params![rel_path]).ok(); stats.files_failed += 1; return Ok(stats);
+        crate::database::in_transaction(conn, |tx| delete_indexed_file(tx, rel_path))?;
+        stats.files_failed += 1;
+        return Ok(stats);
     };
-    if !is_probably_text(&bytes) { stats.files_skipped_binary += 1; return Ok(stats); }
-    let Ok(content) = String::from_utf8(bytes) else { stats.files_failed += 1; return Ok(stats); };
+    if !is_probably_text(&bytes) {
+        crate::database::in_transaction(conn, |tx| delete_indexed_file(tx, rel_path))?;
+        stats.files_skipped_binary += 1;
+        return Ok(stats);
+    }
+    let Ok(content) = String::from_utf8(bytes) else {
+        crate::database::in_transaction(conn, |tx| delete_indexed_file(tx, rel_path))?;
+        stats.files_failed += 1;
+        return Ok(stats);
+    };
     let hash = hash_content(&content);
     let language = classify_language(&full_path);
     let line_count = content.lines().count() as i64;
     let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
     let modified_at = std::fs::metadata(&full_path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
-    stats.languages_detected.insert(language.to_string(), 1);
     let symbols = extract_symbols(&content, rel_path, language);
     let deps = extract_dependencies(&content, rel_path, language, now);
-    stats.symbols_extracted = symbols.len() as u64;
-    stats.dependencies_extracted = deps.len() as u64;
-    let file_id: i64 = if let Some(id) = conn.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
-        conn.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE id = ?7",
-            params![hash, now, file_size as i64, modified_at, language, line_count, id]).ok(); id
-    } else {
-        conn.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![rel_path, hash, now, file_size as i64, modified_at, language, line_count]).ok();
-        conn.last_insert_rowid()
-    };
-    for (start_line, end_line, text) in chunk_lines(&content) {
-        conn.execute("INSERT INTO chunks (file_id, path, start_line, end_line, content) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![file_id, rel_path, start_line as i64, end_line as i64, text]).ok();
-        stats.chunks_created += 1;
+    let chunks = chunk_lines(&content);
+
+    // NF-IDX-001: same atomicity contract as index_workspace - the stale-row
+    // purge and the fresh metadata/chunks/symbols/dependencies write happen
+    // in one transaction, so a mid-write failure never leaves this file
+    // half updated (e.g. purged symbols with a still-fresh content_hash).
+    let write_result: AppResult<()> = crate::database::in_transaction(conn, |tx| {
+        tx.execute("DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?1)", params![rel_path])
+            .map_err(|e| AppError::Provider(format!("failed to clear stale chunks for {rel_path}: {e}")))?;
+        let file_id: i64 = if let Some(id) = tx.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
+            tx.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE id = ?7",
+                params![hash, now, file_size as i64, modified_at, language, line_count, id])
+                .map_err(|e| AppError::Provider(format!("failed to update file row for {rel_path}: {e}")))?;
+            id
+        } else {
+            tx.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![rel_path, hash, now, file_size as i64, modified_at, language, line_count])
+                .map_err(|e| AppError::Provider(format!("failed to insert file row for {rel_path}: {e}")))?;
+            tx.last_insert_rowid()
+        };
+        for (start_line, end_line, text) in &chunks {
+            tx.execute("INSERT INTO chunks (file_id, path, start_line, end_line, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![file_id, rel_path, *start_line as i64, *end_line as i64, text])
+                .map_err(|e| AppError::Provider(format!("failed to insert chunk for {rel_path}: {e}")))?;
+        }
+        store_symbols(tx, &symbols, rel_path)?;
+        store_dependencies(tx, &deps, rel_path)?;
+        Ok(())
+    });
+
+    match write_result {
+        Ok(()) => {
+            stats.languages_detected.insert(language.to_string(), 1);
+            stats.symbols_extracted = symbols.len() as u64;
+            stats.dependencies_extracted = deps.len() as u64;
+            stats.chunks_created = chunks.len() as u64;
+            stats.files_indexed = 1;
+        }
+        Err(e) => {
+            tracing::warn!(target: "database", event = "reindex_single_file_transaction_failed", error = %e, file = %rel_path);
+            stats.files_failed += 1;
+        }
     }
-    store_symbols(conn, &symbols, rel_path);
-    store_dependencies(conn, &deps, rel_path);
-    stats.files_indexed = 1;
     Ok(stats)
 }
 
@@ -992,6 +1053,117 @@ export { type } from './types';"#;
                 );
             }
         }
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn index_workspace_rolls_back_all_writes_when_symbol_insert_fails() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_idx_rollback_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.rs"), "pub fn a() -> i32 { 1 }\n").unwrap();
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+        // Sabotage the symbols table so the write transaction fails after
+        // the files row and chunks have already been written inside it.
+        conn.execute("ALTER TABLE symbols RENAME TO symbols_sabotaged", [])
+            .unwrap();
+
+        let stats = index_workspace(&conn, &dir).unwrap();
+        assert_eq!(stats.files_indexed, 0, "the transaction must not count as indexed");
+        assert_eq!(stats.files_failed, 1);
+
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(file_count, 0, "files row must roll back with the rest of the transaction");
+        let chunk_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(chunk_count, 0, "chunks written earlier in the same transaction must roll back too");
+
+        // Repair and retry: the file must be fully (not partially) indexed.
+        conn.execute("ALTER TABLE symbols_sabotaged RENAME TO symbols", [])
+            .unwrap();
+        let stats2 = index_workspace(&conn, &dir).unwrap();
+        assert_eq!(stats2.files_indexed, 1, "retry must fully repair the file");
+        assert_eq!(stats2.files_failed, 0);
+        let file_count2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap();
+        let symbol_count2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(file_count2, 1);
+        assert_eq!(symbol_count2, 1);
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn index_workspace_rolls_back_all_writes_when_chunk_insert_fails() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_idx_chunk_rollback_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Content long enough to produce more than one chunk.
+        let content = (1..=100).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        std::fs::write(dir.join("notes.txt"), &content).unwrap();
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+        conn.execute("ALTER TABLE chunks RENAME TO chunks_sabotaged", [])
+            .unwrap();
+
+        let stats = index_workspace(&conn, &dir).unwrap();
+        assert_eq!(stats.files_indexed, 0);
+        assert_eq!(stats.files_failed, 1);
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(file_count, 0, "the new files row must not survive a failed chunk insert");
+
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reindex_single_file_rolls_back_all_writes_on_symbol_insert_failure() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        dir.push(format!("neuralforge_reindex_rollback_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.rs"), "pub fn a() -> i32 { 1 }\n").unwrap();
+        let conn = crate::database::open_for_workspace(&dir).unwrap();
+        assert_eq!(index_workspace(&conn, &dir).unwrap().files_indexed, 1);
+
+        // Change the file, then sabotage symbols so the reindex write fails.
+        std::fs::write(dir.join("lib.rs"), "pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n").unwrap();
+        conn.execute("ALTER TABLE symbols RENAME TO symbols_sabotaged", [])
+            .unwrap();
+
+        let stats = reindex_single_file(&conn, &dir, "lib.rs").unwrap();
+        assert_eq!(stats.files_indexed, 0);
+        assert_eq!(stats.files_failed, 1);
+
+        // The pre-existing row from the first successful index must be
+        // untouched - a failed reindex must not corrupt the last-known-good
+        // state.
+        let hash: String = conn
+            .query_row("SELECT content_hash FROM files WHERE path = 'lib.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_ne!(hash, hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n"),
+            "content_hash must not advance to the new content when its write rolled back");
+
+        conn.execute("ALTER TABLE symbols_sabotaged RENAME TO symbols", [])
+            .unwrap();
+        let stats2 = reindex_single_file(&conn, &dir, "lib.rs").unwrap();
+        assert_eq!(stats2.files_indexed, 1);
+        let hash2: String = conn
+            .query_row("SELECT content_hash FROM files WHERE path = 'lib.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hash2, hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n"));
+
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
