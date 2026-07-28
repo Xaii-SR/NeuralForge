@@ -1,0 +1,2 @@
+2705d71ca425e1781ebff4acef0206ff7ba215f9211087d1d6bce0a6a4135652 *msi/neuralforge_1.4.4_x64_en-US.msi
+4cfb94def51acc9877b688324406716f57f2e3f27146f4422e3d89b6825b58fa *nsis/neuralforge_1.4.4_x64-setup.exe

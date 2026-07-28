@@ -1,49 +1,49 @@
-# NeuralForge v1.4.2
+# NeuralForge v1.4.4
 
 A local-first, offline-capable, AI-native desktop IDE. Tauri 2 (Rust) backend, Next.js 16 frontend, powered by local (Ollama) and configurable cloud AI providers.
 
-This release packages the validated stabilization and workflow improvements currently present in the repository, with a focus on database reliability, workspace context handling, provider model selection, and Ollama usability.
+v1.4.4 is a **maintenance and stabilization release**. It contains security, data-integrity, lifecycle, and correctness repairs verified against the repository. It does **not** contain the planned provider-adapter architecture rewrite, the searchable provider/model picker, or the resizable Chat/Terminal redesign — those remain deferred future work.
 
-## What's new in v1.4.2
+## What's fixed in v1.4.4
 
-**Stability and Database Reliability**
-- Enabled the correct SQLite concurrency configuration for the application's shared and background connection pattern.
-- Corrected WAL initialization so journal mode is read correctly instead of being executed like a rowless statement.
-- Preserved the existing database schema while improving concurrent session and indexing reliability.
+**Ghost Text (inline AI completion) now works**
+- Repaired a broken IPC contract: the frontend previously sent `{prefix, suffix}` while the Rust command required `{content, cursorLine, cursorColumn}`, so every ghost-text request failed argument deserialization and no suggestion ever rendered in the shipped build. The editor now threads real Monaco document content and cursor position through to the backend.
+- Fixed an unmount guard that was shadowed by a local variable, so streamed events can no longer update an unmounted editor.
+- Added real backend request cancellation: a superseding request cancels the previous one through the shared request registry, and unmount cancels any in-flight completion. Exactly one terminal outcome occurs per request and no registry entry leaks.
 
-**Workspace and Indexing Reliability**
-- Improved workspace indexing for files modified more than once within the same filesystem timestamp interval.
-- Added content-hash verification so same-second file changes are not incorrectly treated as unchanged.
-- Preserved the existing workspace scoping behavior for sessions and reopened workspaces.
+**Transactional indexing (data integrity)**
+- Per-file index writes (metadata, chunks, symbols, dependencies) are now wrapped in a single database transaction with error propagation instead of independent, error-discarding writes. A failure partway through a file now rolls back completely instead of committing a fresh content hash over stale chunks — which previously created silent, sticky index corruption.
+- Regression tests sabotage a table mid-write to force a real failure through the production path and assert zero partial rows survive and that a retry fully recovers the file.
 
-**File and Folder Context**
-- Added explicit file and folder selection behavior in the explorer.
-- Connected the selected file or folder to the active chat context.
-- Preserved the existing file-opening workflow while making context selection available.
+**Filesystem watcher lifecycle**
+- Wired a real OS filesystem watcher (`notify`) to the indexer. It watches the active workspace recursively, debounces events, and dispatches changed paths through the same hardened transactional reindex path. At most one watcher is ever active, scoped to one workspace generation; replacing or closing a workspace stops the OS watch and joins its thread within one poll interval (no indefinite hang).
 
-**Provider and Model Improvements**
-- Added model selection to the provider configuration flow.
-- Populated model presets for supported non-Ollama providers.
-- Ensured saved Ollama model selections are honored instead of always defaulting to the first discovered model.
+**Database migration hardening**
+- Additive-column migrations now inspect `PRAGMA table_info` and only issue an `ALTER` when a column is genuinely missing, so a real DDL failure (disk/permissions/corruption) propagates instead of being silently discarded alongside the expected "duplicate column" case.
+- Added deterministic tests, including a genuinely pre-migration schema upgrade and two two-connection contention tests proving transient contention is absorbed by the busy-timeout retry and that contention outlasting the timeout returns a bounded, actionable error (not a hang, not a false success).
 
-**Ollama Improvements**
-- Added an Ollama model installation workflow from the provider UI.
-- Added installed-model state handling to avoid duplicate or confusing install actions.
-- Preserved the existing Ollama discovery architecture.
+**Session and agent correctness**
+- Session message persistence and metadata updates are atomic.
+- The governed agent checks file state before writing to prevent stale-file overwrite.
 
-**Interface Improvements**
-- Increased the default chat pane width.
-- Corrected provider guidance placement and related form details.
+**Tooling and dependencies**
+- `npm run lint` is now a real ESLint gate instead of a no-op.
+- Resolved the `dompurify` sanitizer-bypass advisory (3.4.11 → 3.4.12) and an eslint-chain DoS advisory via a non-breaking `npm audit fix`.
+
+## Known limitations
+
+- `npm run lint` surfaces 37 pre-existing React-hooks-rule violations across unrelated hooks. These are static-analysis findings on existing patterns, not runtime defects; they are tracked for a dedicated follow-up pass and do not affect the shipped build.
+- 12 `npm audit` high-severity advisories remain in Next.js's server runtime (`postcss`/`sharp` chain). This app ships as a static export (`output: "export"`, `images.unoptimized: true`) with no Next.js server process in the Tauri bundle, so that attack surface is not present in what ships. No non-breaking upstream fix is available.
+- Frontend consumption of the new `workspace-file-index-updated` event (explorer refresh / dirty-buffer conflict UI) is not yet implemented — the backend emits the event; the UI listener is deferred.
 
 ## Validation
 
-- `npx tsc --noEmit`: passed
-- `npm run build`: passed
-- `cargo check`: passed
-- `cargo test`: passed, 376 passed / 0 failed / 19 ignored
-
-Existing legacy Rust warnings remain in the codebase and were unchanged by this release.
+- Rust: `cargo test` — 441 passed, 0 failed, 19 ignored.
+- Rust: `cargo clippy --all-targets --all-features` — no errors.
+- Frontend: `npx tsc --noEmit` — clean.
+- Frontend: `npm run build` — static export succeeds.
+- Windows installers (MSI + NSIS) built and packaged.
 
 ## Installation
 
-See [INSTALLATION.md](INSTALLATION.md) for full setup. Windows x64 build artifacts are produced through the repository's tag-driven GitHub Actions release workflow.
+See [INSTALLATION.md](INSTALLATION.md) for full setup. Windows x64 installers (MSI and NSIS) are attached to this release.
