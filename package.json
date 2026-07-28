@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "test:frontend": "node --test tests/*.test.mjs",
-    "lint": "next lint",
+    "lint": "eslint .",
     "tauri": "tauri",
     "setup": "node scripts/setup.mjs"
   },
@@ -26,6 +26,8 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.19",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.10",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.5.2"
