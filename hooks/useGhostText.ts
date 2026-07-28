@@ -13,10 +13,12 @@ export interface GhostTextState {
   text: string;
   requestId: string | null;
   active: boolean;
+  filePath: string | null;
+  workspaceGeneration: number;
 }
 
 export function useGhostText() {
-  const [ghost, setGhost] = useState<GhostTextState>({ text: "", requestId: null, active: false });
+  const [ghost, setGhost] = useState<GhostTextState>({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unlistenRef = useRef<(() => void) | null>(null);
@@ -31,22 +33,22 @@ export function useGhostText() {
       const { token, done, request_id } = event.payload;
       if (request_id !== activeRequestIdRef.current) return;
       setGhost((prev) => {
-        if (prev.requestId !== request_id) return { text: token, requestId: request_id, active: !done };
-        if (done) return { ...prev, active: true };
+        if (prev.requestId !== request_id) return { text: token, requestId: request_id, active: !done, filePath: prev.filePath, workspaceGeneration: prev.workspaceGeneration };
+        if (done) return { ...prev, active: false };
         return { ...prev, text: prev.text + token };
       });
     }).then((fn) => { if (disposed) fn(); else unlistenRef.current = fn; });
-    return () => { disposed = true; unlistenRef.current?.(); };
+    return () => { let disposed = true; unlistenRef.current?.(); };
   }, []);
 
   // Debounced FIM ghost text trigger (300ms)
-  const triggerGhostText = useCallback((prefix: string, suffix: string, path: string) => {
+  const triggerGhostText = useCallback((prefix: string, suffix: string, path: string, workspaceGeneration: number) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       const requestId = crypto.randomUUID();
       activeRequestIdRef.current = requestId;
       activeFilePathRef.current = path;
-      setGhost({ text: "", requestId, active: true });
+      setGhost({ text: "", requestId, active: true, filePath: path, workspaceGeneration });
       setSuggestion(null);
       try {
         await invoke("request_async_completion", {
@@ -60,7 +62,7 @@ export function useGhostText() {
         });
       } catch {
         if (activeRequestIdRef.current === requestId) {
-          setGhost({ text: "", requestId: null, active: false });
+          setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
           setSuggestion(null);
         }
       } finally {
@@ -76,18 +78,18 @@ export function useGhostText() {
     activeRequestIdRef.current = null;
     activeFilePathRef.current = null;
     setSuggestion(null);
-    setGhost({ text: "", requestId: null, active: false });
+    setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
   }, []);
 
   const acceptGhost = useCallback(() => {
     const text = ghost.text;
-    setGhost({ text: "", requestId: null, active: false });
+    setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
     return text;
   }, [ghost.text]);
 
   const dismissGhost = useCallback(() => {
-    setGhost({ text: "", requestId: null, active: false });
+    setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
   }, []);
 
-  return { ghost, suggestion, triggerGhostText, clearSuggestion, acceptGhost, dismissGhost };
+  return { ghost, suggestion, triggerGhostText, clearSuggestion, acceptGhost, dismissGhost, setGhost };
 }

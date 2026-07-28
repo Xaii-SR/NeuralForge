@@ -27,11 +27,13 @@ export interface EditorPaneProps {
   readOnly?: boolean;
   activeComposerBlockId?: string | null;
   onDiffResolved?: (blockId: string, status: "accepted" | "rejected") => void;
+  workspaceGeneration?: number;
 }
 
 export default function EditorPane({
   openFiles, activePath, onSelect, onClose, onChange, onSave,
   onExternalWrite, readOnly = false, activeComposerBlockId = null, onDiffResolved,
+  workspaceGeneration = 0,
 }: EditorPaneProps) {
   const [isDiffMode, setIsDiffMode] = useState(false);
   const { setSnapshot, getSnapshot, clearSnapshot } = useVersionCache();
@@ -130,9 +132,12 @@ export default function EditorPane({
     const range = selectionRangeRef.current;
     if (editor && monaco && range && activeFile) {
       // Guard: verify the Inline Edit request identity still matches the editor state.
-      // If the user edited the document, moved the selection, or switched files
-      // while the request was running, the streamed result may be stale.
+      // If the user edited the document, moved the selection, switched files,
+      // or the workspace was rebuilt while the request was running, the streamed
+      // result may be stale.
       if (prompt.workspaceGeneration === 0) return;
+      if (prompt.filePath !== activeFile.path) return;
+      if (prompt.documentVersion !== activeFile.revision) return;
       editor.executeEdits("inline-prompt-accept", [
         { range, text: prompt.streamedText, forceMoveMarkers: true },
       ]);
@@ -141,7 +146,7 @@ export default function EditorPane({
     clearDecorations();
     clearDiff();
     acceptChanges();
-  }, [clearDecorations, clearDiff, acceptChanges, prompt.streamedText, prompt.workspaceGeneration, activeFile, onChange]);
+  }, [clearDecorations, clearDiff, acceptChanges, prompt, activeFile, onChange]);
 
   const handleReject = useCallback(() => { clearDecorations(); clearDiff(); rejectChanges(); }, [clearDecorations, clearDiff, rejectChanges]);
 
@@ -192,7 +197,7 @@ export default function EditorPane({
       selectionRangeRef.current = selection ?? null;
       const cursorLine = selection?.positionLineNumber ?? 1;
       const r = c.getBoundingClientRect();
-      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: 0, documentVersion: 0, selectionStartColumn: 0, selectionEndColumn: 0 });
+      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: workspaceGeneration, documentVersion: activeFile?.revision ?? 0, selectionStartColumn: 0, selectionEndColumn: 0 });
     }
   }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);
@@ -237,7 +242,8 @@ export default function EditorPane({
             originalPath={`original:${activeFile.path}`} modifiedPath={`modified:${activeFile.path}`} />
         ) : (
           <Editor path={activeFile.path} language={languageFromPath(activeFile.path)} value={activeFile.content}
-            onChange={(v) => onChange(activeFile.path, v)} onSave={() => onSave(activeFile.path)} readOnly={readOnly} />
+            onChange={(v) => onChange(activeFile.path, v)} onSave={() => onSave(activeFile.path)} readOnly={readOnly}
+            workspaceGeneration={workspaceGeneration} />
         )}
       </div>
       {prompt.isOpen && (

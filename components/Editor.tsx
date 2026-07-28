@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import MonacoEditor, { OnMount } from "@monaco-editor/react";
 import { useTheme } from "@/hooks/useTheme";
-import { useGhostText } from "@/hooks/useGhostText";
+import { useGhostText, GhostTextState } from "@/hooks/useGhostText";
 
 export interface EditorProps {
   path: string;
@@ -12,13 +12,16 @@ export interface EditorProps {
   onChange: (value: string) => void;
   onSave: () => void;
   readOnly?: boolean;
+  workspaceGeneration?: number;
 }
 
-export default function Editor({ path, language, value, onChange, onSave, readOnly = false }: EditorProps) {
+export default function Editor({ path, language, value, onChange, onSave, readOnly = false, workspaceGeneration = 0 }: EditorProps) {
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const { theme } = useTheme();
-  const { ghost, suggestion, triggerGhostText, acceptGhost, dismissGhost } = useGhostText();
+  const ghostText = useGhostText();
+  const { ghost, suggestion, triggerGhostText, acceptGhost, dismissGhost } = ghostText;
+  const setGhostRef = useRef(ghostText.setGhost || (() => {}));
   const ghostTextRef = useRef<string | null>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
@@ -51,6 +54,9 @@ export default function Editor({ path, language, value, onChange, onSave, readOn
   // Sync suggestion state → ref for Monaco provider
   useEffect(() => { ghostTextRef.current = suggestion; }, [suggestion]);
 
+  // Sync ghost setter into ref for use in Monaco provider closure
+  useEffect(() => { setGhostRef.current = ghostText.setGhost || (() => {}); }, [ghostText.setGhost]);
+
   const handleMount: OnMount = (editor, monacoInstance) => {
     editorRef.current = editor;
     (window as any).monaco = monacoInstance;
@@ -66,7 +72,11 @@ export default function Editor({ path, language, value, onChange, onSave, readOn
           items: [{ insertText: text, range: new monacoInstance.Range(position.lineNumber, position.column, position.lineNumber, position.column) }],
         };
       },
-      freeInlineCompletions: (completions: any) => {},
+      // Invalidate completions when cursor moves — prevents stale ghost text
+      // from persisting after cursor position changes during generation.
+      freeInlineCompletions: (completions: any) => {
+        setGhostRef.current({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
+      },
     });
 
     // Trigger ghost-text completion on cursor idle after edits
@@ -83,13 +93,21 @@ export default function Editor({ path, language, value, onChange, onSave, readOn
         startLineNumber: pos.lineNumber, startColumn: pos.column,
         endLineNumber: lineCount, endColumn: model.getLineMaxColumn(lineCount),
       });
-      triggerGhostText(prefix, suffix, path);
+      triggerGhostText(prefix, suffix, path, workspaceGeneration);
     });
 
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS, () => {
       onSaveRef.current();
     });
   };
+
+  // Invalidate ghost text when workspace generation changes (workspace switch)
+  // or when the file path changes (file switch).
+  useEffect(() => {
+    if (!editorRef.current) return;
+    // Clear any pending completions for the old generation/file
+    editorRef.current.trigger("neuralforge-ghost", "inlineCommit", () => {});
+  }, [path, workspaceGeneration]);
 
   return (
     <MonacoEditor

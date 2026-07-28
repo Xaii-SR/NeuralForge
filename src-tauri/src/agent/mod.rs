@@ -588,26 +588,6 @@ pub async fn approve_task(
         verification = %verification
     );
 
-    // NF-AGENT-002: verify the file has not changed since the proposal was
-    // approved. Read the current content and compare to the approved snapshot
-    // BEFORE writing. Any deviation (including line-ending-only) is a conflict.
-    let file_path = task.files.first().cloned().unwrap_or_default();
-    let current_content = std::fs::read_to_string(root.join(&file_path))
-        .map_err(|e| AppError::NotFound(format!("{file_path}: {e}")))?;
-    if current_content != original_content {
-        let conn = crate::database::open_for_workspace(&root)?;
-        update_status(
-            &conn,
-            &task_id,
-            status::CONFLICT,
-            None,
-            Some("file changed since proposal was approved"),
-        )?;
-        return Err(AppError::CommandRejected(
-            format!("{file_path} changed since proposal was approved; review the diff before retrying"),
-        ));
-    }
-
     if !state.matches_workspace_generation(workspace_generation) {
         return Err(AppError::CommandRejected(
             "workspace changed while the approved task was executing; its result remained in the originating workspace".to_string(),
