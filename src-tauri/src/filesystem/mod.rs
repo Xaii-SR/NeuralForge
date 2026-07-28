@@ -318,6 +318,27 @@ pub fn open_workspace(
         }
     });
 
+    // NF-IDX-002: start (or replace) the live filesystem watcher for this
+    // workspace/generation. Assigning into current_watcher drops whatever
+    // watcher was active for the previous workspace, stopping it - so a
+    // rapid re-open/switch can never leave two watchers running against two
+    // different roots. Watcher failures (e.g. an unreadable root) are
+    // logged, not fatal - the same policy as auto-indexing above.
+    match crate::services::watcher_service::WorkspaceWatcher::start(app.clone(), root.clone(), generation, 300) {
+        Ok(watcher) => {
+            *state.current_watcher.lock().unwrap() = Some(watcher);
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "filesystem",
+                event = "watcher_start_failed",
+                error = %e,
+                "could not start the file watcher; workspace remains open without live reindexing"
+            );
+            *state.current_watcher.lock().unwrap() = None;
+        }
+    }
+
     Ok(WorkspaceInfo {
         root: root.to_string_lossy().to_string(),
         generation,

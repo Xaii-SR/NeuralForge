@@ -6,6 +6,12 @@ pub struct AppState {
     pub workspace_root: Mutex<Option<PathBuf>>,
     pub workspace_activation: Mutex<()>,
     pub filesystem_mutation: Mutex<()>,
+    /// NF-IDX-002: the live filesystem watcher for the currently open
+    /// workspace, if any. Replacing this (on every workspace open/switch)
+    /// drops the previous `WorkspaceWatcher`, which stops its OS watch and
+    /// signals its debounce thread to exit - so at most one watcher is ever
+    /// active, scoped to exactly one workspace generation.
+    pub current_watcher: Mutex<Option<crate::services::watcher_service::WorkspaceWatcher>>,
     workspace_generation: AtomicU64,
     workspace_open_sequence: AtomicU64,
     latest_workspace_open: AtomicU64,
@@ -17,6 +23,7 @@ impl Default for AppState {
             workspace_root: Mutex::new(None),
             workspace_activation: Mutex::new(()),
             filesystem_mutation: Mutex::new(()),
+            current_watcher: Mutex::new(None),
             workspace_generation: AtomicU64::new(0),
             workspace_open_sequence: AtomicU64::new(0),
             latest_workspace_open: AtomicU64::new(0),
