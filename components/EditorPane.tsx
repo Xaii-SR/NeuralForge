@@ -197,7 +197,7 @@ export default function EditorPane({
       selectionRangeRef.current = selection ?? null;
       const cursorLine = selection?.positionLineNumber ?? 1;
       const r = c.getBoundingClientRect();
-      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: workspaceGeneration, documentVersion: activeFile?.revision ?? 0, selectionStartColumn: 0, selectionEndColumn: 0 });
+      openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: workspaceGeneration, documentVersion: activeFile?.revision ?? 0, selectionStartColumn: selection?.startColumn ?? 0, selectionEndColumn: selection?.endColumn ?? 0 });
     }
   }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);

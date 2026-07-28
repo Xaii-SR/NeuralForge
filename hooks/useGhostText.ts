@@ -38,13 +38,17 @@ export function useGhostText() {
         return { ...prev, text: prev.text + token };
       });
     }).then((fn) => { if (disposed) fn(); else unlistenRef.current = fn; });
-    return () => { let disposed = true; unlistenRef.current?.(); };
+    return () => { disposed = true; unlistenRef.current?.(); };
   }, []);
 
   // Debounced FIM ghost text trigger (300ms)
-  const triggerGhostText = useCallback((prefix: string, suffix: string, path: string, workspaceGeneration: number) => {
+  const triggerGhostText = useCallback((content: string, cursorLine: number, cursorColumn: number, path: string, workspaceGeneration: number) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
+      const previousRequestId = activeRequestIdRef.current;
+      if (previousRequestId) {
+        void invoke<boolean>("cancel_ai_request", { requestId: previousRequestId });
+      }
       const requestId = crypto.randomUUID();
       activeRequestIdRef.current = requestId;
       activeFilePathRef.current = path;
@@ -53,11 +57,10 @@ export function useGhostText() {
       try {
         await invoke("request_async_completion", {
           requestId,
-          prefix,
-          suffix,
           filePath: path,
-          cursorLine: 0,
-          cursorColumn: 0,
+          content,
+          cursorLine,
+          cursorColumn,
           template: "starcoder",
         });
       } catch {
@@ -73,13 +76,23 @@ export function useGhostText() {
     }, 300);
   }, []);
 
+  const cancelActive = useCallback(() => {
+    if (activeRequestIdRef.current) {
+      void invoke<boolean>("cancel_ai_request", { requestId: activeRequestIdRef.current });
+    }
+  }, []);
+
   const clearSuggestion = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    cancelActive();
     activeRequestIdRef.current = null;
     activeFilePathRef.current = null;
     setSuggestion(null);
     setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
-  }, []);
+  }, [cancelActive]);
+
+  // Cancel any in-flight backend completion on unmount.
+  useEffect(() => () => cancelActive(), [cancelActive]);
 
   const acceptGhost = useCallback(() => {
     const text = ghost.text;
@@ -88,8 +101,9 @@ export function useGhostText() {
   }, [ghost.text]);
 
   const dismissGhost = useCallback(() => {
+    cancelActive();
     setGhost({ text: "", requestId: null, active: false, filePath: null, workspaceGeneration: 0 });
-  }, []);
+  }, [cancelActive]);
 
   return { ghost, suggestion, triggerGhostText, clearSuggestion, acceptGhost, dismissGhost, setGhost };
 }

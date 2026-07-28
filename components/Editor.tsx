@@ -79,21 +79,17 @@ export default function Editor({ path, language, value, onChange, onSave, readOn
       },
     });
 
-    // Trigger ghost-text completion on cursor idle after edits
+    // Trigger ghost-text completion on cursor idle after edits.
+    // The backend (`extract_prediction_window`) slices its own prefix/suffix
+    // window from full file content plus a 0-indexed cursor line, so the
+    // full content and real cursor position must be sent, not a pre-sliced
+    // prefix/suffix pair.
     editor.onDidChangeCursorPosition((e: any) => {
       const model = editor.getModel();
       if (!model) return;
       const pos = e.position;
-      const lineCount = model.getLineCount();
-      const prefix = model.getValueInRange({
-        startLineNumber: 1, startColumn: 1,
-        endLineNumber: pos.lineNumber, endColumn: pos.column,
-      });
-      const suffix = model.getValueInRange({
-        startLineNumber: pos.lineNumber, startColumn: pos.column,
-        endLineNumber: lineCount, endColumn: model.getLineMaxColumn(lineCount),
-      });
-      triggerGhostText(prefix, suffix, path, workspaceGeneration);
+      const content = model.getValue();
+      triggerGhostText(content, pos.lineNumber - 1, pos.column - 1, path, workspaceGeneration);
     });
 
     editor.addCommand(monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyS, () => {

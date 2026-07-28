@@ -1,6 +1,7 @@
 use crate::ai::health::HealthRegistry;
 use crate::ai::provider_registry::{self, ProviderConfig};
 use crate::ai::provider_router;
+use crate::ai::request_registry;
 use crate::database::DbState;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -137,6 +138,7 @@ pub async fn async_stream_completion(
     app: AppHandle,
     health: &HealthRegistry,
     providers: &[ProviderConfig],
+    cancelled: &std::sync::atomic::AtomicBool,
     request_id: String,
     file_path: String,
     content: String,
@@ -145,6 +147,7 @@ pub async fn async_stream_completion(
     _template: FimTemplate,
 ) {
     if should_debounce() { return; }
+    if request_registry::is_cancelled(cancelled) { return; }
     let ctx = extract_prediction_window(file_path.clone(), content, cursor_line, cursor_column);
     let fp = ctx.file_path.clone();
     let sfx = ctx.suffix.clone();
@@ -154,6 +157,7 @@ pub async fn async_stream_completion(
 
     // Check prediction cache first
     if let Some((completion, _, _)) = check_prediction_cache(&fp, &sfx) {
+        if request_registry::is_cancelled(cancelled) { return; }
         let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: completion, done: true, request_id: request_id.clone() });
         return;
     }
@@ -163,18 +167,23 @@ pub async fn async_stream_completion(
 
     match call_ollama_fim(health, providers, &fim_prompt).await {
         Ok(completion) if !completion.is_empty() => {
+            if request_registry::is_cancelled(cancelled) { return; }
             for ch in completion.chars() {
+                if request_registry::is_cancelled(cancelled) { return; }
                 let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: ch.to_string(), done: false, request_id: request_id.clone() });
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
+            if request_registry::is_cancelled(cancelled) { return; }
             let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
             cache_prediction(&fp, &sfx, &completion);
         }
         Ok(_) => {
+            if request_registry::is_cancelled(cancelled) { return; }
             let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
         }
         Err(err) => {
             tracing::warn!(target: "ai", event = "ghost_completion_failed", error = %err, file_path = %fp);
+            if request_registry::is_cancelled(cancelled) { return; }
             let _ = app.emit("ghost-text-stream", GhostTextStreamPayload { token: String::new(), done: true, request_id: request_id.clone() });
         }
     }
@@ -205,6 +214,7 @@ pub async fn request_async_completion(
     app: AppHandle,
     health: State<'_, HealthRegistry>,
     db: State<'_, DbState>,
+    requests: State<'_, request_registry::RequestRegistry>,
     request_id: String,
     file_path: String,
     content: String,
@@ -213,12 +223,14 @@ pub async fn request_async_completion(
     template: String,
 ) -> Result<(), String> {
     let t = match template.to_lowercase().as_str() { "codellama" => FimTemplate::CodeLlama, _ => FimTemplate::StarCoder };
+    let cancelled = requests.begin(&request_id)?;
     let providers = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
         guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
         // guard dropped here, before the .await below
     };
-    async_stream_completion(app, &health, &providers, request_id, file_path, content, cursor_line, cursor_column, t).await;
+    async_stream_completion(app, &health, &providers, &cancelled, request_id.clone(), file_path, content, cursor_line, cursor_column, t).await;
+    requests.finish(&request_id);
     Ok(())
 }
 
