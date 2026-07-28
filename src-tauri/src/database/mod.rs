@@ -288,35 +288,64 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
         );
     }
 
-    // Additive columns for DBs created before these features existed. The
-    // CREATE TABLE above already includes them for brand-new DBs, so these
-    // error with "duplicate column" there - that's expected, not a bug.
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'edit_file'", []);
+    // NF-DB-001: additive columns for DBs created before these features
+    // existed. These used to be `let _ = conn.execute(ALTER ...)`, which
+    // discarded every error - including a real failure (disk full,
+    // corruption, permissions) - as indistinguishable from the expected
+    // "duplicate column" error on an already-migrated DB. `ensure_column`
+    // inspects `PRAGMA table_info` first and only issues the ALTER when the
+    // column is genuinely missing, so a real failure now propagates instead
+    // of vanishing.
+    ensure_column(&conn, "agent_tasks", "task_type", "task_type TEXT NOT NULL DEFAULT 'edit_file'")?;
     // Sprint 1 (Requirement Intelligence): tasks link back to the
     // requirement that gated them. Nullable because pre-Sprint-1 task rows
     // (and run_code tasks, which stay ungated this sprint) have none.
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN requirement_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN correlation_id TEXT", []);
+    ensure_column(&conn, "agent_tasks", "requirement_id", "requirement_id TEXT")?;
+    ensure_column(&conn, "agent_tasks", "correlation_id", "correlation_id TEXT")?;
     // Sprint 3 (Task DAG Planning): DAG membership for multi-task
     // decomposition. NULL for single-task flow rows - that path never
     // sets them.
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN dag_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN depends_on TEXT", []);
+    ensure_column(&conn, "agent_tasks", "dag_id", "dag_id TEXT")?;
+    ensure_column(&conn, "agent_tasks", "depends_on", "depends_on TEXT")?;
     // Sprint 5 (Worker Intelligence): which worker profile a task was
     // assigned to. NULL for everything historical and for the single
     // built-in Coder flow - reliability derivation simply sees no rows.
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN worker_id TEXT", []);
+    ensure_column(&conn, "agent_tasks", "worker_id", "worker_id TEXT")?;
     // Sprint 8 (Autonomous Reliability): retry lineage. A retry is a NEW
     // task row pointing at the attempt it replaces; attempt counting walks
     // this chain, so there is no counter column to drift.
-    let _ = conn.execute("ALTER TABLE agent_tasks ADD COLUMN retry_of TEXT", []);
+    ensure_column(&conn, "agent_tasks", "retry_of", "retry_of TEXT")?;
     // Sprint 12 (Context Engine): file metadata columns for existing databases
-    let _ = conn.execute("ALTER TABLE files ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE files ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE files ADD COLUMN language TEXT NOT NULL DEFAULT ''", []);
-    let _ = conn.execute("ALTER TABLE files ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0", []);
+    ensure_column(&conn, "files", "file_size", "file_size INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&conn, "files", "modified_at", "modified_at INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&conn, "files", "language", "language TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(&conn, "files", "line_count", "line_count INTEGER NOT NULL DEFAULT 0")?;
 
     Ok(conn)
+}
+
+/// NF-DB-001: adds `column_ddl` (e.g. `"foo TEXT NOT NULL DEFAULT ''"`) to
+/// `table` only if the column is not already present, by inspecting
+/// `PRAGMA table_info` first. Unlike a blind `ALTER TABLE ... ADD COLUMN`
+/// wrapped in `let _ =`, this can never mistake a real failure (disk error,
+/// permissions, corruption) for the expected "duplicate column" case,
+/// because it never issues the ALTER when the column already exists.
+fn ensure_column(conn: &Connection, table: &str, column: &str, column_ddl: &str) -> AppResult<()> {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| AppError::Provider(format!("failed to inspect schema for {table}: {e}")))?;
+    let existing: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| AppError::Provider(format!("failed to read schema for {table}: {e}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Provider(format!("failed to collect schema for {table}: {e}")))?;
+    drop(statement);
+    if existing.iter().any(|c| c == column) {
+        return Ok(());
+    }
+    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column_ddl}"), [])
+        .map_err(|e| AppError::Provider(format!("failed to add column {column} to {table}: {e}")))?;
+    Ok(())
 }
 
 const SECURE_SCRUB_PENDING_KEY: &str = "secure_scrub_pending";
@@ -822,6 +851,196 @@ mod hardening_tests {
         let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
         assert!(sync >= 1, "synchronous must be NORMAL or FULL, got {sync}");
         drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NF-DB-001: `ensure_column` genuinely distinguishes "already there" -
+    /// unlike the old `let _ = conn.execute(ALTER ...)`, a real DDL failure
+    /// (here: target table does not exist) must propagate instead of being
+    /// silently discarded.
+    #[test]
+    fn ensure_column_propagates_a_real_ddl_failure_instead_of_swallowing_it() {
+        let dir = temp_dir();
+        let conn = open_for_workspace(&dir).unwrap();
+        let result = ensure_column(&conn, "no_such_table", "x", "x TEXT");
+        assert!(result.is_err(), "a genuine DDL failure must not be silently discarded");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NF-DB-001: `ensure_column` is idempotent and a no-op when the column
+    /// already exists (the common case on every normal reopen).
+    #[test]
+    fn ensure_column_is_a_noop_when_column_already_present() {
+        let dir = temp_dir();
+        let conn = open_for_workspace(&dir).unwrap();
+        // `files.language` already exists from the CREATE TABLE. Calling
+        // ensure_column again must succeed without error and without
+        // duplicating the column.
+        ensure_column(&conn, "files", "language", "language TEXT NOT NULL DEFAULT ''").unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(files)").unwrap();
+        let count = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter(|c| c.as_deref() == Ok("language"))
+            .count();
+        assert_eq!(count, 1, "the column must not be duplicated");
+        drop(stmt);
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NF-DB-001: reopening a DB hand-built from a schema that PREDATES the
+    /// additive columns (not the current full schema minus rows, but the
+    /// actual old CREATE TABLE shape) must add the missing columns and
+    /// preserve every existing row untouched. This is the real regression
+    /// the blueprint calls out: the pre-existing migration test only ever
+    /// reopened DBs created with the CURRENT schema, so it could never have
+    /// caught a broken ALTER migration.
+    #[test]
+    fn reopening_a_genuinely_old_schema_adds_missing_columns_and_preserves_rows() {
+        let dir = temp_dir();
+        let db_dir = dir.join(".neuralforge");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db_path = db_dir.join("index.db");
+        {
+            // Hand-built pre-Sprint-1/Sprint-12 schema: agent_tasks and files
+            // WITHOUT any of the columns ensure_column is responsible for.
+            let old_conn = Connection::open(&db_path).unwrap();
+            old_conn.execute_batch(
+                "CREATE TABLE agent_tasks (
+                    id TEXT PRIMARY KEY,
+                    objective TEXT NOT NULL,
+                    agent TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    original_content TEXT,
+                    proposed_content TEXT,
+                    risk_summary TEXT,
+                    verification TEXT,
+                    rollback TEXT,
+                    error TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY,
+                    path TEXT NOT NULL UNIQUE,
+                    content_hash TEXT NOT NULL,
+                    indexed_at INTEGER NOT NULL
+                );",
+            ).unwrap();
+            old_conn.execute(
+                "INSERT INTO agent_tasks (id, objective, agent, file_path, status, created_at, updated_at)
+                 VALUES ('old-task', 'legacy objective', 'coder', 'legacy.rs', 'completed', 1, 1)",
+                [],
+            ).unwrap();
+            old_conn.execute(
+                "INSERT INTO files (path, content_hash, indexed_at) VALUES ('legacy.rs', 'deadbeef', 1)",
+                [],
+            ).unwrap();
+        }
+
+        // Reopen through the real production path - schema init + every
+        // ensure_column call runs against this genuinely old database.
+        let conn = open_for_workspace(&dir).unwrap();
+
+        let task_type: String = conn
+            .query_row("SELECT task_type FROM agent_tasks WHERE id = 'old-task'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(task_type, "edit_file", "the additive column must get its default, not NULL or an error");
+        let objective: String = conn
+            .query_row("SELECT objective FROM agent_tasks WHERE id = 'old-task'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(objective, "legacy objective", "pre-existing row content must survive migration untouched");
+
+        let language: String = conn
+            .query_row("SELECT language FROM files WHERE path = 'legacy.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(language, "", "the additive files column must get its default");
+        let hash: String = conn
+            .query_row("SELECT content_hash FROM files WHERE path = 'legacy.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hash, "deadbeef", "pre-existing files row must survive migration untouched");
+
+        // A third open (simulating a second app launch) must be fully
+        // idempotent - no duplicate-column errors, same data.
+        drop(conn);
+        let conn2 = open_for_workspace(&dir).unwrap();
+        let task_count: i64 = conn2.query_row("SELECT COUNT(*) FROM agent_tasks", [], |r| r.get(0)).unwrap();
+        assert_eq!(task_count, 1);
+        drop(conn2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NF-DB-001: transient contention (another connection holds a write
+    /// transaction briefly) must be absorbed by the busy_timeout retry, not
+    /// surfaced as a spurious failure or a silent lost write.
+    #[test]
+    fn transient_write_contention_is_absorbed_by_busy_timeout_retry() {
+        let dir = temp_dir();
+        // Two independent connections to the same on-disk database, exactly
+        // like the real indexer-thread + UI-thread situation this pragma
+        // exists for.
+        let holder = open_for_workspace(&dir).unwrap();
+        let writer = open_for_workspace(&dir).unwrap();
+
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        holder.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')", []).unwrap();
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            holder.execute_batch("COMMIT").unwrap();
+        });
+
+        // This write starts while `holder` still owns the write lock; it
+        // must block and retry (busy_timeout = 5s) rather than fail
+        // immediately or silently no-op.
+        let started = std::time::Instant::now();
+        writer.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('writer', 'W', '[]')", []).unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(100), "the write must have actually waited on the lock, not raced past it");
+
+        release.join().unwrap();
+        let count: i64 = writer.query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2, "both writes must be durably present, none silently dropped");
+
+        drop(writer);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// NF-DB-001: contention that outlasts the busy_timeout must return an
+    /// actionable, bounded error - never hang forever and never report a
+    /// false success. Uses a short busy_timeout on the contending
+    /// connection (opened directly, bypassing open_for_workspace's fixed
+    /// 5s) so the test is fast and deterministic instead of waiting out the
+    /// real 5-second production timeout.
+    #[test]
+    fn contention_beyond_the_timeout_returns_a_bounded_actionable_error() {
+        let dir = temp_dir();
+        let holder = open_for_workspace(&dir).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        holder.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')", []).unwrap();
+        // Deliberately never committed for the lifetime of this test - the
+        // contending connection below must never be able to acquire the
+        // write lock.
+
+        let db_path = dir.join(".neuralforge").join("index.db");
+        let contender = Connection::open(&db_path).unwrap();
+        contender.busy_timeout(std::time::Duration::from_millis(150)).unwrap();
+
+        let started = std::time::Instant::now();
+        let result = contender.execute(
+            "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('contender', 'C', '[]')",
+            [],
+        );
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "contention that outlasts the timeout must be a real, actionable error, not a false success");
+        assert!(elapsed < std::time::Duration::from_secs(2), "the failure must be bounded by the configured timeout, not hang indefinitely: took {elapsed:?}");
+
+        let _ = holder.execute_batch("ROLLBACK");
+        drop(holder);
+        drop(contender);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
