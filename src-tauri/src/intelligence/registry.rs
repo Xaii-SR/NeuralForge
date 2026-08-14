@@ -38,8 +38,8 @@ fn row_to_profile(row: &rusqlite::Row) -> rusqlite::Result<WorkerProfile> {
 }
 
 pub fn upsert(conn: &Connection, profile: &WorkerProfile) -> AppResult<()> {
-    let caps_json =
-        serde_json::to_string(&profile.capabilities).map_err(|e| AppError::Provider(format!("failed to encode capabilities: {e}")))?;
+    let caps_json = serde_json::to_string(&profile.capabilities)
+        .map_err(|e| AppError::Provider(format!("failed to encode capabilities: {e}")))?;
     conn.execute(
         "INSERT INTO worker_profiles (id, name, capabilities, reliability_score, tasks_completed, tasks_failed)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -53,8 +53,12 @@ pub fn upsert(conn: &Connection, profile: &WorkerProfile) -> AppResult<()> {
 }
 
 pub fn get(conn: &Connection, id: &str) -> AppResult<WorkerProfile> {
-    conn.query_row("SELECT * FROM worker_profiles WHERE id = ?1", params![id], row_to_profile)
-        .map_err(|_| AppError::NotFound(format!("worker profile {id}")))
+    conn.query_row(
+        "SELECT * FROM worker_profiles WHERE id = ?1",
+        params![id],
+        row_to_profile,
+    )
+    .map_err(|_| AppError::NotFound(format!("worker profile {id}")))
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<WorkerProfile>> {
@@ -77,8 +81,11 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
 /// Assigns a task to a worker - the additive link that lets reliability be
 /// derived from governance data instead of tracked separately.
 pub fn assign_task(conn: &Connection, task_id: &str, worker_id: &str) -> AppResult<()> {
-    conn.execute("UPDATE agent_tasks SET worker_id = ?1 WHERE id = ?2", params![worker_id, task_id])
-        .map_err(|e| AppError::Provider(format!("failed to assign task to worker: {e}")))?;
+    conn.execute(
+        "UPDATE agent_tasks SET worker_id = ?1 WHERE id = ?2",
+        params![worker_id, task_id],
+    )
+    .map_err(|e| AppError::Provider(format!("failed to assign task to worker: {e}")))?;
     Ok(())
 }
 
@@ -113,7 +120,11 @@ pub fn refresh_reliability(conn: &Connection, worker_id: &str) -> AppResult<Work
         )
         .map_err(|e| AppError::Provider(format!("failed to derive reliability: {e}")))?;
 
-    let score = if completed + failed == 0 { 1.0 } else { completed as f64 / (completed + failed) as f64 };
+    let score = if completed + failed == 0 {
+        1.0
+    } else {
+        completed as f64 / (completed + failed) as f64
+    };
 
     conn.execute(
         "UPDATE worker_profiles SET reliability_score = ?1, tasks_completed = ?2, tasks_failed = ?3 WHERE id = ?4",

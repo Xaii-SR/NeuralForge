@@ -7,32 +7,32 @@ mod agent_controller;
 #[allow(dead_code)]
 mod agent_core;
 mod agent_v2;
-mod change_executor;
-mod context_retrieval;
-mod error_analyzer;
-mod knowledge_store;
-mod multi_agent;
-mod task_orchestrator;
-mod workspace_scanner;
 mod ai;
 mod bootstrap;
+mod change_executor;
+mod context_retrieval;
 mod core;
-mod governance;
 mod database;
+mod error_analyzer;
 mod extensions;
 mod filesystem;
+mod governance;
 mod hardware;
 mod intelligence;
+mod knowledge_store;
+mod multi_agent;
+mod parsers;
+mod performance;
+mod planning;
+mod planning_engine;
 #[cfg(test)]
 mod release_validation;
-mod planning;
-mod parsers;
-mod planning_engine;
+mod services;
+mod task_orchestrator;
 mod terminal;
 mod terminal_executor;
-mod performance;
-mod services;
 mod workspace;
+mod workspace_scanner;
 
 use ai::health::HealthRegistry;
 use core::state::AppState;
@@ -42,141 +42,141 @@ use terminal::TerminalRegistry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  let bootstrap_warning = bootstrap::environment::enforce_environment_gate().err();
-  if let Some(message) = &bootstrap_warning {
-    eprintln!("{message}");
-  }
+    let bootstrap_warning = bootstrap::environment::enforce_environment_gate().err();
+    if let Some(message) = &bootstrap_warning {
+        eprintln!("{message}");
+    }
 
-  tauri::Builder::default()
-    .manage(AppState::default())
-    .manage(TerminalRegistry::default())
-    .manage(HealthRegistry::default())
-    .manage(ai::request_registry::RequestRegistry::default())
-    .manage(DbState::default())
-    .manage(agent_core::AgentCoreState::default())
-    .plugin(tauri_plugin_dialog::init())
-    .invoke_handler(tauri::generate_handler![
-      filesystem::open_workspace,
-      filesystem::get_last_workspace,
-      filesystem::read_dir,
-      filesystem::read_file,
-      filesystem::write_file,
-      filesystem::write_file_if_unchanged,
-      filesystem::create_file,
-      filesystem::create_dir,
-      filesystem::delete_path,
-      filesystem::rename_path,
-      terminal::spawn_shell,
-      terminal::write_to_pty,
-      terminal::resize_pty,
-      terminal::close_pty,
-      core::logging::get_recent_logs,
-      core::logging::export_logs,
-      core::build_info::get_build_info,
-      hardware::get_hardware_info,
-      ai::ollama_health_check,
-      ai::list_models,
-      ai::pull_model,
-      ai::remove_model,
-      ai::list_providers,
-      ai::get_provider_health,
-      ai::check_vram_for_model,
-      ai::chat_with_model,
-      ai::cancel_ai_request,
-      ai::test_provider_connection,
-      ai::list_provider_models,
-      ai::list_chat_models,
-      ai::provider_registry::list_provider_configs,
-      ai::provider_registry::add_provider_config,
-      ai::provider_registry::update_provider_config,
-      ai::provider_registry::delete_provider_config,
-      ai::provider_registry::migrate_legacy_api_key,
-      ai::provider_registry::set_default_model,
-      ai::provider_registry::get_model_config,
-      ai::get_context_for_query,
-      ai::get_enriched_context,
-      ai::save_preferences,
-      ai::get_preferences,
-      ai::estimate_cost_for_prompt,
-      ai::clear_response_cache,
-      ai::autocomplete::fetch_ghost_suggestion,
-      ai::auto_select_model,
-      ai::completion::get_ghost_text_prediction,
-      ai::completion::get_prediction_with_fim,
-      ai::completion::store_prediction_result,
-      ai::completion::request_async_completion,
-      ai::docs::list_cached_docs,
-      ai::docs::read_cached_doc,
-      ai::web::search_web,
-      ai::inline::stream_inline_edit,
-      agent_core::commands::agent_lifecycle_transition,
-      agent_core::commands::run_council_pass,
-      database::index_workspace,
-      database::resolve_file_reference,
-      database::create_session,
-      database::list_sessions,
-      database::get_session_messages,
-      database::append_session_message,
-      database::update_session_metadata,
-      database::append_session_message_with_metadata,
-      database::delete_session,
-      governance::create_requirement,
-      governance::update_requirement,
-      governance::set_requirement_status,
-      governance::get_requirement,
-      governance::list_requirements,
-      governance::get_requirement_history,
-      agent::create_and_plan_task,
-      agent::approve_task,
-      agent::reject_task,
-      agent::list_agent_tasks,
-      governance::get_ledger,
-      governance::get_ledger_for_correlation,
-      governance::verify_ledger,
-      governance::get_evidence_for_task,
-      governance::get_promotions_for_task,
-      planning::plan_requirement_dag,
-      planning::get_dag,
-      planning::get_dag_runnable_tasks,
-      intelligence::list_worker_profiles,
-      intelligence::upsert_worker_profile,
-      intelligence::delete_worker_profile,
-      intelligence::refresh_worker_reliability,
-      intelligence::match_workers,
-      intelligence::retry_failed_task,
-      intelligence::get_task_confidence,
-      intelligence::get_task_report,
-      extensions::list_extensions,
-      extensions::set_extension_enabled,
-      extensions::uninstall_extension,
-      workspace::search::search_workspace_files,
-    ])
-    .setup(move |app| {
-      let log_dir = app
-        .path()
-        .app_log_dir()
-        .or_else(|_| app.path().app_local_data_dir().map(|dir| dir.join("logs")))?;
-      let guard = core::logging::init(&log_dir)?;
-      app.manage(guard);
+    tauri::Builder::default()
+        .manage(AppState::default())
+        .manage(TerminalRegistry::default())
+        .manage(HealthRegistry::default())
+        .manage(ai::request_registry::RequestRegistry::default())
+        .manage(DbState::default())
+        .manage(agent_core::AgentCoreState::default())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            filesystem::open_workspace,
+            filesystem::get_last_workspace,
+            filesystem::read_dir,
+            filesystem::read_file,
+            filesystem::write_file,
+            filesystem::write_file_if_unchanged,
+            filesystem::create_file,
+            filesystem::create_dir,
+            filesystem::delete_path,
+            filesystem::rename_path,
+            terminal::spawn_shell,
+            terminal::write_to_pty,
+            terminal::resize_pty,
+            terminal::close_pty,
+            core::logging::get_recent_logs,
+            core::logging::export_logs,
+            core::build_info::get_build_info,
+            hardware::get_hardware_info,
+            ai::ollama_health_check,
+            ai::list_models,
+            ai::pull_model,
+            ai::remove_model,
+            ai::list_providers,
+            ai::get_provider_health,
+            ai::check_vram_for_model,
+            ai::chat_with_model,
+            ai::cancel_ai_request,
+            ai::test_provider_connection,
+            ai::list_provider_models,
+            ai::list_chat_models,
+            ai::provider_registry::list_provider_configs,
+            ai::provider_registry::add_provider_config,
+            ai::provider_registry::update_provider_config,
+            ai::provider_registry::delete_provider_config,
+            ai::provider_registry::migrate_legacy_api_key,
+            ai::provider_registry::set_default_model,
+            ai::provider_registry::get_model_config,
+            ai::get_context_for_query,
+            ai::get_enriched_context,
+            ai::save_preferences,
+            ai::get_preferences,
+            ai::estimate_cost_for_prompt,
+            ai::clear_response_cache,
+            ai::autocomplete::fetch_ghost_suggestion,
+            ai::auto_select_model,
+            ai::completion::get_ghost_text_prediction,
+            ai::completion::get_prediction_with_fim,
+            ai::completion::store_prediction_result,
+            ai::completion::request_async_completion,
+            ai::docs::list_cached_docs,
+            ai::docs::read_cached_doc,
+            ai::web::search_web,
+            ai::inline::stream_inline_edit,
+            agent_core::commands::agent_lifecycle_transition,
+            agent_core::commands::run_council_pass,
+            database::index_workspace,
+            database::resolve_file_reference,
+            database::create_session,
+            database::list_sessions,
+            database::get_session_messages,
+            database::append_session_message,
+            database::update_session_metadata,
+            database::append_session_message_with_metadata,
+            database::delete_session,
+            governance::create_requirement,
+            governance::update_requirement,
+            governance::set_requirement_status,
+            governance::get_requirement,
+            governance::list_requirements,
+            governance::get_requirement_history,
+            agent::create_and_plan_task,
+            agent::approve_task,
+            agent::reject_task,
+            agent::list_agent_tasks,
+            governance::get_ledger,
+            governance::get_ledger_for_correlation,
+            governance::verify_ledger,
+            governance::get_evidence_for_task,
+            governance::get_promotions_for_task,
+            planning::plan_requirement_dag,
+            planning::get_dag,
+            planning::get_dag_runnable_tasks,
+            intelligence::list_worker_profiles,
+            intelligence::upsert_worker_profile,
+            intelligence::delete_worker_profile,
+            intelligence::refresh_worker_reliability,
+            intelligence::match_workers,
+            intelligence::retry_failed_task,
+            intelligence::get_task_confidence,
+            intelligence::get_task_report,
+            extensions::list_extensions,
+            extensions::set_extension_enabled,
+            extensions::uninstall_extension,
+            workspace::search::search_workspace_files,
+        ])
+        .setup(move |app| {
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .or_else(|_| app.path().app_local_data_dir().map(|dir| dir.join("logs")))?;
+            let guard = core::logging::init(&log_dir)?;
+            app.manage(guard);
 
-      if let Some(message) = &bootstrap_warning {
-        tracing::warn!(
-          target: "bootstrap",
-          event = "environment_gate_warning",
-          message = %message,
-          "startup continued with local AI environment unavailable"
-        );
-      }
+            if let Some(message) = &bootstrap_warning {
+                tracing::warn!(
+                  target: "bootstrap",
+                  event = "environment_gate_warning",
+                  message = %message,
+                  "startup continued with local AI environment unavailable"
+                );
+            }
 
-      tracing::info!(target: "core", event = "app_started", "NeuralForge started");
-      Ok(())
-    })
-    .build(tauri::generate_context!())
-    .expect("error while building tauri application")
-    .run(|app_handle, event| {
-      if let tauri::RunEvent::ExitRequested { .. } = event {
-        let registry = app_handle.state::<TerminalRegistry>();
-        terminal::kill_all(&registry);
-      }
-    });
+            tracing::info!(target: "core", event = "app_started", "NeuralForge started");
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let registry = app_handle.state::<TerminalRegistry>();
+                terminal::kill_all(&registry);
+            }
+        });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import EditorPane from "@/components/EditorPane";
 import FileExplorer from "@/components/FileExplorer";
 import Terminal from "@/components/Terminal";
@@ -31,7 +31,8 @@ const TAB_INACTIVE = "border-transparent text-neutral-500 hover:text-neutral-700
 export default function Home() {
   const workspace = useWorkspace();
   const { theme, toggleTheme } = useTheme();
-  const layout = usePanelLayout();
+  const layoutRootRef = useRef<HTMLDivElement | null>(null);
+  const layout = usePanelLayout(layoutRootRef);
   const [lastEvent, setLastEvent] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<"terminal" | "logs" | "agent" | "extensions" | "governance" | "workers">("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -50,6 +51,10 @@ export default function Home() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [councilOpen]);
+
+  const startSidebarDrag = (event: React.PointerEvent<HTMLDivElement>) => layout.startDrag("sidebar")(event);
+  const startBottomDrag = (event: React.PointerEvent<HTMLDivElement>) => layout.startDrag("bottom")(event);
+  const startChatDrag = (event: React.PointerEvent<HTMLDivElement>) => layout.startDrag("chat")(event);
 
   return (
     <main className="flex h-screen w-screen flex-col bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
@@ -73,7 +78,7 @@ export default function Home() {
               <button onClick={() => setCouncilOpen(false)} className="rounded px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
             </div>
             <div className="h-[500px]">
-              <CouncilPanel workspaceGeneration={workspace.workspaceGeneration} />
+              <CouncilPanel key={workspace.workspaceGeneration} workspaceGeneration={workspace.workspaceGeneration} />
             </div>
             <div className="mt-4 flex justify-end border-t border-neutral-100 pt-3 dark:border-neutral-800">
               <button onClick={() => setCouncilOpen(false)} className="rounded px-4 py-1.5 text-xs font-medium text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800">Close</button>
@@ -81,14 +86,14 @@ export default function Home() {
           </div>
         </div>
       )}
-      <div ref={layout.rootRef} className="flex min-h-0 flex-1">
+      <div ref={layoutRootRef} className="flex min-h-0 flex-1">
         <div style={{ width: "var(--nf-sidebar-w, 256px)" }} className="shrink-0 border-r border-neutral-200 dark:border-neutral-800">
-          {workspace.workspaceRoot ? <FileExplorer workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} onContextSelect={setSelectedContext} /> : <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />}
+          {workspace.workspaceRoot ? <FileExplorer key={workspace.workspaceRoot} workspaceRoot={workspace.workspaceRoot} onFileClick={workspace.openFile} onContextSelect={setSelectedContext} /> : <EmptyState icon="📁" title="No folder open" hint="Open a folder to browse and edit its files" />}
         </div>
-        <ResizeHandle orientation="vertical" label="Resize file explorer" onPointerDown={layout.startDrag("sidebar")} onDoubleClick={() => layout.resetPanel("sidebar")} onNudge={(d) => layout.nudgePanel("sidebar", d)} />
+        <ResizeHandle orientation="vertical" label="Resize file explorer" onPointerDown={startSidebarDrag} onDoubleClick={() => layout.resetPanel("sidebar")} onNudge={(d) => layout.nudgePanel("sidebar", d)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1"><EditorPane openFiles={workspace.openFiles} activePath={workspace.activePath} onSelect={workspace.setActivePath} onClose={workspace.closeFile} onChange={workspace.updateContent} onSave={workspace.saveFile} onExternalWrite={workspace.acceptExternalWrite} readOnly={workspace.editingLocked} /></div>
-          <ResizeHandle orientation="horizontal" label="Resize bottom panel" onPointerDown={layout.startDrag("bottom")} onDoubleClick={() => layout.resetPanel("bottom")} onNudge={(d) => layout.nudgePanel("bottom", d)} />
+          <ResizeHandle orientation="horizontal" label="Resize bottom panel" onPointerDown={startBottomDrag} onDoubleClick={() => layout.resetPanel("bottom")} onNudge={(d) => layout.nudgePanel("bottom", d)} />
           <div style={{ height: "var(--nf-bottom-h, 288px)" }} className="flex shrink-0 flex-col border-t border-neutral-200 dark:border-neutral-800">
             <div className="flex h-9 shrink-0 gap-1 border-b border-neutral-200 bg-neutral-50 px-2 dark:border-neutral-800 dark:bg-neutral-900">
               {(["terminal","logs","agent","extensions","governance","workers"] as const).map((t) => (
@@ -98,16 +103,16 @@ export default function Home() {
             <div className="min-h-0 flex-1">
               {bottomTab === "terminal" && <div className="h-full"><Terminal /></div>}
               {bottomTab === "logs" && <div className="h-full"><LogViewer /></div>}
-              {bottomTab === "agent" && <div className="h-full"><AgentPanel workspaceOpen={!!workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} /></div>}
+              {bottomTab === "agent" && <div className="h-full"><AgentPanel key={workspace.workspaceGeneration} workspaceOpen={!!workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} /></div>}
               {bottomTab === "extensions" && <div className="h-full"><ExtensionsPanel /></div>}
               {bottomTab === "governance" && <div className="h-full"><GovernancePanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
               {bottomTab === "workers" && <div className="h-full"><WorkersPanel workspaceOpen={!!workspace.workspaceRoot} /></div>}
             </div>
           </div>
         </div>
-        <ResizeHandle orientation="vertical" label="Resize chat panel" onPointerDown={layout.startDrag("chat")} onDoubleClick={() => layout.resetPanel("chat")} onNudge={(d) => layout.nudgePanel("chat", -d)} />
+        <ResizeHandle orientation="vertical" label="Resize chat panel" onPointerDown={startChatDrag} onDoubleClick={() => layout.resetPanel("chat")} onNudge={(d) => layout.nudgePanel("chat", -d)} />
         <div style={{ width: "var(--nf-chat-w, 380px)" }} className="shrink-0 border-l border-neutral-200 dark:border-neutral-800">
-          <SessionTabs workspaceRoot={workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} selectedContext={selectedContext} />
+          <SessionTabs key={workspace.workspaceGeneration} workspaceRoot={workspace.workspaceRoot} workspaceGeneration={workspace.workspaceGeneration} selectedContext={selectedContext} />
         </div>
       </div>
       <div className="flex h-6 shrink-0 items-center border-t border-neutral-200 bg-neutral-50 px-3 text-xs text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500">{lastEvent ?? "Ready"}</div>

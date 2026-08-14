@@ -5,11 +5,22 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AgentPhase {
     Idle,
-    Analyzing { task: String },
-    Planning { plan: Vec<String> },
-    Executing { current_step: usize },
-    Observing { observation: Option<String> },
-    Verifying { passed: bool, reason: Option<String> },
+    Analyzing {
+        task: String,
+    },
+    Planning {
+        plan: Vec<String>,
+    },
+    Executing {
+        current_step: usize,
+    },
+    Observing {
+        observation: Option<String>,
+    },
+    Verifying {
+        passed: bool,
+        reason: Option<String>,
+    },
     Completed,
     Failed(String),
 }

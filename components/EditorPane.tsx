@@ -45,7 +45,6 @@ export default function EditorPane({
   const inlineDecorationsRef = useRef<string[]>([]);
   const selectionRangeRef = useRef<any>(null);
   const [diffOriginal, setDiffOriginal] = useState<string>("");
-  const [diffLanguage, setDiffLanguage] = useState("text");
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const openFilesRef = useRef(openFiles);
@@ -54,22 +53,28 @@ export default function EditorPane({
   const currentDiff = pendingDiffs[activeDiffIndex] ?? null;
   const isDiffReview = currentDiff !== null;
   const diffIdentity = currentDiff?.id ?? "";
+  const diffLanguage = currentDiff ? languageFromPath(currentDiff.filePath) : "text";
 
   useEffect(() => {
     if (!currentDiff) {
-      setDiffOriginal("");
-      setDiffError(null);
       return;
     }
     let cancelled = false;
-    setDiffError(null);
-    setDiffLoading(false);
     const f = openFilesRef.current.find((file) => file.path === currentDiff.filePath);
     if (f) {
-      setDiffOriginal(f.content);
-      setDiffLanguage(languageFromPath(f.path));
+      void Promise.resolve().then(() => {
+        if (cancelled) return;
+        setDiffError(null);
+        setDiffLoading(false);
+        setDiffOriginal(f.content);
+      });
     } else {
-      setDiffLoading(true);
+      void Promise.resolve().then(() => {
+        if (!cancelled) {
+          setDiffError(null);
+          setDiffLoading(true);
+        }
+      });
       fs.readFile(currentDiff.filePath)
         .then((content) => {
           if (!cancelled) setDiffOriginal(content);
@@ -80,10 +85,9 @@ export default function EditorPane({
         .finally(() => {
           if (!cancelled) setDiffLoading(false);
         });
-      setDiffLanguage(languageFromPath(currentDiff.filePath));
     }
     return () => { cancelled = true; };
-  }, [diffIdentity]);
+  }, [currentDiff, diffIdentity]);
 
   const handleDiffAccept = async () => {
     if (!currentDiff || diffLoading || diffError) return;
@@ -199,7 +203,7 @@ export default function EditorPane({
       const r = c.getBoundingClientRect();
       openPrompt(r.left + 20, r.top + 60, selectedText, cursorLine, { startLine: cursorLine, endLine: cursorLine }, { filePath: activeFile?.path ?? "", workspaceGeneration: workspaceGeneration, documentVersion: activeFile?.revision ?? 0, selectionStartColumn: selection?.startColumn ?? 0, selectionEndColumn: selection?.endColumn ?? 0 });
     }
-  }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject]);
+  }, [activeFile, openPrompt, prompt.status, handleAccept, handleReject, workspaceGeneration]);
   useEffect(() => { window.addEventListener("keydown", handleKeyDown); return () => window.removeEventListener("keydown", handleKeyDown); }, [handleKeyDown]);
 
   if (!activeFile) return <EmptyState icon="📝" title="No file open" hint="Select a file from the explorer, or open a folder to get started" />;

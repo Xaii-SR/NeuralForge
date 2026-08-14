@@ -74,6 +74,7 @@ export default function AgentWorkbench() {
   const [userGoal, setUserGoal] = useState("");
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [recoveryCount, setRecoveryCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -84,6 +85,16 @@ export default function AgentWorkbench() {
   const [knowledgeResults, setKnowledgeResults] = useState<string[]>([]);
   const unlistenRef = useRef<(() => void) | null>(null);
   const lastPhaseRef = useRef<string>("");
+
+  const appendTimeline = useCallback(
+    (p: AgentPhase, summary: string, detail = "", durationMs = 0) => {
+      setTimeline((prev) => [
+        ...prev.slice(-50),
+        { id: crypto.randomUUID(), timestamp: Date.now(), phase: p, summary, detail, durationMs },
+      ]);
+    },
+    []
+  );
 
   // Listen for real backend state changes (deduplicated — only fires on phase change)
   useEffect(() => {
@@ -103,17 +114,15 @@ export default function AgentWorkbench() {
       );
     }).then((fn) => { unlistenRef.current = fn; });
     return () => { unlistenRef.current?.(); };
-  }, []);
+  }, [appendTimeline]);
 
-  const appendTimeline = useCallback(
-    (p: AgentPhase, summary: string, detail = "", durationMs = 0) => {
-      setTimeline((prev) => [
-        ...prev.slice(-50),
-        { id: crypto.randomUUID(), timestamp: Date.now(), phase: p, summary, detail, durationMs },
-      ]);
-    },
-    []
-  );
+  useEffect(() => {
+    if (!startedAt || !isRunning) return;
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunning, startedAt]);
 
   const resetAgent = async () => {
     try { await cancelOrchestratorTask(); } catch {}
@@ -121,6 +130,7 @@ export default function AgentWorkbench() {
     setUserGoal("");
     setTimeline([]);
     setStartedAt(null);
+    setElapsedSeconds(0);
     setRecoveryCount(0);
     setErrorMessage(null);
     setIsRunning(false);
@@ -135,6 +145,7 @@ export default function AgentWorkbench() {
     setErrorMessage(null);
     setIsRunning(true);
     setStartedAt(Date.now());
+    setElapsedSeconds(0);
 
     try {
       const task: OrchestratorTask = await createOrchestratorTask(goal);
@@ -212,7 +223,7 @@ export default function AgentWorkbench() {
             {isRunning && <Spinner size={10} />}
             <span className="font-semibold text-neutral-800 dark:text-neutral-100">{PHASE_LABELS[phase]}</span>
           </div>
-          {startedAt && <div className="mt-0.5 text-[10px] text-neutral-400">Running: {((Date.now() - startedAt) / 1000).toFixed(0)}s</div>}
+          {startedAt && <div className="mt-0.5 text-[10px] text-neutral-400">Running: {elapsedSeconds}s</div>}
           {recoveryCount > 0 && <div className="mt-0.5 text-[10px] text-amber-500">Recovery attempts: {recoveryCount}</div>}
         </div>
 

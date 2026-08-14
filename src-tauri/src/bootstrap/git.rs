@@ -12,7 +12,11 @@ async fn run_git(root: &Path, args: &[&str]) -> AppResult<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::Provider(format!("git {} failed: {}", args.join(" "), stderr.trim())));
+        return Err(AppError::Provider(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            stderr.trim()
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -34,7 +38,12 @@ pub async fn create_branch(root: &Path, slug: &str) -> AppResult<String> {
 /// local commit only. Nothing here pushes to a remote; that stays a
 /// separate, explicit, human-driven action forever (see ARCHITECTURE.md /
 /// ROADMAP.md "Autonomous GitHub operations").
-pub async fn write_and_commit(root: &Path, file_path: &str, content: &str, title: &str) -> AppResult<()> {
+pub async fn write_and_commit(
+    root: &Path,
+    file_path: &str,
+    content: &str,
+    title: &str,
+) -> AppResult<()> {
     let target = root.join(file_path);
     // Sprint 4: the write goes through the PromotionController's shared
     // file-mutation primitive - same bytes, same path, same result as the
@@ -78,7 +87,11 @@ fn package_json_has_test_script(root: &Path) -> bool {
 /// instead of a fabricated pass - same discipline as
 /// agent::executor::verify for file types it can't check.
 pub async fn run_tests(root: &Path, file_path: &str) -> AppResult<(bool, String)> {
-    let file_dir = root.join(file_path).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| root.to_path_buf());
+    let file_dir = root
+        .join(file_path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| root.to_path_buf());
 
     if let Some(cargo_dir) = find_cargo_dir(&file_dir, root) {
         let output = Command::new("cargo")
@@ -88,21 +101,37 @@ pub async fn run_tests(root: &Path, file_path: &str) -> AppResult<(bool, String)
             .output()
             .await
             .map_err(|e| AppError::Provider(format!("failed to run cargo test: {e}")))?;
-        let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         let trimmed: String = combined.chars().take(4000).collect();
         return Ok((output.status.success(), trimmed));
     }
 
     if package_json_has_test_script(root) {
-        let output = Command::new("npm").args(["test", "--silent"]).current_dir(root).output().await;
+        let output = Command::new("npm")
+            .args(["test", "--silent"])
+            .current_dir(root)
+            .output()
+            .await;
         if let Ok(out) = output {
-            let combined = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
             let trimmed: String = combined.chars().take(4000).collect();
             return Ok((out.status.success(), trimmed));
         }
     }
 
-    Ok((true, "no automated test runner detected for this change - written without a test check".to_string()))
+    Ok((
+        true,
+        "no automated test runner detected for this change - written without a test check"
+            .to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -112,15 +141,39 @@ mod tests {
 
     fn temp_git_repo() -> PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_bootstrap_git_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
-        std::process::Command::new("git").arg("init").arg("--quiet").current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir).output().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         std::fs::write(dir.join("README.md"), "hello").unwrap();
-        std::process::Command::new("git").args(["add", "."]).current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["commit", "-m", "initial"]).current_dir(&dir).output().unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         dir
     }
 
@@ -139,7 +192,10 @@ mod tests {
     #[tokio::test]
     async fn create_branch_rejects_non_git_directory() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_not_a_repo_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -154,9 +210,14 @@ mod tests {
         let dir = temp_git_repo();
         create_branch(&dir, "add-file").await.unwrap();
 
-        write_and_commit(&dir, "README.md", "updated content", "update readme").await.unwrap();
+        write_and_commit(&dir, "README.md", "updated content", "update readme")
+            .await
+            .unwrap();
 
-        assert_eq!(std::fs::read_to_string(dir.join("README.md")).unwrap(), "updated content");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("README.md")).unwrap(),
+            "updated content"
+        );
         let log = run_git(&dir, &["log", "-1", "--pretty=%s"]).await.unwrap();
         assert_eq!(log, "neuralforge: update readme");
 

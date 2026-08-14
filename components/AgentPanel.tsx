@@ -44,7 +44,10 @@ export default function AgentPanel({ workspaceOpen, workspaceGeneration }: Agent
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const workspaceGenerationRef = useRef(workspaceGeneration);
-  workspaceGenerationRef.current = workspaceGeneration;
+
+  useEffect(() => {
+    workspaceGenerationRef.current = workspaceGeneration;
+  }, [workspaceGeneration]);
 
   async function refresh(generation = workspaceGenerationRef.current) {
     try {
@@ -58,14 +61,6 @@ export default function AgentPanel({ workspaceOpen, workspaceGeneration }: Agent
   }
 
   useEffect(() => {
-    setTasks([]);
-    setSelectedId(null);
-    setCandidates(null);
-    setError(null);
-    setPlanning(false);
-    setResolving(false);
-    setApproving(false);
-    setLoadingTasks(workspaceOpen);
     if (workspaceOpen) refresh(workspaceGeneration);
   }, [workspaceOpen, workspaceGeneration]);
 

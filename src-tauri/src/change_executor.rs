@@ -24,7 +24,10 @@ impl ChangeGenerator {
     /// NF-UNP-003: this entire module is dead scaffold — no production caller.
     /// Kept only to satisfy Clippy without activating unsafe behavior.
     #[allow(clippy::never_loop)]
-    pub fn generate_patches(plan: &TaskPlan, root: &Path) -> Result<(Vec<Patch>, Vec<String>), String> {
+    pub fn generate_patches(
+        plan: &TaskPlan,
+        root: &Path,
+    ) -> Result<(Vec<Patch>, Vec<String>), String> {
         let mut patches = Vec::new();
 
         for subtask in &plan.subtasks {
@@ -72,10 +75,22 @@ pub struct Patch {
 
 #[derive(Debug, Clone)]
 pub enum PatchOperation {
-    Insert { line: usize, content: String },
-    Delete { start_line: usize, end_line: usize },
-    Replace { start_line: usize, end_line: usize, new_content: String },
-    AddFile { content: String },
+    Insert {
+        line: usize,
+        content: String,
+    },
+    Delete {
+        start_line: usize,
+        end_line: usize,
+    },
+    Replace {
+        start_line: usize,
+        end_line: usize,
+        new_content: String,
+    },
+    AddFile {
+        content: String,
+    },
     DeleteFile,
 }
 
@@ -104,13 +119,23 @@ impl DiffGenerator {
                         lines.push(DiffLine::Added(line.to_string()));
                     }
                 }
-                PatchOperation::Delete { start_line, end_line } => {
+                PatchOperation::Delete {
+                    start_line,
+                    end_line,
+                } => {
                     removed_lines += end_line.saturating_sub(*start_line).saturating_add(1);
-                    lines.push(DiffLine::Removed(format!("lines {}..={}", start_line, end_line)));
+                    lines.push(DiffLine::Removed(format!(
+                        "lines {}..={}",
+                        start_line, end_line
+                    )));
                 }
                 PatchOperation::Replace { new_content, .. } => {
                     added_lines += new_content.lines().count().max(1);
-                    removed_lines += patch.original_content.as_deref().map(|c| c.lines().count().max(1)).unwrap_or(0);
+                    removed_lines += patch
+                        .original_content
+                        .as_deref()
+                        .map(|c| c.lines().count().max(1))
+                        .unwrap_or(0);
                     for line in new_content.lines() {
                         lines.push(DiffLine::Added(line.to_string()));
                     }
@@ -122,7 +147,11 @@ impl DiffGenerator {
                     }
                 }
                 PatchOperation::DeleteFile => {
-                    removed_lines += patch.original_content.as_deref().map(|c| c.lines().count().max(1)).unwrap_or(1);
+                    removed_lines += patch
+                        .original_content
+                        .as_deref()
+                        .map(|c| c.lines().count().max(1))
+                        .unwrap_or(1);
                     lines.push(DiffLine::Removed("delete file".to_string()));
                 }
             }
@@ -136,7 +165,11 @@ impl DiffGenerator {
                 count_old: removed_lines,
                 start_line_new: 1,
                 count_new: added_lines,
-                lines: if lines.is_empty() { vec![DiffLine::Context("no content changes".to_string())] } else { lines },
+                lines: if lines.is_empty() {
+                    vec![DiffLine::Context("no content changes".to_string())]
+                } else {
+                    lines
+                },
             }],
             added_lines,
             removed_lines,
@@ -177,7 +210,8 @@ impl PatchApplier {
         let mut results = Vec::new();
 
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create parent directories for {}: {e}", patch.file_path))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("create parent directories for {}: {e}", patch.file_path))?;
         }
 
         let current = fs::read_to_string(&target).ok();
@@ -195,15 +229,22 @@ impl PatchApplier {
         match patch.operations.first() {
             Some(PatchOperation::DeleteFile) => {
                 if target.exists() {
-                    fs::remove_file(&target).map_err(|e| format!("remove {}: {e}", patch.file_path))?;
+                    fs::remove_file(&target)
+                        .map_err(|e| format!("remove {}: {e}", patch.file_path))?;
                 }
             }
             _ => {
-                fs::write(&target, next_content).map_err(|e| format!("write {}: {e}", patch.file_path))?;
+                fs::write(&target, next_content)
+                    .map_err(|e| format!("write {}: {e}", patch.file_path))?;
             }
         }
 
-        results.push(ApplyResult { patch_id: patch.id.clone(), file_path: patch.file_path.clone(), success: true, error: None });
+        results.push(ApplyResult {
+            patch_id: patch.id.clone(),
+            file_path: patch.file_path.clone(),
+            success: true,
+            error: None,
+        });
         Ok(results)
     }
 
@@ -211,12 +252,14 @@ impl PatchApplier {
         let target = resolve_path(root, &patch.file_path)?;
         match &patch.original_content {
             Some(content) => {
-                fs::write(&target, content).map_err(|e| format!("rollback {}: {e}", patch.file_path))?;
+                fs::write(&target, content)
+                    .map_err(|e| format!("rollback {}: {e}", patch.file_path))?;
                 Ok(true)
             }
             None => {
                 if target.exists() {
-                    fs::remove_file(&target).map_err(|e| format!("rollback delete {}: {e}", patch.file_path))?;
+                    fs::remove_file(&target)
+                        .map_err(|e| format!("rollback delete {}: {e}", patch.file_path))?;
                     Ok(true)
                 } else {
                     Ok(false)
@@ -245,21 +288,40 @@ impl PatchValidator {
             errors.push("patch file path is empty".to_string());
         }
         if normalize_relative_path(&patch.file_path).is_err() {
-            errors.push(format!("patch path `{}` escapes the workspace", patch.file_path));
+            errors.push(format!(
+                "patch path `{}` escapes the workspace",
+                patch.file_path
+            ));
         }
         if patch.operations.is_empty() {
             warnings.push(format!("patch `{}` contains no operations", patch.id));
         }
         if patch.operations.len() > 32 {
-            warnings.push(format!("patch `{}` has a large number of operations", patch.id));
+            warnings.push(format!(
+                "patch `{}` has a large number of operations",
+                patch.id
+            ));
         }
         if let Ok(path) = resolve_path(root, &patch.file_path) {
-            if path.exists() && patch.original_content.is_none() && !patch.operations.iter().any(|op| matches!(op, PatchOperation::DeleteFile)) {
-                warnings.push(format!("patch `{}` does not capture existing file contents", patch.id));
+            if path.exists()
+                && patch.original_content.is_none()
+                && !patch
+                    .operations
+                    .iter()
+                    .any(|op| matches!(op, PatchOperation::DeleteFile))
+            {
+                warnings.push(format!(
+                    "patch `{}` does not capture existing file contents",
+                    patch.id
+                ));
             }
         }
 
-        if errors.is_empty() { Ok(warnings) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(warnings)
+        } else {
+            Err(errors)
+        }
     }
 
     pub fn detect_conflicts(patches: &[Patch]) -> Vec<String> {
@@ -267,7 +329,10 @@ impl PatchValidator {
         let mut conflicts = Vec::new();
         for patch in patches {
             if let Some(previous) = seen.insert(&patch.file_path, &patch.id) {
-                conflicts.push(format!("patches `{}` and `{}` both target `{}`", previous, patch.id, patch.file_path));
+                conflicts.push(format!(
+                    "patches `{}` and `{}` both target `{}`",
+                    previous, patch.id, patch.file_path
+                ));
             }
         }
         conflicts
@@ -301,7 +366,8 @@ fn normalize_relative_path(file: &str) -> Result<String, String> {
 fn resolve_path(root: &Path, file_path: &str) -> Result<PathBuf, String> {
     let normalized = normalize_relative_path(file_path)?;
     let candidate = root.join(&normalized);
-    let canonical_root = fs::canonicalize(root).map_err(|e| format!("canonicalize workspace root: {e}"))?;
+    let canonical_root =
+        fs::canonicalize(root).map_err(|e| format!("canonicalize workspace root: {e}"))?;
 
     // Try canonicalizing the candidate itself (exists).
     if let Ok(canonical_candidate) = fs::canonicalize(&candidate) {
@@ -356,26 +422,37 @@ fn apply_operation(current: &str, op: &PatchOperation) -> Result<String, String>
             lines.insert(idx, content.clone());
             Ok(join_lines(&lines))
         }
-        PatchOperation::Delete { start_line, end_line } => {
+        PatchOperation::Delete {
+            start_line,
+            end_line,
+        } => {
             let mut lines: Vec<String> = current.lines().map(|s| s.to_string()).collect();
             if *start_line == 0 || *end_line < *start_line {
                 return Err("invalid delete range".to_string());
             }
             let start = start_line.saturating_sub(1).min(lines.len());
-            let end = end_line.saturating_sub(1).min(lines.len().saturating_sub(1));
+            let end = end_line
+                .saturating_sub(1)
+                .min(lines.len().saturating_sub(1));
             if start > end || start >= lines.len() {
                 return Err("delete range is out of bounds".to_string());
             }
             lines.drain(start..=end);
             Ok(join_lines(&lines))
         }
-        PatchOperation::Replace { start_line, end_line, new_content } => {
+        PatchOperation::Replace {
+            start_line,
+            end_line,
+            new_content,
+        } => {
             let mut lines: Vec<String> = current.lines().map(|s| s.to_string()).collect();
             if *start_line == 0 || *end_line < *start_line {
                 return Err("invalid replace range".to_string());
             }
             let start = start_line.saturating_sub(1).min(lines.len());
-            let end = end_line.saturating_sub(1).min(lines.len().saturating_sub(1));
+            let end = end_line
+                .saturating_sub(1)
+                .min(lines.len().saturating_sub(1));
             if start > end && !lines.is_empty() {
                 return Err("replace range is out of bounds".to_string());
             }

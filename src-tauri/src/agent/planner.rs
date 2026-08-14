@@ -13,8 +13,14 @@ pub fn estimate_risk(original: &str, proposed: &str) -> String {
     let original_set: std::collections::HashSet<&str> = original_lines.iter().copied().collect();
     let proposed_set: std::collections::HashSet<&str> = proposed_lines.iter().copied().collect();
 
-    let removed = original_lines.iter().filter(|l| !proposed_set.contains(*l)).count();
-    let added = proposed_lines.iter().filter(|l| !original_set.contains(*l)).count();
+    let removed = original_lines
+        .iter()
+        .filter(|l| !proposed_set.contains(*l))
+        .count();
+    let added = proposed_lines
+        .iter()
+        .filter(|l| !original_set.contains(*l))
+        .count();
     let total = original_lines.len().max(1);
     let changed_ratio = (added + removed) as f64 / total as f64;
 
@@ -53,7 +59,11 @@ fn build_prompt(objective: &str, file_path: &str, current_content: &str) -> Vec<
 /// writing anything to disk. The caller (a Tauri command) is responsible
 /// for persisting the proposal and surfacing it for human approval - this
 /// function has no side effects at all beyond the read-only LLM call.
-pub async fn plan_change(objective: &str, file_path: &str, current_content: &str) -> AppResult<(String, String)> {
+pub async fn plan_change(
+    objective: &str,
+    file_path: &str,
+    current_content: &str,
+) -> AppResult<(String, String)> {
     let messages = build_prompt(objective, file_path, current_content);
     let mut proposed = String::new();
 
@@ -65,7 +75,9 @@ pub async fn plan_change(objective: &str, file_path: &str, current_content: &str
 
     let proposed = proposed.trim().to_string();
     if proposed.is_empty() {
-        return Err(AppError::Provider("model produced an empty proposal".to_string()));
+        return Err(AppError::Provider(
+            "model produced an empty proposal".to_string(),
+        ));
     }
 
     let risk = estimate_risk(current_content, &proposed);
@@ -120,7 +132,9 @@ pub async fn plan_code(objective: &str) -> AppResult<(String, String)> {
 
     let proposed = strip_code_fences(&proposed);
     if proposed.is_empty() {
-        return Err(AppError::Provider("model produced an empty proposal".to_string()));
+        return Err(AppError::Provider(
+            "model produced an empty proposal".to_string(),
+        ));
     }
 
     let risk = format!(
@@ -136,21 +150,31 @@ mod tests {
 
     #[test]
     fn estimate_risk_reports_low_for_small_change() {
-        let original = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let original = (1..=20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut lines: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
         lines.push("// new comment".to_string());
         let proposed = lines.join("\n");
 
         let risk = estimate_risk(&original, &proposed);
-        assert!(risk.starts_with("low risk"), "expected low risk, got: {risk}");
+        assert!(
+            risk.starts_with("low risk"),
+            "expected low risk, got: {risk}"
+        );
     }
 
     #[test]
     fn estimate_risk_reports_high_for_full_rewrite() {
         let original = "fn old() {}\n";
-        let proposed = "completely different content\nwith multiple new lines\nand nothing shared\n";
+        let proposed =
+            "completely different content\nwith multiple new lines\nand nothing shared\n";
         let risk = estimate_risk(original, proposed);
-        assert!(risk.starts_with("high risk"), "expected high risk, got: {risk}");
+        assert!(
+            risk.starts_with("high risk"),
+            "expected high risk, got: {risk}"
+        );
     }
 
     #[test]

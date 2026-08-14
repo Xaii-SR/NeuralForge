@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { InlineStatus } from "@/hooks/useInlinePrompt";
 import { useMentionMenu } from "@/hooks/useMentionMenu";
@@ -31,10 +31,14 @@ export default function InlinePromptWidget({
   const [suggestedItems, setSuggestedItems] = useState<MentionItem[]>([]);
   const [attachedItems, setAttachedItems] = useState<MentionItem[]>([]);
   const debouncedQuery = useDebounce(mention.query, 150);
+  const visibleSuggestedItems = useMemo(
+    () => (mention.isOpen && debouncedQuery ? suggestedItems : []),
+    [debouncedQuery, mention.isOpen, suggestedItems],
+  );
 
   // Debounced workspace file + doc search for inline mentions
   useEffect(() => {
-    if (!mention.isOpen || !debouncedQuery) { setSuggestedItems([]); return; }
+    if (!mention.isOpen || !debouncedQuery) return;
     Promise.all([
       invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10 }),
       invoke<string[]>("list_cached_docs"),

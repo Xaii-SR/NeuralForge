@@ -15,9 +15,19 @@ pub enum RetrievalIntent {
 pub fn classify_intent(query: &str) -> RetrievalIntent {
     let q = query.to_lowercase();
     let structural_keywords = [
-        "architecture", "depend", "structure", "import", "module",
-        "project layout", "component", "relationship", "module map",
-        "file tree", "how is", "organized", "dependency graph",
+        "architecture",
+        "depend",
+        "structure",
+        "import",
+        "module",
+        "project layout",
+        "component",
+        "relationship",
+        "module map",
+        "file tree",
+        "how is",
+        "organized",
+        "dependency graph",
     ];
     if structural_keywords.iter().any(|kw| q.contains(kw)) {
         RetrievalIntent::Structural
@@ -36,7 +46,9 @@ const MIN_OUTPUT_RESERVE_TOKENS: usize = 256;
 const MAX_OUTPUT_RESERVE_TOKENS: usize = 4096;
 
 pub fn read_memory_context(workspace_root: &Path) -> String {
-    let memory_dir = workspace_root.join(MEMORY_DIR_NAME).join(MEMORY_SUBDIR_NAME);
+    let memory_dir = workspace_root
+        .join(MEMORY_DIR_NAME)
+        .join(MEMORY_SUBDIR_NAME);
     let mut sections = Vec::new();
     for file_name in MEMORY_FILES {
         let path = memory_dir.join(file_name);
@@ -88,19 +100,11 @@ pub fn build_context_prompt(workspace_root: &Path, conn: &Connection, query: &st
     }
     let memory = read_memory_context(workspace_root);
     let resolved = resolved_file_block(workspace_root, conn, query);
-    let resolved_context = resolved.as_ref().map(|(path, content)| ResolvedContextBlock {
-        path,
-        content,
-    });
-    let enriched = enriched_context(
-        conn,
-        workspace_root,
-        query,
-        &memory,
-        resolved_context,
-        2000,
-    )
-    .unwrap_or_default();
+    let resolved_context = resolved
+        .as_ref()
+        .map(|(path, content)| ResolvedContextBlock { path, content });
+    let enriched = enriched_context(conn, workspace_root, query, &memory, resolved_context, 2000)
+        .unwrap_or_default();
     if enriched.is_empty() {
         return "You are an AI assistant embedded in the NeuralForge IDE.".to_string();
     }
@@ -194,9 +198,8 @@ pub fn budget_chat_messages(
         let content_tokens = allowance.saturating_sub(MESSAGE_OVERHEAD_TOKENS);
         let mut bounded = system.clone();
         bounded.content = truncate_system_to_token_budget(&bounded.content, content_tokens);
-        remaining = remaining.saturating_sub(
-            approximate_tokens(&bounded.content) + MESSAGE_OVERHEAD_TOKENS,
-        );
+        remaining = remaining
+            .saturating_sub(approximate_tokens(&bounded.content) + MESSAGE_OVERHEAD_TOKENS);
         selected.push(bounded);
     }
 
@@ -234,25 +237,43 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     fn temp_workspace() -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_context_test_{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap(); dir
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
-    #[test] fn read_memory_context_skips_empty_files() {
+    #[test]
+    fn read_memory_context_skips_empty_files() {
         let dir = temp_workspace();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
         assert!(read_memory_context(&dir).is_empty());
-        std::fs::write(dir.join(".neuralforge").join("memory").join("decisions.md"),
-            "# Decisions\n\nUse SQLite for the local index.").unwrap();
+        std::fs::write(
+            dir.join(".neuralforge").join("memory").join("decisions.md"),
+            "# Decisions\n\nUse SQLite for the local index.",
+        )
+        .unwrap();
         assert!(read_memory_context(&dir).contains("Use SQLite"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test] fn build_context_prompt_includes_memory() {
+    #[test]
+    fn build_context_prompt_includes_memory() {
         let dir = temp_workspace();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
-        std::fs::write(dir.join(".neuralforge").join("memory").join("architecture.md"),
-            "# Architecture\n\nBackend is Rust/Tauri.").unwrap();
-        std::fs::write(dir.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+        std::fs::write(
+            dir.join(".neuralforge")
+                .join("memory")
+                .join("architecture.md"),
+            "# Architecture\n\nBackend is Rust/Tauri.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("auth.rs"),
+            "fn authenticate_user() -> bool { true }\n",
+        )
+        .unwrap();
         {
             let conn = crate::database::open_for_workspace(&dir).unwrap();
             crate::database::indexer::index_workspace(&conn, &dir).unwrap();
@@ -262,11 +283,15 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test] fn build_context_prompt_resolves_file() {
+    #[test]
+    fn build_context_prompt_resolves_file() {
         let dir = temp_workspace();
         std::fs::create_dir_all(dir.join("carina_egti")).unwrap();
-        std::fs::write(dir.join("carina_egti").join("ui_car.json"),
-            "{\"screen\": \"dashboard\"}").unwrap();
+        std::fs::write(
+            dir.join("carina_egti").join("ui_car.json"),
+            "{\"screen\": \"dashboard\"}",
+        )
+        .unwrap();
         {
             let conn = crate::database::open_for_workspace(&dir).unwrap();
             crate::database::indexer::index_workspace(&conn, &dir).unwrap();
@@ -280,11 +305,24 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test] fn classify_intent_classifies_correctly() {
-        assert_eq!(classify_intent("show me the dependency graph"), RetrievalIntent::Structural);
-        assert_eq!(classify_intent("architecture of the auth module"), RetrievalIntent::Structural);
-        assert_eq!(classify_intent("how does authentication work"), RetrievalIntent::Semantic);
-        assert_eq!(classify_intent("fix the login bug"), RetrievalIntent::Semantic);
+    #[test]
+    fn classify_intent_classifies_correctly() {
+        assert_eq!(
+            classify_intent("show me the dependency graph"),
+            RetrievalIntent::Structural
+        );
+        assert_eq!(
+            classify_intent("architecture of the auth module"),
+            RetrievalIntent::Structural
+        );
+        assert_eq!(
+            classify_intent("how does authentication work"),
+            RetrievalIntent::Semantic
+        );
+        assert_eq!(
+            classify_intent("fix the login bug"),
+            RetrievalIntent::Semantic
+        );
     }
     #[test]
     fn repository_instructions_are_explicitly_delimited_as_untrusted() {
@@ -310,7 +348,10 @@ mod tests {
         let messages = vec![
             super::super::providers::ollama::ChatMessage {
                 role: "system".into(),
-                content: format!("{CONTEXT_OPEN}\n{}\n{CONTEXT_CLOSE}", "policy data ".repeat(500)),
+                content: format!(
+                    "{CONTEXT_OPEN}\n{}\n{CONTEXT_CLOSE}",
+                    "policy data ".repeat(500)
+                ),
             },
             super::super::providers::ollama::ChatMessage {
                 role: "user".into(),
@@ -326,7 +367,10 @@ mod tests {
             .iter()
             .map(|message| approximate_tokens(&message.content) + MESSAGE_OVERHEAD_TOKENS)
             .sum::<usize>();
-        assert!(estimated <= 768, "input must leave at least the 25% reserve");
+        assert!(
+            estimated <= 768,
+            "input must leave at least the 25% reserve"
+        );
         assert!(bounded.last().unwrap().content.contains("\u{1f680}"));
         assert_eq!(bounded.first().unwrap().role, "system");
         assert_eq!(
@@ -338,8 +382,11 @@ mod tests {
     #[test]
     fn resolved_file_truncation_is_unicode_safe() {
         let dir = temp_workspace();
-        std::fs::write(dir.join("unicode.rs"), "\u{6f22}".repeat(MAX_RESOLVED_FILE_CHARS + 10))
-            .unwrap();
+        std::fs::write(
+            dir.join("unicode.rs"),
+            "\u{6f22}".repeat(MAX_RESOLVED_FILE_CHARS + 10),
+        )
+        .unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         crate::database::indexer::index_workspace(&conn, &dir).unwrap();
         let (_, block) = resolved_file_block(&dir, &conn, "unicode").unwrap();

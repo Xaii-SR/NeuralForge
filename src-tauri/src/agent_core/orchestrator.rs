@@ -16,7 +16,9 @@
 //! wrapper rather than hardcoded into the testable sequencing logic.
 
 use crate::agent_core::lifecycle::{AgentLifecycleState, ExecutionBackend};
-use crate::agent_core::types::{AgentEventType, AgentRole, CouncilError, CouncilPassResult, CouncilVerdict};
+use crate::agent_core::types::{
+    AgentEventType, AgentRole, CouncilError, CouncilPassResult, CouncilVerdict,
+};
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
 use crate::ai::context;
@@ -46,7 +48,11 @@ fn record_backend(core: &AgentCoreState, task_id: &str, backend: ExecutionBacken
 /// Best-effort like `record_backend` - a poisoned registry lock must not
 /// fail task creation over advisory bookkeeping.
 fn register_lifecycle(core: &AgentCoreState, task_id: &str) {
-    let _ = core.agent_registry.register(task_id.to_string(), AgentRole::Architect, AgentLifecycleState::Created);
+    let _ = core.agent_registry.register(
+        task_id.to_string(),
+        AgentRole::Architect,
+        AgentLifecycleState::Created,
+    );
 }
 
 // ── Governed pipeline (agent::) forwarding ──────────────────────────────
@@ -135,12 +141,18 @@ pub async fn start_v2_task(
 }
 
 /// Forwards to `agent_v2::approve_agent_task` unchanged.
-pub async fn approve_v2_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn approve_v2_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     crate::agent_v2::approve_agent_task(id, registry).await
 }
 
 /// Forwards to `agent_v2::reject_agent_task` unchanged.
-pub async fn reject_v2_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn reject_v2_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     crate::agent_v2::reject_agent_task(id, registry).await
 }
 
@@ -151,7 +163,9 @@ pub async fn reject_v2_task(id: String, registry: State<'_, ApprovalRegistry>) -
 /// Best-effort like `register_lifecycle`: a poisoned registry lock must not
 /// abort a real, in-flight council pass over advisory bookkeeping.
 fn mark_role_started(core: &AgentCoreState, task_id: &str, role: AgentRole) {
-    let _ = core.agent_registry.transition(task_id, role, AgentEventType::PlanningStarted);
+    let _ = core
+        .agent_registry
+        .transition(task_id, role, AgentEventType::PlanningStarted);
 }
 
 /// Walks `role`'s advisory lifecycle the rest of the way to `Completed`,
@@ -172,7 +186,9 @@ fn mark_role_completed(core: &AgentCoreState, task_id: &str, role: AgentRole) {
 /// see `reducer::reduce`) - fired once, right after that role's real LLM
 /// call errors.
 fn mark_role_failed(core: &AgentCoreState, task_id: &str, role: AgentRole) {
-    let _ = core.agent_registry.transition(task_id, role, AgentEventType::Failed);
+    let _ = core
+        .agent_registry
+        .transition(task_id, role, AgentEventType::Failed);
 }
 
 /// Reads the Judge's real output for the one word it was explicitly
@@ -237,7 +253,9 @@ where
         F: FnMut(AgentRole, String, String) -> Fut,
         Fut: std::future::Future<Output = Result<String, String>>,
     {
-        let _ = core.agent_registry.register(task_id.to_string(), role, AgentLifecycleState::Created);
+        let _ =
+            core.agent_registry
+                .register(task_id.to_string(), role, AgentLifecycleState::Created);
         mark_role_started(core, task_id, role);
         match call_role(role, system_prompt, user_prompt).await {
             Ok(output) => {
@@ -255,7 +273,8 @@ where
         core,
         task_id,
         AgentRole::Architect,
-        "You are the Architect. Propose a concrete, specific solution to the user's objective.".to_string(),
+        "You are the Architect. Propose a concrete, specific solution to the user's objective."
+            .to_string(),
         objective.to_string(),
         &mut call_role,
     )
@@ -283,7 +302,12 @@ where
 
     let judge_verdict = parse_verdict(&judge_output);
 
-    Ok(CouncilPassResult { architect_output, critic_output, judge_output, judge_verdict })
+    Ok(CouncilPassResult {
+        architect_output,
+        critic_output,
+        judge_output,
+        judge_verdict,
+    })
 }
 
 /// Resolves a repository-context prefix for the Architect's system prompt,
@@ -355,32 +379,46 @@ pub async fn run_council_pass(
     };
     let role_app_handle = app_handle.clone();
 
-    let result = run_council_pass_with(core, task_id, objective, move |role, system_prompt, user_prompt| {
-        let app_handle = role_app_handle.clone();
-        // Prepended to the Architect's *system* prompt only - the
-        // "Objective: {objective}" user-prompt shape Critic/Judge already
-        // build (in run_council_pass_with, untouched by this change) stays
-        // exactly as it was.
-        let system_prompt = match role {
-            AgentRole::Architect => architect_system_prompt_with_context(&system_prompt, architect_context.as_deref()),
-            _ => system_prompt,
-        };
-        async move {
-            let health = app_handle.state::<HealthRegistry>();
-            let state = app_handle.state::<AppState>();
-            let db = app_handle.state::<DbState>();
-            let providers = crate::database::with_workspace_conn_at_generation(
-                &state,
-                &db,
-                workspace_generation,
-                |_root, conn| Ok(provider_registry::load_providers(conn)),
-            )
-            .map_err(|e| e.to_string())?;
-            provider_router::generate_for_task(&providers, &health, TaskCapability::Reasoning, &system_prompt, &user_prompt)
+    let result = run_council_pass_with(
+        core,
+        task_id,
+        objective,
+        move |role, system_prompt, user_prompt| {
+            let app_handle = role_app_handle.clone();
+            // Prepended to the Architect's *system* prompt only - the
+            // "Objective: {objective}" user-prompt shape Critic/Judge already
+            // build (in run_council_pass_with, untouched by this change) stays
+            // exactly as it was.
+            let system_prompt = match role {
+                AgentRole::Architect => architect_system_prompt_with_context(
+                    &system_prompt,
+                    architect_context.as_deref(),
+                ),
+                _ => system_prompt,
+            };
+            async move {
+                let health = app_handle.state::<HealthRegistry>();
+                let state = app_handle.state::<AppState>();
+                let db = app_handle.state::<DbState>();
+                let providers = crate::database::with_workspace_conn_at_generation(
+                    &state,
+                    &db,
+                    workspace_generation,
+                    |_root, conn| Ok(provider_registry::load_providers(conn)),
+                )
+                .map_err(|e| e.to_string())?;
+                provider_router::generate_for_task(
+                    &providers,
+                    &health,
+                    TaskCapability::Reasoning,
+                    &system_prompt,
+                    &user_prompt,
+                )
                 .await
                 .map_err(|e| e.to_string())
-        }
-    })
+            }
+        },
+    )
     .await?;
 
     let state = app_handle.state::<AppState>();
@@ -413,7 +451,9 @@ mod tests {
         let core = AgentCoreState::default();
         register_lifecycle(&core, "task-1");
         assert_eq!(
-            core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(),
+            core.agent_registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
             AgentLifecycleState::Created
         );
     }
@@ -429,28 +469,48 @@ mod tests {
         // build_context_prompt works in isolation (already covered by its
         // own tests in ai/context.rs).
         let mut dir = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_council_context_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
         std::fs::write(
-            dir.join(".neuralforge").join("memory").join("architecture.md"),
+            dir.join(".neuralforge")
+                .join("memory")
+                .join("architecture.md"),
             "# Architecture\n\nBackend is Rust/Tauri.",
         )
         .unwrap();
-        std::fs::write(dir.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+        std::fs::write(
+            dir.join("auth.rs"),
+            "fn authenticate_user() -> bool { true }\n",
+        )
+        .unwrap();
 
         {
             let conn = crate::database::open_for_workspace(&dir).unwrap();
             crate::database::indexer::index_workspace(&conn, &dir).unwrap();
-            let real_context = context::build_context_prompt(&dir, &conn, "how does authentication work");
+            let real_context =
+                context::build_context_prompt(&dir, &conn, "how does authentication work");
 
             let base_system_prompt = "You are the Architect. Propose a concrete, specific solution to the user's objective.";
-            let merged = architect_system_prompt_with_context(base_system_prompt, Some(&real_context));
+            let merged =
+                architect_system_prompt_with_context(base_system_prompt, Some(&real_context));
 
-            assert!(merged.contains("Rust/Tauri"), "merged prompt must carry real repository memory content");
-            assert!(merged.contains("authenticate_user"), "merged prompt must carry real indexed-file content");
-            assert!(merged.contains(base_system_prompt), "merged prompt must still contain the original Architect instructions");
+            assert!(
+                merged.contains("Rust/Tauri"),
+                "merged prompt must carry real repository memory content"
+            );
+            assert!(
+                merged.contains("authenticate_user"),
+                "merged prompt must carry real indexed-file content"
+            );
+            assert!(
+                merged.contains(base_system_prompt),
+                "merged prompt must still contain the original Architect instructions"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -460,54 +520,104 @@ mod tests {
         // Proves the "no workspace open" path: None context must leave the
         // system prompt completely unchanged (today's pre-context-injection
         // behavior), never a hard error or a mutated/broken prompt.
-        let base_system_prompt = "You are the Architect. Propose a concrete, specific solution to the user's objective.";
+        let base_system_prompt =
+            "You are the Architect. Propose a concrete, specific solution to the user's objective.";
         let result = architect_system_prompt_with_context(base_system_prompt, None);
         assert_eq!(result, base_system_prompt);
     }
 
     #[test]
     fn parse_verdict_reads_the_first_word_case_insensitively() {
-        assert_eq!(parse_verdict("ACCEPT because it's correct"), CouncilVerdict::Accept);
+        assert_eq!(
+            parse_verdict("ACCEPT because it's correct"),
+            CouncilVerdict::Accept
+        );
         assert_eq!(parse_verdict("reject - too risky"), CouncilVerdict::Reject);
-        assert_eq!(parse_verdict("Revise: needs more tests"), CouncilVerdict::Revise, "trailing punctuation on the first word must not prevent a match");
+        assert_eq!(
+            parse_verdict("Revise: needs more tests"),
+            CouncilVerdict::Revise,
+            "trailing punctuation on the first word must not prevent a match"
+        );
         assert_eq!(parse_verdict("REJECT."), CouncilVerdict::Reject);
-        assert_eq!(parse_verdict("Hmm, not sure about this one"), CouncilVerdict::Unclear);
+        assert_eq!(
+            parse_verdict("Hmm, not sure about this one"),
+            CouncilVerdict::Unclear
+        );
         assert_eq!(parse_verdict(""), CouncilVerdict::Unclear);
     }
 
     #[tokio::test]
-    async fn full_pass_calls_each_role_once_in_order_and_each_sees_the_previous_roles_real_output() {
+    async fn full_pass_calls_each_role_once_in_order_and_each_sees_the_previous_roles_real_output()
+    {
         let core = AgentCoreState::default();
         let calls = std::cell::RefCell::new(Vec::new());
 
-        let result = run_council_pass_with(&core, "task-1", "Add input validation", |role, _system, user_prompt| {
-            calls.borrow_mut().push(role);
-            let response = match role {
-                AgentRole::Architect => Ok("Add a validate() function".to_string()),
-                AgentRole::Critic => {
-                    assert!(user_prompt.contains("Add a validate() function"), "Critic must see Architect's real output, not a placeholder");
-                    Ok("Looks reasonable but needs edge case handling".to_string())
-                }
-                AgentRole::Judge => {
-                    assert!(user_prompt.contains("Add a validate() function"), "Judge must see the Architect's real output");
-                    assert!(user_prompt.contains("needs edge case handling"), "Judge must see the Critic's real output");
-                    Ok("ACCEPT - solid proposal with a minor caveat noted".to_string())
-                }
-                AgentRole::Specialist => unreachable!("Specialist is not part of the Council v1 sequential pass"),
-            };
-            std::future::ready(response)
-        })
+        let result = run_council_pass_with(
+            &core,
+            "task-1",
+            "Add input validation",
+            |role, _system, user_prompt| {
+                calls.borrow_mut().push(role);
+                let response = match role {
+                    AgentRole::Architect => Ok("Add a validate() function".to_string()),
+                    AgentRole::Critic => {
+                        assert!(
+                            user_prompt.contains("Add a validate() function"),
+                            "Critic must see Architect's real output, not a placeholder"
+                        );
+                        Ok("Looks reasonable but needs edge case handling".to_string())
+                    }
+                    AgentRole::Judge => {
+                        assert!(
+                            user_prompt.contains("Add a validate() function"),
+                            "Judge must see the Architect's real output"
+                        );
+                        assert!(
+                            user_prompt.contains("needs edge case handling"),
+                            "Judge must see the Critic's real output"
+                        );
+                        Ok("ACCEPT - solid proposal with a minor caveat noted".to_string())
+                    }
+                    AgentRole::Specialist => {
+                        unreachable!("Specialist is not part of the Council v1 sequential pass")
+                    }
+                };
+                std::future::ready(response)
+            },
+        )
         .await
         .expect("all three roles succeed");
 
-        assert_eq!(*calls.borrow(), vec![AgentRole::Architect, AgentRole::Critic, AgentRole::Judge], "roles must run in this exact order, once each");
+        assert_eq!(
+            *calls.borrow(),
+            vec![AgentRole::Architect, AgentRole::Critic, AgentRole::Judge],
+            "roles must run in this exact order, once each"
+        );
         assert_eq!(result.architect_output, "Add a validate() function");
-        assert_eq!(result.critic_output, "Looks reasonable but needs edge case handling");
+        assert_eq!(
+            result.critic_output,
+            "Looks reasonable but needs edge case handling"
+        );
         assert_eq!(result.judge_verdict, CouncilVerdict::Accept);
 
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Completed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Critic).unwrap(), AgentLifecycleState::Completed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Judge).unwrap(), AgentLifecycleState::Completed);
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Critic)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Judge)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
     }
 
     #[tokio::test]
@@ -521,15 +631,35 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result, Err(CouncilError { role: AgentRole::Architect, reason: "model unavailable".to_string() }));
-        assert_eq!(*calls.borrow(), vec![AgentRole::Architect], "Critic and Judge must never be called after Architect fails");
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Failed);
         assert_eq!(
-            core.agent_registry.current_state("task-1", AgentRole::Critic),
+            result,
+            Err(CouncilError {
+                role: AgentRole::Architect,
+                reason: "model unavailable".to_string()
+            })
+        );
+        assert_eq!(
+            *calls.borrow(),
+            vec![AgentRole::Architect],
+            "Critic and Judge must never be called after Architect fails"
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Failed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Critic),
             Err(crate::agent_core::service::AgentError::TaskNotFound),
             "Critic must never be registered if Architect failed - no silent partial result"
         );
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Judge), Err(crate::agent_core::service::AgentError::TaskNotFound));
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Judge),
+            Err(crate::agent_core::service::AgentError::TaskNotFound)
+        );
     }
 
     #[tokio::test]
@@ -548,11 +678,34 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result, Err(CouncilError { role: AgentRole::Critic, reason: "critic model down".to_string() }));
-        assert_eq!(*calls.borrow(), vec![AgentRole::Architect, AgentRole::Critic]);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Completed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Critic).unwrap(), AgentLifecycleState::Failed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Judge), Err(crate::agent_core::service::AgentError::TaskNotFound));
+        assert_eq!(
+            result,
+            Err(CouncilError {
+                role: AgentRole::Critic,
+                reason: "critic model down".to_string()
+            })
+        );
+        assert_eq!(
+            *calls.borrow(),
+            vec![AgentRole::Architect, AgentRole::Critic]
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Critic)
+                .unwrap(),
+            AgentLifecycleState::Failed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Judge),
+            Err(crate::agent_core::service::AgentError::TaskNotFound)
+        );
     }
 
     #[tokio::test]
@@ -570,10 +723,31 @@ mod tests {
         })
         .await;
 
-        assert_eq!(result, Err(CouncilError { role: AgentRole::Judge, reason: "judge model down".to_string() }));
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Completed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Critic).unwrap(), AgentLifecycleState::Completed);
-        assert_eq!(core.agent_registry.current_state("task-1", AgentRole::Judge).unwrap(), AgentLifecycleState::Failed);
+        assert_eq!(
+            result,
+            Err(CouncilError {
+                role: AgentRole::Judge,
+                reason: "judge model down".to_string()
+            })
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Critic)
+                .unwrap(),
+            AgentLifecycleState::Completed
+        );
+        assert_eq!(
+            core.agent_registry
+                .current_state("task-1", AgentRole::Judge)
+                .unwrap(),
+            AgentLifecycleState::Failed
+        );
     }
 
     /// Genuinely calls `ai::provider_router::generate_for_task` against a
@@ -598,15 +772,22 @@ mod tests {
                 let health = &health;
                 let providers = &providers;
                 async move {
-                    provider_router::generate_for_task(providers, health, TaskCapability::Reasoning, &system_prompt, &user_prompt)
-                        .await
-                        .map_err(|e| e.to_string())
+                    provider_router::generate_for_task(
+                        providers,
+                        health,
+                        TaskCapability::Reasoning,
+                        &system_prompt,
+                        &user_prompt,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())
                 }
             },
         )
         .await;
 
-        let pass = result.expect("a real Architect -> Critic -> Judge pass against local Ollama should succeed");
+        let pass = result
+            .expect("a real Architect -> Critic -> Judge pass against local Ollama should succeed");
         assert!(!pass.architect_output.trim().is_empty());
         assert!(!pass.critic_output.trim().is_empty());
         assert!(!pass.judge_output.trim().is_empty());

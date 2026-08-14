@@ -135,7 +135,10 @@ pub fn max_capabilities_for(kind: AdapterKind) -> ProviderCapabilities {
 /// resolved adapter kind permits it. Silent sanitization, not a hard
 /// error: a request for an unsupported capability degrades to "not
 /// granted" rather than failing config creation outright.
-pub fn clamp_capabilities(provider_type: &str, requested: ProviderCapabilities) -> ProviderCapabilities {
+pub fn clamp_capabilities(
+    provider_type: &str,
+    requested: ProviderCapabilities,
+) -> ProviderCapabilities {
     let max = max_capabilities_for(adapter_kind_for(provider_type));
     ProviderCapabilities {
         chat: requested.chat && max.chat,
@@ -356,7 +359,13 @@ pub fn default_ollama_provider() -> ProviderConfig {
         // like every other construction path, even though Ollama's max
         // capabilities already happen to permit fim: true - this keeps
         // there being exactly one place capability truth is decided.
-        capabilities: clamp_capabilities(&provider_type, ProviderCapabilities { fim: true, ..ProviderCapabilities::default() }),
+        capabilities: clamp_capabilities(
+            &provider_type,
+            ProviderCapabilities {
+                fim: true,
+                ..ProviderCapabilities::default()
+            },
+        ),
         provider_type,
         base_url: "http://localhost:11434".to_string(),
         api_key: String::new(),
@@ -368,15 +377,14 @@ pub fn default_ollama_provider() -> ProviderConfig {
 }
 
 fn load_persisted_providers(conn: &Connection) -> Vec<ProviderConfig> {
-    conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            params![SETTINGS_KEY_PROVIDERS],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
-        .unwrap_or_else(|| vec![default_ollama_provider()])
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![SETTINGS_KEY_PROVIDERS],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(&json).ok())
+    .unwrap_or_else(|| vec![default_ollama_provider()])
 }
 
 fn persist_provider_configs(conn: &Connection, providers: &[ProviderConfig]) -> AppResult<()> {
@@ -536,7 +544,9 @@ fn save_model_config(conn: &Connection, key: &str, config: &ModelConfig) -> AppR
 // ═══════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub fn list_provider_configs(db: tauri::State<'_, crate::database::DbState>) -> Result<Vec<ProviderConfigView>, String> {
+pub fn list_provider_configs(
+    db: tauri::State<'_, crate::database::DbState>,
+) -> Result<Vec<ProviderConfigView>, String> {
     let guard = db.conn.lock().unwrap();
     let conn = guard.as_ref().ok_or("no workspace open")?;
     Ok(load_providers_raw(conn)
@@ -551,7 +561,13 @@ pub fn list_provider_configs(db: tauri::State<'_, crate::database::DbState>) -> 
 /// runtime/State. This is the "creating a config with an unsupported
 /// capability" enforcement point: a caller cannot end up with, say,
 /// `chat: true` on a `provider_type` that resolves to `AdapterKind::Unimplemented`.
-fn build_provider_config(name: String, provider_type: String, base_url: String, api_key: String, is_default: bool) -> ProviderConfig {
+fn build_provider_config(
+    name: String,
+    provider_type: String,
+    base_url: String,
+    api_key: String,
+    is_default: bool,
+) -> ProviderConfig {
     ProviderConfig {
         id: Uuid::new_v4().to_string(),
         name,
@@ -578,7 +594,13 @@ pub fn add_provider_config(
     let conn = guard.as_ref().ok_or("no workspace open")?;
     let mut providers = load_providers_raw(conn);
 
-    let new = build_provider_config(name, provider_type, base_url, api_key.clone(), providers.is_empty());
+    let new = build_provider_config(
+        name,
+        provider_type,
+        base_url,
+        api_key.clone(),
+        providers.is_empty(),
+    );
     providers.push(new.clone());
     if let Err(error) = save_providers_raw(conn, &providers) {
         credential_store::delete_api_key(&new.id);
@@ -606,16 +628,27 @@ pub fn update_provider_config(
             "update the provider endpoint and credential in separate operations".to_string(),
         );
     }
-    let provider = providers.iter_mut().find(|p| p.id == id).ok_or("provider not found")?;
-    if let Some(n) = name { provider.name = n; }
-    if let Some(u) = base_url { provider.base_url = u; }
+    let provider = providers
+        .iter_mut()
+        .find(|p| p.id == id)
+        .ok_or("provider not found")?;
+    if let Some(n) = name {
+        provider.name = n;
+    }
+    if let Some(u) = base_url {
+        provider.base_url = u;
+    }
     if let Some(k) = api_key {
         if !k.is_empty() {
             provider.api_key = k;
         }
     }
-    if let Some(e) = enabled { provider.enabled = e; }
-    if let Some(m) = models { provider.models = m; }
+    if let Some(e) = enabled {
+        provider.enabled = e;
+    }
+    if let Some(m) = models {
+        provider.models = m;
+    }
 
     let result = provider.clone();
     save_providers_raw(conn, &providers).map_err(|error| error.to_string())?;
@@ -640,7 +673,11 @@ pub fn resolve_mode_model(conn: &Connection, mode: AiMode) -> Result<ResolvedMod
                 provider.name, mode
             ));
         }
-        if !provider.models.iter().any(|model| model == &assignment.model) {
+        if !provider
+            .models
+            .iter()
+            .any(|model| model == &assignment.model)
+        {
             return Err(format!(
                 "{} is not configured for provider {}",
                 assignment.model, provider.name
@@ -657,13 +694,9 @@ pub fn resolve_mode_model(conn: &Connection, mode: AiMode) -> Result<ResolvedMod
         .filter(|provider| provider.enabled && mode.is_supported_by(provider))
         .find(|provider| provider.is_default && !provider.models.is_empty())
         .or_else(|| {
-            load_providers_raw(conn)
-                .into_iter()
-                .find(|provider| {
-                    provider.enabled
-                        && mode.is_supported_by(provider)
-                        && !provider.models.is_empty()
-                })
+            load_providers_raw(conn).into_iter().find(|provider| {
+                provider.enabled && mode.is_supported_by(provider) && !provider.models.is_empty()
+            })
         })
         .ok_or_else(|| format!("no configured provider supports {:?}", mode))?;
     let model = provider.models[0].clone();
@@ -773,9 +806,8 @@ pub fn delete_provider_config(
     }
     providers.retain(|p| p.id != id);
     save_providers_raw(conn, &providers).map_err(|error| error.to_string())?;
-    credential_store::delete_api_key_result(&id).map_err(|error| {
-        format!("provider removed, but credential cleanup failed: {error}")
-    })
+    credential_store::delete_api_key_result(&id)
+        .map_err(|error| format!("provider removed, but credential cleanup failed: {error}"))
 }
 
 #[tauri::command]
@@ -791,7 +823,11 @@ pub fn set_default_model(
     let mode = AiMode::from_settings_key(&key)
         .ok_or_else(|| "unknown AI mode assignment key".to_string())?;
     resolve_provider_model(conn, &provider_id, &model, mode)?;
-    let config = ModelConfig { provider_id, provider_name, model };
+    let config = ModelConfig {
+        provider_id,
+        provider_name,
+        model,
+    };
     save_model_config(conn, &key, &config).map_err(|e| e.to_string())
 }
 
@@ -1170,10 +1206,22 @@ mod tests {
     #[test]
     fn clamp_capabilities_sanitizes_unsupported_capability_for_openai_compatible() {
         let clamped = clamp_capabilities("openai_compatible", all_true_capabilities());
-        assert!(clamped.chat, "chat is genuinely supported and must pass through");
-        assert!(clamped.streaming, "streaming is genuinely supported and must pass through");
-        assert!(clamped.coding, "coding is genuinely supported and must pass through");
-        assert!(!clamped.fim, "fim must be sanitized to false - no OpenAI-compatible FIM adapter exists");
+        assert!(
+            clamped.chat,
+            "chat is genuinely supported and must pass through"
+        );
+        assert!(
+            clamped.streaming,
+            "streaming is genuinely supported and must pass through"
+        );
+        assert!(
+            clamped.coding,
+            "coding is genuinely supported and must pass through"
+        );
+        assert!(
+            !clamped.fim,
+            "fim must be sanitized to false - no OpenAI-compatible FIM adapter exists"
+        );
     }
 
     /// Test 1 (Mismatch), end-to-end through the real construction path:
@@ -1189,7 +1237,10 @@ mod tests {
             String::new(),
             false,
         );
-        assert!(!config.capabilities.fim, "a freshly built openai_compatible config must not claim fim support");
+        assert!(
+            !config.capabilities.fim,
+            "a freshly built openai_compatible config must not claim fim support"
+        );
     }
 
     /// Test 2 (Adapter Enforcement): `AdapterKind::Unimplemented` must
@@ -1207,14 +1258,29 @@ mod tests {
     fn unimplemented_adapter_rejects_every_requested_capability() {
         let max = max_capabilities_for(AdapterKind::Unimplemented);
         assert!(!max.chat, "Unimplemented must not claim chat support");
-        assert!(!max.streaming, "Unimplemented must not claim streaming support");
+        assert!(
+            !max.streaming,
+            "Unimplemented must not claim streaming support"
+        );
         assert!(!max.coding, "Unimplemented must not claim coding support");
         assert!(!max.vision, "Unimplemented must not claim vision support");
-        assert!(!max.tool_calling, "Unimplemented must not claim tool_calling support");
-        assert!(!max.function_calling, "Unimplemented must not claim function_calling support");
-        assert!(!max.embeddings, "Unimplemented must not claim embeddings support");
+        assert!(
+            !max.tool_calling,
+            "Unimplemented must not claim tool_calling support"
+        );
+        assert!(
+            !max.function_calling,
+            "Unimplemented must not claim function_calling support"
+        );
+        assert!(
+            !max.embeddings,
+            "Unimplemented must not claim embeddings support"
+        );
         assert!(!max.fim, "Unimplemented must not claim fim support");
-        assert_eq!(max.context_length, 0, "Unimplemented must not claim any usable context length");
+        assert_eq!(
+            max.context_length, 0,
+            "Unimplemented must not claim any usable context length"
+        );
     }
 
     /// Gemini now has a real adapter (`providers::gemini`) - a config built
@@ -1222,11 +1288,20 @@ mod tests {
     /// zeroed-out `Unimplemented` treatment it used to get.
     #[test]
     fn gemini_adapter_gets_real_capabilities_not_zeroed_out() {
-        let config = build_provider_config("Gemini".into(), "gemini".into(), "https://generativelanguage.googleapis.com/v1beta".into(), "test-key".into(), false);
+        let config = build_provider_config(
+            "Gemini".into(),
+            "gemini".into(),
+            "https://generativelanguage.googleapis.com/v1beta".into(),
+            "test-key".into(),
+            false,
+        );
         assert!(config.capabilities.chat);
         assert!(config.capabilities.streaming);
         assert!(config.capabilities.coding);
-        assert!(!config.capabilities.fim, "Gemini has no raw/FIM completion adapter");
+        assert!(
+            !config.capabilities.fim,
+            "Gemini has no raw/FIM completion adapter"
+        );
         assert_eq!(config.adapter_kind(), AdapterKind::Gemini);
     }
 
@@ -1235,11 +1310,20 @@ mod tests {
     /// not the zeroed-out `Unimplemented` treatment Gemini still gets.
     #[test]
     fn anthropic_adapter_gets_real_capabilities_not_zeroed_out() {
-        let config = build_provider_config("Claude".into(), "anthropic".into(), "https://api.anthropic.com".into(), "sk-test".into(), false);
+        let config = build_provider_config(
+            "Claude".into(),
+            "anthropic".into(),
+            "https://api.anthropic.com".into(),
+            "sk-test".into(),
+            false,
+        );
         assert!(config.capabilities.chat);
         assert!(config.capabilities.streaming);
         assert!(config.capabilities.coding);
-        assert!(!config.capabilities.fim, "Anthropic has no raw/FIM completion adapter");
+        assert!(
+            !config.capabilities.fim,
+            "Anthropic has no raw/FIM completion adapter"
+        );
         assert_eq!(config.adapter_kind(), AdapterKind::Anthropic);
     }
 
@@ -1254,14 +1338,20 @@ mod tests {
         assert!(ollama.capabilities.chat);
         assert!(ollama.capabilities.streaming);
         assert!(ollama.capabilities.coding);
-        assert!(ollama.capabilities.fim, "Ollama genuinely has a working FIM adapter and must keep declaring it");
+        assert!(
+            ollama.capabilities.fim,
+            "Ollama genuinely has a working FIM adapter and must keep declaring it"
+        );
         assert_eq!(ollama.adapter_kind(), AdapterKind::Ollama);
     }
 
     #[test]
     fn adapter_kind_classification_matches_expected_routing() {
         assert_eq!(adapter_kind_for("ollama"), AdapterKind::Ollama);
-        assert_eq!(adapter_kind_for("openai_compatible"), AdapterKind::OpenAiCompatible);
+        assert_eq!(
+            adapter_kind_for("openai_compatible"),
+            AdapterKind::OpenAiCompatible
+        );
         assert_eq!(adapter_kind_for("openai"), AdapterKind::OpenAiCompatible);
         assert_eq!(adapter_kind_for("anthropic"), AdapterKind::Anthropic);
         assert_eq!(adapter_kind_for("gemini"), AdapterKind::Gemini);
@@ -1270,7 +1360,10 @@ mod tests {
     #[test]
     fn provider_config_adapter_kind_method_matches_free_function() {
         let ollama = default_ollama_provider();
-        assert_eq!(ollama.adapter_kind(), adapter_kind_for(&ollama.provider_type));
+        assert_eq!(
+            ollama.adapter_kind(),
+            adapter_kind_for(&ollama.provider_type)
+        );
     }
 
     // ── Wave 3 focused contract tests ───────────────────────────────────
@@ -1345,7 +1438,8 @@ mod tests {
     fn resolve_provider_model_fails_on_deleted_provider() {
         let conn = temp_db();
         persist_provider_configs(&conn, &[default_ollama_provider()]).unwrap();
-        let error = resolve_provider_model(&conn, "ghost-provider", "model", AiMode::Chat).unwrap_err();
+        let error =
+            resolve_provider_model(&conn, "ghost-provider", "model", AiMode::Chat).unwrap_err();
         assert!(error.contains("not found"));
     }
 
@@ -1404,7 +1498,12 @@ mod tests {
         for mode in [AiMode::Chat, AiMode::Agent, AiMode::Inline, AiMode::Ghost] {
             let key = mode.settings_key();
             let recovered = AiMode::from_settings_key(key);
-            assert_eq!(recovered, Some(mode), "settings_key roundtrip failed for {:?}", mode);
+            assert_eq!(
+                recovered,
+                Some(mode),
+                "settings_key roundtrip failed for {:?}",
+                mode
+            );
         }
     }
 }

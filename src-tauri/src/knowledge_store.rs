@@ -118,11 +118,19 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
             let merged_content = if old.content == entry.content {
                 old.content.clone()
             } else {
-                format!("{}\n--- updated v{} ---\n{}", old.content, new_version, entry.content)
+                format!(
+                    "{}\n--- updated v{} ---\n{}",
+                    old.content, new_version, entry.content
+                )
             };
 
-            let merged_tags = if entry.tags.is_empty() { old.tags.clone() } else { entry.tags.clone() };
-            let merged_tags_json = serde_json::to_string(&merged_tags).unwrap_or_else(|_| "[]".to_string());
+            let merged_tags = if entry.tags.is_empty() {
+                old.tags.clone()
+            } else {
+                entry.tags.clone()
+            };
+            let merged_tags_json =
+                serde_json::to_string(&merged_tags).unwrap_or_else(|_| "[]".to_string());
 
             conn.execute(
                 "UPDATE knowledge_entries SET category=?1, tags=?2, summary=?3, content=?4, updated_at=?5, access_count=access_count+1, version=?6 WHERE id=?7",
@@ -169,22 +177,23 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         )
         .map_err(|e| AppError::Provider(format!("knowledge_store query: {e}")))?;
 
-        let rows = stmt.query_map(params![category.as_str(), limit as i64], |row| {
-            let tags_str: String = row.get(2)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-            Ok(KnowledgeEntry {
-                id: row.get(0)?,
-                category: parse_category(&row.get::<_, String>(1)?),
-                tags,
-                summary: row.get(3)?,
-                content: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                access_count: row.get(7)?,
-                version: row.get(8)?,
+        let rows = stmt
+            .query_map(params![category.as_str(), limit as i64], |row| {
+                let tags_str: String = row.get(2)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                Ok(KnowledgeEntry {
+                    id: row.get(0)?,
+                    category: parse_category(&row.get::<_, String>(1)?),
+                    tags,
+                    summary: row.get(3)?,
+                    content: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    access_count: row.get(7)?,
+                    version: row.get(8)?,
+                })
             })
-        })
-        .map_err(|e| AppError::Provider(format!("knowledge_store query_map: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("knowledge_store query_map: {e}")))?;
 
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -198,22 +207,23 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         )
         .map_err(|e| AppError::Provider(format!("knowledge_store search: {e}")))?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
-            let tags_str: String = row.get(2)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-            Ok(KnowledgeEntry {
-                id: row.get(0)?,
-                category: parse_category(&row.get::<_, String>(1)?),
-                tags,
-                summary: row.get(3)?,
-                content: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                access_count: row.get(7)?,
-                version: row.get(8)?,
+        let rows = stmt
+            .query_map(params![pattern, limit as i64], |row| {
+                let tags_str: String = row.get(2)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                Ok(KnowledgeEntry {
+                    id: row.get(0)?,
+                    category: parse_category(&row.get::<_, String>(1)?),
+                    tags,
+                    summary: row.get(3)?,
+                    content: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    access_count: row.get(7)?,
+                    version: row.get(8)?,
+                })
             })
-        })
-        .map_err(|e| AppError::Provider(format!("knowledge_store search_map: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("knowledge_store search_map: {e}")))?;
 
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
@@ -233,27 +243,32 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         )
         .map_err(|e| AppError::Provider(format!("knowledge_store find_fix: {e}")))?;
 
-        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
-            let tags_str: String = row.get(2)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
-            Ok(KnowledgeEntry {
-                id: row.get(0)?,
-                category: parse_category(&row.get::<_, String>(1)?),
-                tags,
-                summary: row.get(3)?,
-                content: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-                access_count: row.get(7)?,
-                version: row.get(8)?,
+        let rows = stmt
+            .query_map(params![pattern, limit as i64], |row| {
+                let tags_str: String = row.get(2)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+                Ok(KnowledgeEntry {
+                    id: row.get(0)?,
+                    category: parse_category(&row.get::<_, String>(1)?),
+                    tags,
+                    summary: row.get(3)?,
+                    content: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    access_count: row.get(7)?,
+                    version: row.get(8)?,
+                })
             })
-        })
-        .map_err(|e| AppError::Provider(format!("knowledge_store find_fix_map: {e}")))?;
+            .map_err(|e| AppError::Provider(format!("knowledge_store find_fix_map: {e}")))?;
 
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    pub fn expire_stale(conn: &Connection, max_age_secs: u64, min_access_count: u32) -> AppResult<usize> {
+    pub fn expire_stale(
+        conn: &Connection,
+        max_age_secs: u64,
+        min_access_count: u32,
+    ) -> AppResult<usize> {
         let cutoff = epoch_secs() - max_age_secs as i64;
         let deleted = conn.execute(
             "DELETE FROM knowledge_entries WHERE updated_at < ?1 AND access_count < ?2 AND category != 'architecture'",
@@ -270,7 +285,9 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
                 .prepare("SELECT id, summary FROM knowledge_entries ORDER BY updated_at DESC")
                 .map_err(|e| AppError::Provider(format!("knowledge_store dedup_scan: {e}")))?;
             let rows = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
                 .map_err(|e| AppError::Provider(format!("knowledge_store dedup_map: {e}")))?;
             rows.filter_map(|r| r.ok()).collect()
         };
@@ -278,11 +295,26 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         for i in 0..entries.len() {
             for j in (i + 1)..entries.len() {
                 if entries[i].1 == entries[j].1 {
-                    let content_i: String = conn.query_row("SELECT content FROM knowledge_entries WHERE id = ?1", params![entries[i].0], |r| r.get(0)).unwrap_or_default();
-                    let content_j: String = conn.query_row("SELECT content FROM knowledge_entries WHERE id = ?1", params![entries[j].0], |r| r.get(0)).unwrap_or_default();
+                    let content_i: String = conn
+                        .query_row(
+                            "SELECT content FROM knowledge_entries WHERE id = ?1",
+                            params![entries[i].0],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or_default();
+                    let content_j: String = conn
+                        .query_row(
+                            "SELECT content FROM knowledge_entries WHERE id = ?1",
+                            params![entries[j].0],
+                            |r| r.get(0),
+                        )
+                        .unwrap_or_default();
                     let merged_content = format!("{}\n{}", content_i, content_j);
                     let _ = conn.execute("UPDATE knowledge_entries SET content = ?1, version = version + 1 WHERE id = ?2", params![merged_content, entries[i].0]);
-                    let _ = conn.execute("DELETE FROM knowledge_entries WHERE id = ?1", params![entries[j].0]);
+                    let _ = conn.execute(
+                        "DELETE FROM knowledge_entries WHERE id = ?1",
+                        params![entries[j].0],
+                    );
                     merged += 1;
                 }
             }
@@ -298,7 +330,8 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
             category: KnowledgeCategory::Plan,
             tags: plan.affected_files.clone(),
             summary: format!("Plan: {}", plan.task_description),
-            content: serde_json::to_string_pretty(plan).unwrap_or_else(|_| plan.task_description.clone()),
+            content: serde_json::to_string_pretty(plan)
+                .unwrap_or_else(|_| plan.task_description.clone()),
             created_at: epoch_secs(),
             updated_at: epoch_secs(),
             access_count: 0,
@@ -311,9 +344,13 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         let entry = KnowledgeEntry {
             id: format!("error-{}-{}", failure.category.as_str(), epoch_secs()),
             category: KnowledgeCategory::Error,
-            tags: vec![failure.category.as_str().to_string(), failure.file_name.clone().unwrap_or_default()],
+            tags: vec![
+                failure.category.as_str().to_string(),
+                failure.file_name.clone().unwrap_or_default(),
+            ],
             summary: format!("{}: {}", failure.category.as_str(), failure.raw_message),
-            content: serde_json::to_string_pretty(failure).unwrap_or_else(|_| failure.raw_message.clone()),
+            content: serde_json::to_string_pretty(failure)
+                .unwrap_or_else(|_| failure.raw_message.clone()),
             created_at: epoch_secs(),
             updated_at: epoch_secs(),
             access_count: 0,
@@ -335,7 +372,12 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
             category: KnowledgeCategory::FixStrategy,
             tags,
             summary: format!("Fix for {}: {}", error_category.as_str(), description),
-            content: format!("Category: {}\nDescription: {}\nAffected files: {:?}", error_category.as_str(), description, affected_files),
+            content: format!(
+                "Category: {}\nDescription: {}\nAffected files: {:?}",
+                error_category.as_str(),
+                description,
+                affected_files
+            ),
             created_at: epoch_secs(),
             updated_at: epoch_secs(),
             access_count: 0,
@@ -344,12 +386,22 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_access ON knowledge_entries(access_coun
         Self::insert(conn, &entry)
     }
 
-    pub fn find_similar_plans(conn: &Connection, task_description: &str, limit: usize) -> AppResult<Vec<KnowledgeEntry>> {
+    pub fn find_similar_plans(
+        conn: &Connection,
+        task_description: &str,
+        limit: usize,
+    ) -> AppResult<Vec<KnowledgeEntry>> {
         Self::query_by_category(conn, &KnowledgeCategory::Plan, limit * 2).map(|entries| {
-            entries.into_iter().filter(|e| {
-                e.summary.to_lowercase().contains(&task_description.to_lowercase())
-                    || e.tags.iter().any(|t| task_description.contains(t.as_str()))
-            }).take(limit).collect()
+            entries
+                .into_iter()
+                .filter(|e| {
+                    e.summary
+                        .to_lowercase()
+                        .contains(&task_description.to_lowercase())
+                        || e.tags.iter().any(|t| task_description.contains(t.as_str()))
+                })
+                .take(limit)
+                .collect()
         })
     }
 }
@@ -372,7 +424,10 @@ fn parse_category(raw: &str) -> KnowledgeCategory {
 }
 
 fn epoch_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -386,7 +441,10 @@ mod tests {
 
     fn temp_conn() -> Connection {
         let mut d = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         d.push(format!("nf_ks_test_{nanos}.db"));
         let conn = Connection::open(&d).unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL").ok();
@@ -394,66 +452,214 @@ mod tests {
         conn
     }
 
-    #[test] fn insert_and_retrieve() {
+    #[test]
+    fn insert_and_retrieve() {
         let conn = temp_conn();
-        KnowledgeStore::insert(&conn, &KnowledgeEntry { id: "t1".into(), category: KnowledgeCategory::Architecture, tags: vec!["rust".into()], summary: "Arch".into(), content: "Tauri".into(), created_at: 0, updated_at: 0, access_count: 0, version: 1 }).unwrap();
+        KnowledgeStore::insert(
+            &conn,
+            &KnowledgeEntry {
+                id: "t1".into(),
+                category: KnowledgeCategory::Architecture,
+                tags: vec!["rust".into()],
+                summary: "Arch".into(),
+                content: "Tauri".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 0,
+                version: 1,
+            },
+        )
+        .unwrap();
         let r = KnowledgeStore::get_by_id(&conn, "t1").unwrap();
         assert_eq!(r.summary, "Arch");
     }
 
-    #[test] fn upsert_merges() {
+    #[test]
+    fn upsert_merges() {
         let conn = temp_conn();
-        KnowledgeStore::insert(&conn, &KnowledgeEntry { id: "m1".into(), category: KnowledgeCategory::Plan, tags: vec![], summary: "Plan".into(), content: "Step1".into(), created_at: 0, updated_at: 0, access_count: 0, version: 1 }).unwrap();
-        KnowledgeStore::upsert(&conn, &KnowledgeEntry { id: "m1".into(), category: KnowledgeCategory::Plan, tags: vec![], summary: "Plan v2".into(), content: "Step2".into(), created_at: 0, updated_at: 0, access_count: 0, version: 2 }).unwrap();
+        KnowledgeStore::insert(
+            &conn,
+            &KnowledgeEntry {
+                id: "m1".into(),
+                category: KnowledgeCategory::Plan,
+                tags: vec![],
+                summary: "Plan".into(),
+                content: "Step1".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 0,
+                version: 1,
+            },
+        )
+        .unwrap();
+        KnowledgeStore::upsert(
+            &conn,
+            &KnowledgeEntry {
+                id: "m1".into(),
+                category: KnowledgeCategory::Plan,
+                tags: vec![],
+                summary: "Plan v2".into(),
+                content: "Step2".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 0,
+                version: 2,
+            },
+        )
+        .unwrap();
         let r = KnowledgeStore::get_by_id(&conn, "m1").unwrap();
         assert!(r.content.contains("Step1") && r.content.contains("Step2"));
         assert!(r.version >= 2);
     }
 
-    #[test] fn search_finds() {
+    #[test]
+    fn search_finds() {
         let conn = temp_conn();
         for i in 0..3 {
-            KnowledgeStore::insert(&conn, &KnowledgeEntry { id: format!("s{}", i), category: KnowledgeCategory::Module, tags: vec![], summary: format!("mod{}", i), content: "x".into(), created_at: 0, updated_at: 0, access_count: 1, version: 1 }).unwrap();
+            KnowledgeStore::insert(
+                &conn,
+                &KnowledgeEntry {
+                    id: format!("s{}", i),
+                    category: KnowledgeCategory::Module,
+                    tags: vec![],
+                    summary: format!("mod{}", i),
+                    content: "x".into(),
+                    created_at: 0,
+                    updated_at: 0,
+                    access_count: 1,
+                    version: 1,
+                },
+            )
+            .unwrap();
         }
-        KnowledgeStore::insert(&conn, &KnowledgeEntry { id: "auth".into(), category: KnowledgeCategory::Module, tags: vec![], summary: "authentication module".into(), content: "auth".into(), created_at: 0, updated_at: 0, access_count: 1, version: 1 }).unwrap();
+        KnowledgeStore::insert(
+            &conn,
+            &KnowledgeEntry {
+                id: "auth".into(),
+                category: KnowledgeCategory::Module,
+                tags: vec![],
+                summary: "authentication module".into(),
+                content: "auth".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 1,
+                version: 1,
+            },
+        )
+        .unwrap();
         let r = KnowledgeStore::search(&conn, "authentication", 10).unwrap();
         assert_eq!(r.len(), 1);
     }
 
-    #[test] fn expire_removes_stale() {
+    #[test]
+    fn expire_removes_stale() {
         let conn = temp_conn();
-        KnowledgeStore::insert(&conn, &KnowledgeEntry { id: "old".into(), category: KnowledgeCategory::Error, tags: vec![], summary: "old".into(), content: "x".into(), created_at: 0, updated_at: 0, access_count: 0, version: 1 }).unwrap();
-        KnowledgeStore::insert(&conn, &KnowledgeEntry { id: "fresh".into(), category: KnowledgeCategory::Error, tags: vec![], summary: "fresh".into(), content: "x".into(), created_at: 0, updated_at: 0, access_count: 100, version: 1 }).unwrap();
-        conn.execute("UPDATE knowledge_entries SET updated_at = 0 WHERE id = 'old'", []).unwrap();
+        KnowledgeStore::insert(
+            &conn,
+            &KnowledgeEntry {
+                id: "old".into(),
+                category: KnowledgeCategory::Error,
+                tags: vec![],
+                summary: "old".into(),
+                content: "x".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 0,
+                version: 1,
+            },
+        )
+        .unwrap();
+        KnowledgeStore::insert(
+            &conn,
+            &KnowledgeEntry {
+                id: "fresh".into(),
+                category: KnowledgeCategory::Error,
+                tags: vec![],
+                summary: "fresh".into(),
+                content: "x".into(),
+                created_at: 0,
+                updated_at: 0,
+                access_count: 100,
+                version: 1,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE knowledge_entries SET updated_at = 0 WHERE id = 'old'",
+            [],
+        )
+        .unwrap();
         let d = KnowledgeStore::expire_stale(&conn, 3600, 1).unwrap();
         assert!(d >= 1);
         assert!(KnowledgeStore::get_by_id(&conn, "old").is_err());
         assert!(KnowledgeStore::get_by_id(&conn, "fresh").is_ok());
     }
 
-    #[test] fn dedup_merges() {
+    #[test]
+    fn dedup_merges() {
         let conn = temp_conn();
         for i in 0..3 {
-            KnowledgeStore::insert(&conn, &KnowledgeEntry { id: format!("d{}", i), category: KnowledgeCategory::Error, tags: vec![], summary: "dup".into(), content: format!("c{}", i), created_at: 0, updated_at: 0, access_count: 0, version: 1 }).unwrap();
+            KnowledgeStore::insert(
+                &conn,
+                &KnowledgeEntry {
+                    id: format!("d{}", i),
+                    category: KnowledgeCategory::Error,
+                    tags: vec![],
+                    summary: "dup".into(),
+                    content: format!("c{}", i),
+                    created_at: 0,
+                    updated_at: 0,
+                    access_count: 0,
+                    version: 1,
+                },
+            )
+            .unwrap();
         }
         let m = KnowledgeStore::deduplicate(&conn).unwrap();
         assert!(m >= 1);
-        let cnt: i64 = conn.query_row("SELECT COUNT(*) FROM knowledge_entries WHERE summary='dup'", [], |r| r.get(0)).unwrap();
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_entries WHERE summary='dup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(cnt, 1);
     }
 
-    #[test] fn record_plan_and_find() {
+    #[test]
+    fn record_plan_and_find() {
         let conn = temp_conn();
-        let plan = TaskPlan { task_description: "Fix auth".into(), objective: "f".into(), affected_files: vec!["a.rs".into()], subtasks: vec![], risks: vec![], verification: vec![], unknown_information: vec![], confidence: 0.0, estimated_runtime_commands: 0, rollback_plan: String::new(), reasoning: String::new() };
+        let plan = TaskPlan {
+            task_description: "Fix auth".into(),
+            objective: "f".into(),
+            affected_files: vec!["a.rs".into()],
+            subtasks: vec![],
+            risks: vec![],
+            verification: vec![],
+            unknown_information: vec![],
+            confidence: 0.0,
+            estimated_runtime_commands: 0,
+            rollback_plan: String::new(),
+            reasoning: String::new(),
+        };
         KnowledgeStore::record_plan(&conn, &plan).unwrap();
         let r = KnowledgeStore::find_similar_plans(&conn, "auth", 5).unwrap();
         assert!(!r.is_empty());
     }
 
-    #[test] fn record_fix_and_retrieve() {
+    #[test]
+    fn record_fix_and_retrieve() {
         let conn = temp_conn();
-        KnowledgeStore::record_fix_strategy(&conn, &FailureCategory::MissingDependency, "npm install", &["package.json".into()]).unwrap();
-        let r = KnowledgeStore::find_fix_strategies(&conn, &FailureCategory::MissingDependency, 5).unwrap();
+        KnowledgeStore::record_fix_strategy(
+            &conn,
+            &FailureCategory::MissingDependency,
+            "npm install",
+            &["package.json".into()],
+        )
+        .unwrap();
+        let r = KnowledgeStore::find_fix_strategies(&conn, &FailureCategory::MissingDependency, 5)
+            .unwrap();
         assert!(!r.is_empty());
     }
 }

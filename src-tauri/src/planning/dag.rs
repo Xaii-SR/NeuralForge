@@ -39,16 +39,21 @@ impl TaskDAG {
         if self.nodes.is_empty() {
             return Err(AppError::Provider("DAG has no tasks".to_string()));
         }
-        let ids: std::collections::HashSet<&str> = self.nodes.iter().map(|n| n.id.as_str()).collect();
+        let ids: std::collections::HashSet<&str> =
+            self.nodes.iter().map(|n| n.id.as_str()).collect();
         if ids.len() != self.nodes.len() {
-            return Err(AppError::Provider("DAG contains duplicate task IDs".to_string()));
+            return Err(AppError::Provider(
+                "DAG contains duplicate task IDs".to_string(),
+            ));
         }
         for (task, dep) in &self.edges {
             if task == dep {
                 return Err(AppError::Provider(format!("task {task} depends on itself")));
             }
             if !ids.contains(dep.as_str()) {
-                return Err(AppError::Provider(format!("task {task} depends on unknown task {dep}")));
+                return Err(AppError::Provider(format!(
+                    "task {task} depends on unknown task {dep}"
+                )));
             }
         }
         self.topological_order().map(|_| ())
@@ -59,7 +64,8 @@ impl TaskDAG {
     /// cycle - named in the error so the failure is diagnosable.
     pub fn topological_order(&self) -> AppResult<Vec<String>> {
         use std::collections::HashMap;
-        let mut in_degree: HashMap<&str, usize> = self.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
+        let mut in_degree: HashMap<&str, usize> =
+            self.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
         for (task, _dep) in &self.edges {
             if let Some(d) = in_degree.get_mut(task.as_str()) {
                 *d += 1;
@@ -97,7 +103,10 @@ impl TaskDAG {
                 .map(|n| n.id.as_str())
                 .filter(|id| !order.iter().any(|o| o == id))
                 .collect();
-            return Err(AppError::Provider(format!("DAG contains a cycle involving: {}", stuck.join(", "))));
+            return Err(AppError::Provider(format!(
+                "DAG contains a cycle involving: {}",
+                stuck.join(", ")
+            )));
         }
         Ok(order)
     }
@@ -126,19 +135,31 @@ mod tests {
     #[test]
     fn self_loop_is_rejected() {
         let dag = TaskDAG::from_nodes(vec![node("a", &["a"])]);
-        assert!(dag.validate().unwrap_err().to_string().contains("depends on itself"));
+        assert!(dag
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("depends on itself"));
     }
 
     #[test]
     fn dangling_dependency_is_rejected() {
         let dag = TaskDAG::from_nodes(vec![node("a", &["ghost"])]);
-        assert!(dag.validate().unwrap_err().to_string().contains("unknown task ghost"));
+        assert!(dag
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("unknown task ghost"));
     }
 
     #[test]
     fn duplicate_ids_are_rejected() {
         let dag = TaskDAG::from_nodes(vec![node("a", &[]), node("a", &[])]);
-        assert!(dag.validate().unwrap_err().to_string().contains("duplicate"));
+        assert!(dag
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate"));
     }
 
     #[test]
@@ -157,7 +178,12 @@ mod tests {
     #[test]
     fn diamond_orders_dependencies_before_dependents() {
         // d depends on b and c, which both depend on a.
-        let dag = TaskDAG::from_nodes(vec![node("a", &[]), node("b", &["a"]), node("c", &["a"]), node("d", &["b", "c"])]);
+        let dag = TaskDAG::from_nodes(vec![
+            node("a", &[]),
+            node("b", &["a"]),
+            node("c", &["a"]),
+            node("d", &["b", "c"]),
+        ]);
         let order = dag.topological_order().unwrap();
         let pos = |id: &str| order.iter().position(|o| o == id).unwrap();
         assert!(pos("a") < pos("b"));

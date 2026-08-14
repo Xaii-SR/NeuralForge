@@ -20,17 +20,29 @@ pub fn reduce(state: &AgentLifecycleState, event: &AgentEventType) -> AgentLifec
         AgentEventType::Failed => AgentLifecycleState::Failed,
         AgentEventType::Cancelled => AgentLifecycleState::Cancelled,
 
-        AgentEventType::PlanningStarted if *state == AgentLifecycleState::Created => AgentLifecycleState::Planning,
+        AgentEventType::PlanningStarted if *state == AgentLifecycleState::Created => {
+            AgentLifecycleState::Planning
+        }
 
-        AgentEventType::ApprovalRequested if *state == AgentLifecycleState::Planning => AgentLifecycleState::AwaitingApproval,
+        AgentEventType::ApprovalRequested if *state == AgentLifecycleState::Planning => {
+            AgentLifecycleState::AwaitingApproval
+        }
 
-        AgentEventType::ApprovalGranted if *state == AgentLifecycleState::AwaitingApproval => AgentLifecycleState::Approved,
+        AgentEventType::ApprovalGranted if *state == AgentLifecycleState::AwaitingApproval => {
+            AgentLifecycleState::Approved
+        }
 
-        AgentEventType::ExecutionStarted if *state == AgentLifecycleState::Approved => AgentLifecycleState::Executing,
+        AgentEventType::ExecutionStarted if *state == AgentLifecycleState::Approved => {
+            AgentLifecycleState::Executing
+        }
 
-        AgentEventType::VerificationStarted if *state == AgentLifecycleState::Executing => AgentLifecycleState::Verifying,
+        AgentEventType::VerificationStarted if *state == AgentLifecycleState::Executing => {
+            AgentLifecycleState::Verifying
+        }
 
-        AgentEventType::Completed if *state == AgentLifecycleState::Verifying => AgentLifecycleState::Completed,
+        AgentEventType::Completed if *state == AgentLifecycleState::Verifying => {
+            AgentLifecycleState::Completed
+        }
 
         // Event doesn't apply from this state - no-op, not an error (see
         // module doc).
@@ -45,7 +57,10 @@ mod tests {
     #[test]
     fn planning_started_from_created_transitions_to_planning() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Created, &AgentEventType::PlanningStarted),
+            reduce(
+                &AgentLifecycleState::Created,
+                &AgentEventType::PlanningStarted
+            ),
             AgentLifecycleState::Planning
         );
     }
@@ -53,7 +68,10 @@ mod tests {
     #[test]
     fn approval_requested_from_planning_transitions_to_awaiting_approval() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Planning, &AgentEventType::ApprovalRequested),
+            reduce(
+                &AgentLifecycleState::Planning,
+                &AgentEventType::ApprovalRequested
+            ),
             AgentLifecycleState::AwaitingApproval
         );
     }
@@ -61,7 +79,10 @@ mod tests {
     #[test]
     fn approval_granted_from_awaiting_approval_transitions_to_approved() {
         assert_eq!(
-            reduce(&AgentLifecycleState::AwaitingApproval, &AgentEventType::ApprovalGranted),
+            reduce(
+                &AgentLifecycleState::AwaitingApproval,
+                &AgentEventType::ApprovalGranted
+            ),
             AgentLifecycleState::Approved
         );
     }
@@ -69,7 +90,10 @@ mod tests {
     #[test]
     fn execution_started_from_approved_transitions_to_executing() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Approved, &AgentEventType::ExecutionStarted),
+            reduce(
+                &AgentLifecycleState::Approved,
+                &AgentEventType::ExecutionStarted
+            ),
             AgentLifecycleState::Executing
         );
     }
@@ -77,7 +101,10 @@ mod tests {
     #[test]
     fn verification_started_from_executing_transitions_to_verifying() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Executing, &AgentEventType::VerificationStarted),
+            reduce(
+                &AgentLifecycleState::Executing,
+                &AgentEventType::VerificationStarted
+            ),
             AgentLifecycleState::Verifying
         );
     }
@@ -103,7 +130,10 @@ mod tests {
             AgentLifecycleState::Failed,
             AgentLifecycleState::Cancelled,
         ] {
-            assert_eq!(reduce(&state, &AgentEventType::Failed), AgentLifecycleState::Failed);
+            assert_eq!(
+                reduce(&state, &AgentEventType::Failed),
+                AgentLifecycleState::Failed
+            );
         }
     }
 
@@ -120,14 +150,20 @@ mod tests {
             AgentLifecycleState::Failed,
             AgentLifecycleState::Cancelled,
         ] {
-            assert_eq!(reduce(&state, &AgentEventType::Cancelled), AgentLifecycleState::Cancelled);
+            assert_eq!(
+                reduce(&state, &AgentEventType::Cancelled),
+                AgentLifecycleState::Cancelled
+            );
         }
     }
 
     #[test]
     fn planning_started_is_a_noop_from_states_other_than_created() {
         assert_eq!(
-            reduce(&AgentLifecycleState::AwaitingApproval, &AgentEventType::PlanningStarted),
+            reduce(
+                &AgentLifecycleState::AwaitingApproval,
+                &AgentEventType::PlanningStarted
+            ),
             AgentLifecycleState::AwaitingApproval,
             "PlanningStarted must only fire the Created -> Planning transition"
         );
@@ -136,7 +172,10 @@ mod tests {
     #[test]
     fn approval_granted_is_a_noop_from_states_other_than_awaiting_approval() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Created, &AgentEventType::ApprovalGranted),
+            reduce(
+                &AgentLifecycleState::Created,
+                &AgentEventType::ApprovalGranted
+            ),
             AgentLifecycleState::Created,
             "ApprovalGranted must only fire the AwaitingApproval -> Approved transition"
         );
@@ -145,7 +184,10 @@ mod tests {
     #[test]
     fn created_plus_approval_granted_is_a_noop() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Created, &AgentEventType::ApprovalGranted),
+            reduce(
+                &AgentLifecycleState::Created,
+                &AgentEventType::ApprovalGranted
+            ),
             AgentLifecycleState::Created
         );
     }
@@ -153,7 +195,10 @@ mod tests {
     #[test]
     fn planning_plus_execution_started_is_a_noop() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Planning, &AgentEventType::ExecutionStarted),
+            reduce(
+                &AgentLifecycleState::Planning,
+                &AgentEventType::ExecutionStarted
+            ),
             AgentLifecycleState::Planning
         );
     }
@@ -161,7 +206,10 @@ mod tests {
     #[test]
     fn approved_plus_planning_started_is_a_noop() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Approved, &AgentEventType::PlanningStarted),
+            reduce(
+                &AgentLifecycleState::Approved,
+                &AgentEventType::PlanningStarted
+            ),
             AgentLifecycleState::Approved
         );
     }
@@ -169,7 +217,10 @@ mod tests {
     #[test]
     fn completed_plus_planning_started_is_a_noop() {
         assert_eq!(
-            reduce(&AgentLifecycleState::Completed, &AgentEventType::PlanningStarted),
+            reduce(
+                &AgentLifecycleState::Completed,
+                &AgentEventType::PlanningStarted
+            ),
             AgentLifecycleState::Completed
         );
     }

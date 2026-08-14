@@ -237,7 +237,11 @@ where
 /// `stream_chat` already treats Ollama as its own path. `Unimplemented`
 /// fails loudly with an `Err` rather than silently reporting success or
 /// running the wrong adapter's check against it.
-pub async fn test_connection(provider_type: &str, base_url: String, api_key: String) -> Result<bool, String> {
+pub async fn test_connection(
+    provider_type: &str,
+    base_url: String,
+    api_key: String,
+) -> Result<bool, String> {
     let kind = provider_registry::adapter_kind_for(provider_type);
     test_connection_for_kind(kind, provider_type, base_url, api_key).await
 }
@@ -248,16 +252,25 @@ pub async fn test_connection(provider_type: &str, base_url: String, api_key: Str
 /// `provider_registry::adapter_kind_for`'s unmatched-string fallback to
 /// `OpenAiCompatible`), the same reachability gap `provider_registry`'s own
 /// tests hit and worked around by testing `max_capabilities_for` directly.
-async fn test_connection_for_kind(kind: AdapterKind, provider_type: &str, base_url: String, api_key: String) -> Result<bool, String> {
+async fn test_connection_for_kind(
+    kind: AdapterKind,
+    provider_type: &str,
+    base_url: String,
+    api_key: String,
+) -> Result<bool, String> {
     match kind {
         AdapterKind::Ollama => Ok(ollama::health_check_at(&base_url).await),
-        AdapterKind::OpenAiCompatible => {
-            Ok(openai_compatible::OpenAiCompatibleProvider::new(base_url, api_key).health_check().await)
-        }
-        AdapterKind::Anthropic => {
-            Ok(anthropic::AnthropicProvider::new(base_url, api_key).health_check().await)
-        }
-        AdapterKind::Gemini => Ok(gemini::GeminiProvider::new(base_url, api_key).health_check().await),
+        AdapterKind::OpenAiCompatible => Ok(openai_compatible::OpenAiCompatibleProvider::new(
+            base_url, api_key,
+        )
+        .health_check()
+        .await),
+        AdapterKind::Anthropic => Ok(anthropic::AnthropicProvider::new(base_url, api_key)
+            .health_check()
+            .await),
+        AdapterKind::Gemini => Ok(gemini::GeminiProvider::new(base_url, api_key)
+            .health_check()
+            .await),
         AdapterKind::Unimplemented => Err(format!(
             "{provider_type} does not have a native adapter yet - cannot test connection"
         )),
@@ -280,20 +293,18 @@ pub async fn list_models(config: &ProviderConfig) -> AppResult<Vec<ProviderModel
                 id: model.name,
             })
             .collect()),
-        AdapterKind::OpenAiCompatible => Ok(
-            openai_compatible::OpenAiCompatibleProvider::new(
-                config.base_url.clone(),
-                config.api_key.clone(),
-            )
-            .list_models()
-            .await?
-            .into_iter()
-            .map(|model| ProviderModel {
-                display_name: model.id.clone(),
-                id: model.id,
-            })
-            .collect(),
-        ),
+        AdapterKind::OpenAiCompatible => Ok(openai_compatible::OpenAiCompatibleProvider::new(
+            config.base_url.clone(),
+            config.api_key.clone(),
+        )
+        .list_models()
+        .await?
+        .into_iter()
+        .map(|model| ProviderModel {
+            display_name: model.id.clone(),
+            id: model.id,
+        })
+        .collect()),
         AdapterKind::Anthropic => Ok(anthropic::AnthropicProvider::new(
             config.base_url.clone(),
             config.api_key.clone(),
@@ -348,13 +359,33 @@ pub enum TaskCapability {
 
 pub fn classify_task(prompt: &str) -> TaskCapability {
     let p = prompt.to_lowercase();
-    let fast_hit = ["summar", "tl;dr", "short", "quick", "brief"].iter().any(|k| p.contains(k));
-    let reasoning_hit = ["architect", "design", "complex", "reason", "plan", "tradeoff", "trade-off"]
+    let fast_hit = ["summar", "tl;dr", "short", "quick", "brief"]
         .iter()
         .any(|k| p.contains(k));
-    let coding_hit = ["code", "rust", "python", "typescript", "function", "implement", "bug", "refactor", "compile"]
-        .iter()
-        .any(|k| p.contains(k));
+    let reasoning_hit = [
+        "architect",
+        "design",
+        "complex",
+        "reason",
+        "plan",
+        "tradeoff",
+        "trade-off",
+    ]
+    .iter()
+    .any(|k| p.contains(k));
+    let coding_hit = [
+        "code",
+        "rust",
+        "python",
+        "typescript",
+        "function",
+        "implement",
+        "bug",
+        "refactor",
+        "compile",
+    ]
+    .iter()
+    .any(|k| p.contains(k));
 
     if reasoning_hit {
         TaskCapability::Reasoning
@@ -399,7 +430,11 @@ pub fn select_provider_and_model_for_task(
                 // benefit from code-aware models).
                 TaskCapability::Reasoning => {
                     provider.capabilities.context_length as f64
-                        + if provider.capabilities.coding { 50_000.0 } else { 0.0 }
+                        + if provider.capabilities.coding {
+                            50_000.0
+                        } else {
+                            0.0
+                        }
                 }
             };
 
@@ -498,7 +533,10 @@ pub async fn complete_fim(
         .cloned()
         .unwrap_or_else(provider_registry::default_ollama_provider);
     let models = ollama::list_models_at(&ollama_config.base_url).await?;
-    let prefs = crate::ai::router::Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
+    let prefs = crate::ai::router::Preferences {
+        goal: "speed".to_string(),
+        cost_preference: "free".to_string(),
+    };
     let model = crate::ai::router::score_models(&models, &prefs)
         .into_iter()
         .next()
@@ -515,14 +553,8 @@ pub async fn complete_fim(
     }
 
     let start = Instant::now();
-    let result = ollama::generate_raw_at(
-        &config.base_url,
-        &model,
-        prompt,
-        num_predict,
-        temperature,
-    )
-    .await;
+    let result =
+        ollama::generate_raw_at(&config.base_url, &model, prompt, num_predict, temperature).await;
     match &result {
         Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
         Err(_) => health.record_failure(&health_key),
@@ -552,11 +584,21 @@ pub async fn generate_for_task(
     user_prompt: &str,
 ) -> AppResult<String> {
     let messages = vec![
-        ollama::ChatMessage { role: "system".to_string(), content: system_prompt.to_string() },
-        ollama::ChatMessage { role: "user".to_string(), content: user_prompt.to_string() },
+        ollama::ChatMessage {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+        },
+        ollama::ChatMessage {
+            role: "user".to_string(),
+            content: user_prompt.to_string(),
+        },
     ];
 
-    let non_ollama: Vec<ProviderConfig> = providers.iter().filter(|p| p.adapter_kind() != AdapterKind::Ollama).cloned().collect();
+    let non_ollama: Vec<ProviderConfig> = providers
+        .iter()
+        .filter(|p| p.adapter_kind() != AdapterKind::Ollama)
+        .cloned()
+        .collect();
     if let Some((config, model)) = select_provider_and_model_for_task(&non_ollama, task) {
         return stream_cloud_chat(health, &config, &model, &messages, |_token, _done| {}).await;
     }
@@ -566,8 +608,15 @@ pub async fn generate_for_task(
     // a fixed model name: Fast tasks bias toward smaller/quicker models,
     // Coding/Reasoning bias toward quality.
     let models = ollama::list_models().await?;
-    let goal = if task == TaskCapability::Fast { "speed" } else { "quality" };
-    let prefs = crate::ai::router::Preferences { goal: goal.to_string(), cost_preference: "free".to_string() };
+    let goal = if task == TaskCapability::Fast {
+        "speed"
+    } else {
+        "quality"
+    };
+    let prefs = crate::ai::router::Preferences {
+        goal: goal.to_string(),
+        cost_preference: "free".to_string(),
+    };
     let model = crate::ai::router::score_models(&models, &prefs)
         .into_iter()
         .next()
@@ -584,7 +633,8 @@ pub async fn generate_for_task(
 
     let start = Instant::now();
     let mut accumulated = String::new();
-    let result = ollama::chat_stream(&model, messages, |token, _done| accumulated.push_str(token)).await;
+    let result =
+        ollama::chat_stream(&model, messages, |token, _done| accumulated.push_str(token)).await;
     match &result {
         Ok(_) => health.record_success(&health_key, start.elapsed().as_secs_f64() * 1000.0),
         Err(_) => health.record_failure(&health_key),
@@ -607,7 +657,11 @@ mod tests {
             models: vec![model.to_string()],
             enabled: true,
             is_default: false,
-            capabilities: ProviderCapabilities { coding, context_length, ..ProviderCapabilities::default() },
+            capabilities: ProviderCapabilities {
+                coding,
+                context_length,
+                ..ProviderCapabilities::default()
+            },
             created_at: 0,
         }
     }
@@ -620,7 +674,13 @@ mod tests {
         // Unimplemented branch directly via test_connection_for_kind,
         // same workaround provider_registry's own tests use for the same
         // reachability gap.
-        let result = test_connection_for_kind(AdapterKind::Unimplemented, "some-future-provider", String::new(), String::new()).await;
+        let result = test_connection_for_kind(
+            AdapterKind::Unimplemented,
+            "some-future-provider",
+            String::new(),
+            String::new(),
+        )
+        .await;
         assert!(result.is_err(), "an unimplemented adapter must fail the connection test loudly, not report false silently");
     }
 
@@ -642,8 +702,18 @@ mod tests {
     #[test]
     fn adapter_kind_routes_known_openai_compatible_services_through_shared_adapter() {
         for provider_type in [
-            "openai", "openai_compatible", "openrouter", "deepseek", "groq",
-            "together", "fireworks", "deepinfra", "lmstudio", "vllm", "llamacpp", "custom",
+            "openai",
+            "openai_compatible",
+            "openrouter",
+            "deepseek",
+            "groq",
+            "together",
+            "fireworks",
+            "deepinfra",
+            "lmstudio",
+            "vllm",
+            "llamacpp",
+            "custom",
         ] {
             assert_eq!(
                 provider_registry::adapter_kind_for(provider_type),
@@ -655,17 +725,26 @@ mod tests {
 
     #[test]
     fn adapter_kind_keeps_ollama_on_its_own_path() {
-        assert_eq!(provider_registry::adapter_kind_for("ollama"), AdapterKind::Ollama);
+        assert_eq!(
+            provider_registry::adapter_kind_for("ollama"),
+            AdapterKind::Ollama
+        );
     }
 
     #[test]
     fn adapter_kind_routes_anthropic_through_its_own_native_adapter() {
-        assert_eq!(provider_registry::adapter_kind_for("anthropic"), AdapterKind::Anthropic);
+        assert_eq!(
+            provider_registry::adapter_kind_for("anthropic"),
+            AdapterKind::Anthropic
+        );
     }
 
     #[test]
     fn adapter_kind_routes_gemini_through_its_own_native_adapter() {
-        assert_eq!(provider_registry::adapter_kind_for("gemini"), AdapterKind::Gemini);
+        assert_eq!(
+            provider_registry::adapter_kind_for("gemini"),
+            AdapterKind::Gemini
+        );
     }
 
     #[test]
@@ -685,17 +764,26 @@ mod tests {
 
     #[test]
     fn classify_task_coding_prompt() {
-        assert_eq!(classify_task("Generate production Rust code for a parser"), TaskCapability::Coding);
+        assert_eq!(
+            classify_task("Generate production Rust code for a parser"),
+            TaskCapability::Coding
+        );
     }
 
     #[test]
     fn classify_task_fast_prompt() {
-        assert_eq!(classify_task("Summarize this document briefly"), TaskCapability::Fast);
+        assert_eq!(
+            classify_task("Summarize this document briefly"),
+            TaskCapability::Fast
+        );
     }
 
     #[test]
     fn classify_task_reasoning_prompt() {
-        assert_eq!(classify_task("Design a complex distributed system architecture"), TaskCapability::Reasoning);
+        assert_eq!(
+            classify_task("Design a complex distributed system architecture"),
+            TaskCapability::Reasoning
+        );
     }
 
     #[test]
@@ -704,7 +792,8 @@ mod tests {
             provider("no-code", false, 200_000, "big-general"),
             provider("coder", true, 32_000, "small-coder"),
         ];
-        let (chosen, model) = select_provider_and_model_for_task(&providers, TaskCapability::Coding).unwrap();
+        let (chosen, model) =
+            select_provider_and_model_for_task(&providers, TaskCapability::Coding).unwrap();
         assert_eq!(chosen.id, "coder");
         assert_eq!(model, "small-coder");
     }
@@ -715,7 +804,8 @@ mod tests {
             provider("big", true, 200_000, "big-model"),
             provider("small", true, 8_000, "small-model"),
         ];
-        let (chosen, _) = select_provider_and_model_for_task(&providers, TaskCapability::Fast).unwrap();
+        let (chosen, _) =
+            select_provider_and_model_for_task(&providers, TaskCapability::Fast).unwrap();
         assert_eq!(chosen.id, "small");
     }
 
@@ -725,7 +815,8 @@ mod tests {
             provider("small", true, 8_000, "small-model"),
             provider("large", true, 1_000_000, "large-model"),
         ];
-        let (chosen, _) = select_provider_and_model_for_task(&providers, TaskCapability::Reasoning).unwrap();
+        let (chosen, _) =
+            select_provider_and_model_for_task(&providers, TaskCapability::Reasoning).unwrap();
         assert_eq!(chosen.id, "large");
     }
 
@@ -754,7 +845,10 @@ mod tests {
         .await
         .expect("should generate via the local Ollama fallback");
 
-        assert!(!response.trim().is_empty(), "expected a non-empty real generation");
+        assert!(
+            !response.trim().is_empty(),
+            "expected a non-empty real generation"
+        );
     }
 
     /// Proves the new fast-path `stream_chat` entry point (what
@@ -765,8 +859,14 @@ mod tests {
     #[ignore = "requires a running local Ollama instance"]
     async fn stream_chat_streams_real_tokens_for_resolved_ollama_config() {
         let health = HealthRegistry::default();
-        let models = ollama::list_models().await.expect("Ollama must be reachable for this test");
-        let model = models.first().expect("expected at least one local model").name.clone();
+        let models = ollama::list_models()
+            .await
+            .expect("Ollama must be reachable for this test");
+        let model = models
+            .first()
+            .expect("expected at least one local model")
+            .name
+            .clone();
         let config = resolve_provider_for_model(None, &model);
         assert_eq!(config.provider_type, "ollama");
 
@@ -775,14 +875,20 @@ mod tests {
             &health,
             &config,
             &model,
-            vec![ollama::ChatMessage { role: "user".to_string(), content: "Reply with exactly the word: hello".to_string() }],
+            vec![ollama::ChatMessage {
+                role: "user".to_string(),
+                content: "Reply with exactly the word: hello".to_string(),
+            }],
             |token, _done| streamed.push_str(token),
         )
         .await
         .expect("should stream a real response");
 
         assert!(!response.trim().is_empty());
-        assert_eq!(response, streamed, "accumulated response should match what was streamed token-by-token");
+        assert_eq!(
+            response, streamed,
+            "accumulated response should match what was streamed token-by-token"
+        );
     }
 
     // ── FIM capability routing ──────────────────────────────────────────
@@ -797,7 +903,11 @@ mod tests {
             models: vec!["some-model".to_string()],
             enabled: true,
             is_default: false,
-            capabilities: ProviderCapabilities { fim, context_length, ..ProviderCapabilities::default() },
+            capabilities: ProviderCapabilities {
+                fim,
+                context_length,
+                ..ProviderCapabilities::default()
+            },
             created_at: 0,
         }
     }
@@ -808,21 +918,34 @@ mod tests {
             fim_provider("no-fim", false, 32_000),
             fim_provider("has-fim", true, 32_000),
         ];
-        let selected = select_fim_provider(&providers).expect("expected the fim-capable provider to be selected");
+        let selected = select_fim_provider(&providers)
+            .expect("expected the fim-capable provider to be selected");
         assert_eq!(selected.id, "has-fim");
     }
 
     #[test]
     fn select_fim_provider_returns_none_when_no_provider_advertises_fim() {
-        let providers = vec![fim_provider("no-fim-a", false, 8_000), fim_provider("no-fim-b", false, 200_000)];
-        assert!(select_fim_provider(&providers).is_none(), "providers without FIM capability must not be selected");
+        let providers = vec![
+            fim_provider("no-fim-a", false, 8_000),
+            fim_provider("no-fim-b", false, 200_000),
+        ];
+        assert!(
+            select_fim_provider(&providers).is_none(),
+            "providers without FIM capability must not be selected"
+        );
     }
 
     #[test]
     fn select_fim_provider_prefers_smallest_context_among_fim_capable_providers() {
-        let providers = vec![fim_provider("big", true, 200_000), fim_provider("small", true, 8_000)];
+        let providers = vec![
+            fim_provider("big", true, 200_000),
+            fim_provider("small", true, 8_000),
+        ];
         let selected = select_fim_provider(&providers).unwrap();
-        assert_eq!(selected.id, "small", "FIM selection should bias toward the fastest (smallest-context) capable provider");
+        assert_eq!(
+            selected.id, "small",
+            "FIM selection should bias toward the fastest (smallest-context) capable provider"
+        );
     }
 
     #[test]
@@ -846,12 +969,26 @@ mod tests {
         let health = HealthRegistry::default();
         let providers = vec![fim_provider("cloud-fim", true, 32_000)];
 
-        let result = complete_fim(&providers, &health, "<|fim_prefix|>x<|fim_suffix|>y<|fim_middle|>", 16, 0.1).await;
+        let result = complete_fim(
+            &providers,
+            &health,
+            "<|fim_prefix|>x<|fim_suffix|>y<|fim_middle|>",
+            16,
+            0.1,
+        )
+        .await;
 
-        let err = result.expect_err("a FIM-capable provider with no adapter must error, not silently succeed");
+        let err = result
+            .expect_err("a FIM-capable provider with no adapter must error, not silently succeed");
         let msg = err.to_string();
-        assert!(msg.contains("cloud-fim"), "error should name the rejected provider: {msg}");
-        assert!(msg.contains("no FIM adapter"), "error should explain why it was rejected: {msg}");
+        assert!(
+            msg.contains("cloud-fim"),
+            "error should name the rejected provider: {msg}"
+        );
+        assert!(
+            msg.contains("no FIM adapter"),
+            "error should explain why it was rejected: {msg}"
+        );
     }
 
     /// Ollama FIM flow: when no configured provider advertises FIM (the
@@ -872,6 +1009,9 @@ mod tests {
         .await
         .expect("should complete via the real local Ollama FIM path");
 
-        assert!(!response.trim().is_empty(), "expected a non-empty real FIM completion");
+        assert!(
+            !response.trim().is_empty(),
+            "expected a non-empty real FIM completion"
+        );
     }
 }

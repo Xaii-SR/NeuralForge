@@ -48,7 +48,10 @@ mod tests {
     #[test]
     fn new_starts_at_the_given_initial_state() {
         let service = AgentService::new(AgentLifecycleState::Created);
-        assert_eq!(service.current_state().unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            service.current_state().unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 
     #[test]
@@ -58,7 +61,10 @@ mod tests {
         let result = service.transition(AgentEventType::PlanningStarted).unwrap();
 
         assert_eq!(result, AgentLifecycleState::Planning);
-        assert_eq!(service.current_state().unwrap(), AgentLifecycleState::Planning);
+        assert_eq!(
+            service.current_state().unwrap(),
+            AgentLifecycleState::Planning
+        );
     }
 
     #[test]
@@ -68,24 +74,54 @@ mod tests {
         let result = service.transition(AgentEventType::ApprovalGranted).unwrap();
 
         assert_eq!(result, AgentLifecycleState::Created);
-        assert_eq!(service.current_state().unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            service.current_state().unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 
     #[test]
     fn sequential_transitions_walk_the_full_happy_path() {
         let service = AgentService::new(AgentLifecycleState::Created);
 
-        assert_eq!(service.transition(AgentEventType::PlanningStarted).unwrap(), AgentLifecycleState::Planning);
-        assert_eq!(service.transition(AgentEventType::ApprovalRequested).unwrap(), AgentLifecycleState::AwaitingApproval);
-        assert_eq!(service.transition(AgentEventType::ApprovalGranted).unwrap(), AgentLifecycleState::Approved);
-        assert_eq!(service.transition(AgentEventType::ExecutionStarted).unwrap(), AgentLifecycleState::Executing);
-        assert_eq!(service.transition(AgentEventType::VerificationStarted).unwrap(), AgentLifecycleState::Verifying);
-        assert_eq!(service.transition(AgentEventType::Completed).unwrap(), AgentLifecycleState::Completed);
+        assert_eq!(
+            service.transition(AgentEventType::PlanningStarted).unwrap(),
+            AgentLifecycleState::Planning
+        );
+        assert_eq!(
+            service
+                .transition(AgentEventType::ApprovalRequested)
+                .unwrap(),
+            AgentLifecycleState::AwaitingApproval
+        );
+        assert_eq!(
+            service.transition(AgentEventType::ApprovalGranted).unwrap(),
+            AgentLifecycleState::Approved
+        );
+        assert_eq!(
+            service
+                .transition(AgentEventType::ExecutionStarted)
+                .unwrap(),
+            AgentLifecycleState::Executing
+        );
+        assert_eq!(
+            service
+                .transition(AgentEventType::VerificationStarted)
+                .unwrap(),
+            AgentLifecycleState::Verifying
+        );
+        assert_eq!(
+            service.transition(AgentEventType::Completed).unwrap(),
+            AgentLifecycleState::Completed
+        );
     }
 
     #[test]
     fn failed_overrides_from_any_state() {
         let service = AgentService::new(AgentLifecycleState::Executing);
-        assert_eq!(service.transition(AgentEventType::Failed).unwrap(), AgentLifecycleState::Failed);
+        assert_eq!(
+            service.transition(AgentEventType::Failed).unwrap(),
+            AgentLifecycleState::Failed
+        );
     }
 }

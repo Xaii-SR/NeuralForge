@@ -2,19 +2,19 @@ pub mod autocomplete;
 pub mod cache;
 pub mod completion;
 pub mod composer;
+pub mod context;
 pub mod credential_store;
 pub mod docs;
 pub mod git;
-pub mod context;
 pub mod health;
 pub mod inline;
-pub mod web;
 pub mod model_manager;
 pub mod provider_registry;
 pub mod provider_router;
-pub mod request_registry;
 pub mod providers;
+pub mod request_registry;
 pub mod router;
+pub mod web;
 
 use crate::core::errors::{AppError, AppResult};
 use crate::core::state::AppState;
@@ -95,18 +95,15 @@ pub fn get_enriched_context(
         crate::database::indexer::purge_excluded_rows(conn, root, &policy)?;
         let memory = context::read_memory_context(root);
         let new_context = crate::database::search::enriched_context(
-            conn,
-            root,
-            &query,
-            &memory,
-            None,
-            max_tokens,
+            conn, root, &query, &memory, None, max_tokens,
         )
         .map_err(|e| AppError::Provider(e.to_string()))?;
 
         let cached = crate::database::search::get_cached_context();
-        let delta =
-            crate::database::search::compute_context_diff(&cached.unwrap_or_default(), &new_context);
+        let delta = crate::database::search::compute_context_diff(
+            &cached.unwrap_or_default(),
+            &new_context,
+        );
         crate::database::search::cache_context_response(&new_context);
 
         if delta.is_delta {
@@ -118,12 +115,22 @@ pub fn get_enriched_context(
 }
 
 #[tauri::command]
-pub fn save_preferences(db: State<DbState>, goal: String, cost_preference: String) -> AppResult<()> {
+pub fn save_preferences(
+    db: State<DbState>,
+    goal: String,
+    cost_preference: String,
+) -> AppResult<()> {
     let guard = db.conn.lock().unwrap();
     let conn = guard
         .as_ref()
         .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-    router::save_preferences(conn, &Preferences { goal, cost_preference })
+    router::save_preferences(
+        conn,
+        &Preferences {
+            goal,
+            cost_preference,
+        },
+    )
 }
 
 #[tauri::command]
@@ -158,16 +165,11 @@ pub async fn test_provider_connection(
     provider_id: String,
 ) -> Result<bool, String> {
     let provider = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
-        provider_registry::load_provider_by_id(conn, &provider_id)
-            .map_err(AppError::Provider)
+        provider_registry::load_provider_by_id(conn, &provider_id).map_err(AppError::Provider)
     })
     .map_err(|error| error.to_string())?;
-    provider_router::test_connection(
-        &provider.provider_type,
-        provider.base_url,
-        provider.api_key,
-    )
-    .await
+    provider_router::test_connection(&provider.provider_type, provider.base_url, provider.api_key)
+        .await
 }
 
 #[tauri::command]
@@ -177,8 +179,7 @@ pub async fn list_provider_models(
     provider_id: String,
 ) -> Result<Vec<provider_router::ProviderModel>, String> {
     let config = crate::database::with_workspace_conn(&state, &db, |_root, conn| {
-        provider_registry::load_provider_by_id(conn, &provider_id)
-            .map_err(AppError::Provider)
+        provider_registry::load_provider_by_id(conn, &provider_id).map_err(AppError::Provider)
     })
     .map_err(|error| error.to_string())?;
     provider_router::list_models(&config)
@@ -242,7 +243,10 @@ pub async fn auto_select_model(
 ) -> AppResult<AutoSelection> {
     let prefs = {
         let guard = db.conn.lock().unwrap();
-        guard.as_ref().map(router::load_preferences).unwrap_or_default()
+        guard
+            .as_ref()
+            .map(router::load_preferences)
+            .unwrap_or_default()
     };
 
     let models = ollama::list_models().await?;
@@ -292,11 +296,12 @@ where
 
     let start = std::time::Instant::now();
     let mut accumulated = String::new();
-    let result = ollama::chat_stream_at(&config.base_url, model, messages.to_vec(), |token, done| {
-        accumulated.push_str(token);
-        on_token(token, done);
-    })
-    .await;
+    let result =
+        ollama::chat_stream_at(&config.base_url, model, messages.to_vec(), |token, done| {
+            accumulated.push_str(token);
+            on_token(token, done);
+        })
+        .await;
 
     match &result {
         Ok(_) => {
@@ -360,9 +365,7 @@ fn prepare_chat_messages(
     mut messages: Vec<ollama::ChatMessage>,
     share_workspace_context: bool,
 ) -> Vec<ollama::ChatMessage> {
-    if config.adapter_kind() != provider_registry::AdapterKind::Ollama
-        && !share_workspace_context
-    {
+    if config.adapter_kind() != provider_registry::AdapterKind::Ollama && !share_workspace_context {
         messages.retain(|message| !context::contains_workspace_context(&message.content));
     }
     context::budget_chat_messages(messages, config.capabilities.context_length)
@@ -391,13 +394,15 @@ pub async fn chat_with_model(
             &state,
             &db,
             workspace_generation,
-            |_root, conn| provider_registry::resolve_provider_model(
-                conn,
-                &provider_id,
-                &model,
-                provider_registry::AiMode::Chat,
-            )
-            .map_err(AppError::Provider),
+            |_root, conn| {
+                provider_registry::resolve_provider_model(
+                    conn,
+                    &provider_id,
+                    &model,
+                    provider_registry::AiMode::Chat,
+                )
+                .map_err(AppError::Provider)
+            },
         )?;
         let config = resolved.provider;
         let model = resolved.model;
@@ -513,7 +518,9 @@ mod tests {
         let messages = vec![
             ollama::ChatMessage {
                 role: "system".into(),
-                content: "<untrusted_workspace_context>NF_CONTEXT_SENTINEL</untrusted_workspace_context>".into(),
+                content:
+                    "<untrusted_workspace_context>NF_CONTEXT_SENTINEL</untrusted_workspace_context>"
+                        .into(),
             },
             ollama::ChatMessage {
                 role: "user".into(),
@@ -562,23 +569,43 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "chat_with_model_core failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "chat_with_model_core failed: {:?}",
+            result.err()
+        );
         let (accumulated, stats) = result.unwrap();
-        assert!(!accumulated.trim().is_empty(), "expected non-empty accumulated response");
-        assert_eq!(accumulated, streamed, "accumulated response should match what was streamed");
-        assert!(stats.eval_count.is_some(), "expected real Ollama generation stats");
+        assert!(
+            !accumulated.trim().is_empty(),
+            "expected non-empty accumulated response"
+        );
+        assert_eq!(
+            accumulated, streamed,
+            "accumulated response should match what was streamed"
+        );
+        assert!(
+            stats.eval_count.is_some(),
+            "expected real Ollama generation stats"
+        );
 
         let snapshot = health.snapshot();
         let ollama_health = snapshot
             .iter()
             .find(|h| h.provider == "ollama")
             .expect("expected an ollama health entry after a successful chat");
-        assert_eq!(ollama_health.failure_count, 0, "expected zero failures after a successful chat");
-        assert!(ollama_health.avg_latency_ms.is_some(), "expected latency to be recorded");
+        assert_eq!(
+            ollama_health.failure_count, 0,
+            "expected zero failures after a successful chat"
+        );
+        assert!(
+            ollama_health.avg_latency_ms.is_some(),
+            "expected latency to be recorded"
+        );
 
         // Give the non-blocking file writer a moment to flush before reading back.
         std::thread::sleep(std::time::Duration::from_millis(200));
-        let log_content = std::fs::read_to_string(log_dir.join("app.log")).expect("failed to read log file");
+        let log_content =
+            std::fs::read_to_string(log_dir.join("app.log")).expect("failed to read log file");
         assert!(
             log_content.contains("\"event\":\"chat_completed\""),
             "expected a chat_completed log entry, got: {log_content}"
@@ -621,11 +648,14 @@ mod tests {
         assert!(cache::get_cached(&conn, "default-ollama", model, "default", &messages).is_none());
         let start1 = std::time::Instant::now();
         let mut streamed1 = String::new();
-        let fresh1 = chat_or_use_cache(&health, None, &config, model, &messages, |t, _d| streamed1.push_str(t))
-            .await
-            .unwrap();
+        let fresh1 = chat_or_use_cache(&health, None, &config, model, &messages, |t, _d| {
+            streamed1.push_str(t)
+        })
+        .await
+        .unwrap();
         let elapsed1 = start1.elapsed();
-        let response1 = fresh1.expect("first call should be a cache miss producing a fresh response");
+        let response1 =
+            fresh1.expect("first call should be a cache miss producing a fresh response");
         cache::store_response(
             &conn,
             "default-ollama",
@@ -641,13 +671,21 @@ mod tests {
         assert!(cached2.is_some());
         let start2 = std::time::Instant::now();
         let mut streamed2 = String::new();
-        let fresh2 = chat_or_use_cache(&health, cached2, &config, model, &messages, |t, _d| streamed2.push_str(t))
-            .await
-            .unwrap();
+        let fresh2 = chat_or_use_cache(&health, cached2, &config, model, &messages, |t, _d| {
+            streamed2.push_str(t)
+        })
+        .await
+        .unwrap();
         let elapsed2 = start2.elapsed();
 
-        assert!(fresh2.is_none(), "second call should be a cache hit, not a fresh generation");
-        assert_eq!(streamed2, response1, "cached response should match the original");
+        assert!(
+            fresh2.is_none(),
+            "second call should be a cache hit, not a fresh generation"
+        );
+        assert_eq!(
+            streamed2, response1,
+            "cached response should match the original"
+        );
         assert!(
             elapsed2 < elapsed1 / 2,
             "cache hit ({elapsed2:?}) should be dramatically faster than real generation ({elapsed1:?})"
@@ -668,12 +706,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
 
-        let messages = vec![
-            ollama::ChatMessage { role: "user".into(), content: "hello".into() },
-        ];
+        let messages = vec![ollama::ChatMessage {
+            role: "user".into(),
+            content: "hello".into(),
+        }];
 
         // Store a response for provider-a.
-        cache::store_response(&conn, "provider-a", "model-x", "default", &messages, "response-from-a").unwrap();
+        cache::store_response(
+            &conn,
+            "provider-a",
+            "model-x",
+            "default",
+            &messages,
+            "response-from-a",
+        )
+        .unwrap();
 
         // provider-b should NOT see provider-a's cache entry.
         assert!(cache::get_cached(&conn, "provider-b", "model-x", "default", &messages).is_none());

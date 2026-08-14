@@ -1,6 +1,6 @@
+use ignore::gitignore::GitignoreBuilder;
 use std::fs;
 use std::path::{Path, PathBuf};
-use ignore::gitignore::GitignoreBuilder;
 
 /// Default patterns to always ignore.
 const DEFAULT_IGNORES: &[&str] = &[
@@ -166,12 +166,17 @@ impl WorkspacePathPolicy {
 
     pub fn is_excluded(&self, path: &Path, is_dir: bool) -> bool {
         let relative = path.strip_prefix(&self.root).unwrap_or(path);
-        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
 
         if matches_default_ignore(relative) || has_sensitive_directory(relative) {
             return true;
         }
-        if !is_dir && (name == ".gitignore" || name == ".neuralforgeignore" || is_sensitive_name(relative)) {
+        if !is_dir
+            && (name == ".gitignore" || name == ".neuralforgeignore" || is_sensitive_name(relative))
+        {
             return true;
         }
         self.build_ignores_for(relative)
@@ -200,7 +205,11 @@ pub fn scan_workspace(root: &Path) -> Result<ScanResult, String> {
     let policy = WorkspacePathPolicy::new(root)?;
     scan_dir(root, &policy, &mut files, &mut skipped, &mut total_bytes)?;
 
-    Ok(ScanResult { files, skipped_count: skipped, total_bytes })
+    Ok(ScanResult {
+        files,
+        skipped_count: skipped,
+        total_bytes,
+    })
 }
 
 fn scan_dir(
@@ -229,7 +238,9 @@ fn scan_dir(
             }
             scan_dir(&path, policy, files, skipped, total_bytes)?;
         } else {
-            let meta = entry.metadata().map_err(|e| format!("Metadata error: {}", e))?;
+            let meta = entry
+                .metadata()
+                .map_err(|e| format!("Metadata error: {}", e))?;
             if meta.len() > MAX_FILE_SIZE {
                 *skipped += 1;
                 continue;

@@ -35,28 +35,23 @@ export default function SessionTabs({ workspaceRoot, workspaceGeneration, select
   // see the "streaming during session switch" limitation documented below.
   const [sending, setSending] = useState(false);
   const workspaceGenerationRef = useRef(workspaceGeneration);
-  workspaceGenerationRef.current = workspaceGeneration;
 
   // Same StrictMode/re-render duplicate-init guard used by Phase 4A's
   // original effect in ChatPane - claimed synchronously before any await.
   const initializedForWorkspace = useRef<string | null>(null);
 
   useEffect(() => {
+    workspaceGenerationRef.current = workspaceGeneration;
+  }, [workspaceGeneration]);
+
+  useEffect(() => {
     if (!workspaceRoot) {
       initializedForWorkspace.current = null;
-      setSessions([]);
-      setActiveSessionId(null);
-      setTabsState("uninitialized");
       return;
     }
     const workspaceKey = `${workspaceGeneration}:${workspaceRoot}`;
     if (initializedForWorkspace.current === workspaceKey) return;
     initializedForWorkspace.current = workspaceKey;
-    setSessions([]);
-    setActiveSessionId(null);
-    setTabsState("loading");
-    setError(null);
-
     let cancelled = false;
     const generation = workspaceGeneration;
     (async () => {
@@ -192,7 +187,8 @@ export default function SessionTabs({ workspaceRoot, workspaceGeneration, select
         </button>
       </div>
       <div className="min-h-0 flex-1">
-        <ChatPane
+      <ChatPane
+        key={activeSessionId ?? "empty"}
           workspaceRoot={workspaceRoot}
           workspaceGeneration={workspaceGeneration}
           selectedContext={selectedContext}

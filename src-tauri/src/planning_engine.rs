@@ -1,6 +1,6 @@
+use crate::agent_controller::AgentContext;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::agent_controller::AgentContext;
 
 /// A validated, structured implementation plan produced by the Planning Engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +101,11 @@ impl PlanningEngine {
     }
 
     /// Graph-aware decomposition: uses dependency graph for smarter task ordering.
-    pub fn decompose_task_with_graph(analysis: &TaskAnalysis, files: &[String], dep_graph: &HashMap<String, Vec<String>>) -> Vec<Subtask> {
+    pub fn decompose_task_with_graph(
+        analysis: &TaskAnalysis,
+        files: &[String],
+        dep_graph: &HashMap<String, Vec<String>>,
+    ) -> Vec<Subtask> {
         if dep_graph.is_empty() || files.len() <= 1 {
             return Self::decompose_task(analysis, files);
         }
@@ -116,7 +120,8 @@ impl PlanningEngine {
 
             for file in remaining {
                 let has_unresolved_dep = dep_graph.get(&file).map_or(false, |deps| {
-                    deps.iter().any(|d| !ordered.contains(d) && files.contains(d))
+                    deps.iter()
+                        .any(|d| !ordered.contains(d) && files.contains(d))
                 });
                 if has_unresolved_dep {
                     pending.push(file);
@@ -136,7 +141,8 @@ impl PlanningEngine {
 
         let mut subtasks = Vec::new();
         for (id, file) in ordered.iter().enumerate() {
-            let deps: Vec<usize> = dep_graph.get(file)
+            let deps: Vec<usize> = dep_graph
+                .get(file)
                 .map(|deps| {
                     deps.iter()
                         .filter_map(|d| ordered.iter().position(|f| f == d))
@@ -178,10 +184,16 @@ impl PlanningEngine {
         for file in files {
             let name = file.rsplit('/').next().unwrap_or(file);
             if name.contains("mod") || name.contains("lib") || name.contains("main") {
-                regression_risks.push(format!("Changes to `{}` may affect downstream modules", file));
+                regression_risks.push(format!(
+                    "Changes to `{}` may affect downstream modules",
+                    file
+                ));
             }
             if name.contains("types") || name.contains("schema") || name.contains("interface") {
-                affected_components.push(format!("Type/schema file `{}` — may cascade to all consumers", file));
+                affected_components.push(format!(
+                    "Type/schema file `{}` — may cascade to all consumers",
+                    file
+                ));
             }
         }
 
@@ -226,7 +238,8 @@ impl PlanningEngine {
             for dep in &subtask.dependencies {
                 if *dep >= plan.subtasks.len() || *dep == i {
                     warnings.push(format!(
-                        "Subtask {} has invalid dependency reference to task {}", i, dep
+                        "Subtask {} has invalid dependency reference to task {}",
+                        i, dep
                     ));
                     is_valid = false;
                 }
@@ -252,16 +265,26 @@ impl PlanningEngine {
 
     /// Compute overall plan confidence from subtask scores.
     pub fn compute_confidence(plan: &TaskPlan) -> f64 {
-        if plan.subtasks.is_empty() { return 0.0; }
+        if plan.subtasks.is_empty() {
+            return 0.0;
+        }
         let sum: f64 = plan.subtasks.iter().map(|s| s.confidence_score).sum();
         let avg = sum / plan.subtasks.len() as f64;
         // Penalize for large plans
-        if plan.subtasks.len() > 5 { avg - 0.1 } else { avg }.max(0.0).min(1.0)
+        if plan.subtasks.len() > 5 {
+            avg - 0.1
+        } else {
+            avg
+        }
+        .max(0.0)
+        .min(1.0)
     }
 
     /// Generate a rollback plan description.
     pub fn generate_rollback_plan(plan: &TaskPlan) -> String {
-        if plan.affected_files.is_empty() { return "No files were modified — no rollback needed".to_string(); }
+        if plan.affected_files.is_empty() {
+            return "No files were modified — no rollback needed".to_string();
+        }
         let file_list = plan.affected_files.join(", ");
         format!("Revert changes to files: {}. Use git checkout or manual undo following the patch backup files.", file_list)
     }
@@ -280,11 +303,26 @@ impl PlanningEngine {
     fn detect_affected_systems(files: &[String], keywords: &[&str]) -> Vec<String> {
         let mut systems: Vec<String> = files
             .iter()
-            .filter(|f| keywords.iter().any(|kw| f.to_lowercase().contains(&kw.to_lowercase())))
+            .filter(|f| {
+                keywords
+                    .iter()
+                    .any(|kw| f.to_lowercase().contains(&kw.to_lowercase()))
+            })
             .cloned()
             .collect();
 
-        let known_systems = ["auth", "database", "api", "ui", "config", "models", "routes", "handler", "service", "repository"];
+        let known_systems = [
+            "auth",
+            "database",
+            "api",
+            "ui",
+            "config",
+            "models",
+            "routes",
+            "handler",
+            "service",
+            "repository",
+        ];
         for sys in &known_systems {
             if keywords.contains(sys) || files.iter().any(|f| f.contains(sys)) {
                 if !systems.iter().any(|s| s.contains(sys)) {
@@ -303,10 +341,19 @@ impl PlanningEngine {
             unknowns.push("Limited file context — may need broader workspace analysis".to_string());
         }
 
-        let common_unknowns = ["dependency", "upgrade", "migration", "compatibility", "deploy"];
+        let common_unknowns = [
+            "dependency",
+            "upgrade",
+            "migration",
+            "compatibility",
+            "deploy",
+        ];
         for uk in &common_unknowns {
             if keywords.contains(uk) {
-                unknowns.push(format!("Task involves `{}` — verify current state before changing", uk));
+                unknowns.push(format!(
+                    "Task involves `{}` — verify current state before changing",
+                    uk
+                ));
             }
         }
 
@@ -320,7 +367,10 @@ impl PlanningEngine {
             risks.push("Multiple systems affected — increased integration risk".to_string());
         }
 
-        if files.iter().any(|f| f.contains("main") || f.contains("index") || f.contains("app")) {
+        if files
+            .iter()
+            .any(|f| f.contains("main") || f.contains("index") || f.contains("app"))
+        {
             risks.push("Entry-point files affected — changes may cascade broadly".to_string());
         }
 
@@ -355,11 +405,17 @@ impl PlanningEngine {
     }
 
     fn dfs_cycle(node: usize, adj: &[Vec<usize>], color: &mut [u8]) -> bool {
-        if color[node] == 1 { return true; }
-        if color[node] == 2 { return false; }
+        if color[node] == 1 {
+            return true;
+        }
+        if color[node] == 2 {
+            return false;
+        }
         color[node] = 1;
         for &dep in &adj[node] {
-            if Self::dfs_cycle(dep, adj, color) { return true; }
+            if Self::dfs_cycle(dep, adj, color) {
+                return true;
+            }
         }
         color[node] = 2;
         false
@@ -397,9 +453,13 @@ pub fn plan_task(ctx: &mut AgentContext) -> Result<TaskPlan, String> {
 }
 
 /// Extended planning that consumes a dependency graph for smarter task ordering.
-pub fn plan_task_with_graph(ctx: &mut AgentContext, dep_graph: &HashMap<String, Vec<String>>) -> Result<TaskPlan, String> {
+pub fn plan_task_with_graph(
+    ctx: &mut AgentContext,
+    dep_graph: &HashMap<String, Vec<String>>,
+) -> Result<TaskPlan, String> {
     let analysis = PlanningEngine::analyze_task(ctx, &ctx.user_task);
-    let subtasks = PlanningEngine::decompose_task_with_graph(&analysis, &ctx.relevant_files, dep_graph);
+    let subtasks =
+        PlanningEngine::decompose_task_with_graph(&analysis, &ctx.relevant_files, dep_graph);
 
     let plan = TaskPlan {
         task_description: ctx.user_task.clone(),
@@ -420,14 +480,21 @@ pub fn plan_task_with_graph(ctx: &mut AgentContext, dep_graph: &HashMap<String, 
 
     let validation = PlanningEngine::validate_plan(&plan);
     if !validation.is_valid {
-        return Err(format!("Plan validation failed: {}", validation.warnings.join("; ")));
+        return Err(format!(
+            "Plan validation failed: {}",
+            validation.warnings.join("; ")
+        ));
     }
 
     let mut finalized = plan;
     finalized.confidence = PlanningEngine::compute_confidence(&finalized);
     finalized.rollback_plan = PlanningEngine::generate_rollback_plan(&finalized);
 
-    let steps: Vec<String> = finalized.subtasks.iter().map(|s| s.description.clone()).collect();
+    let steps: Vec<String> = finalized
+        .subtasks
+        .iter()
+        .map(|s| s.description.clone())
+        .collect();
     crate::agent_controller::AgentController::plan(ctx, steps);
 
     Ok(finalized)
@@ -444,10 +511,128 @@ mod tests {
         ctx
     }
 
-    #[test] fn simple_task_planning() { let mut ctx = test_context("Fix authentication bug", vec!["src/auth.rs"]); let plan = plan_task(&mut ctx).unwrap(); assert!(!plan.subtasks.is_empty()); assert!(plan.confidence > 0.0); assert!(!plan.rollback_plan.is_empty()); }
-    #[test] fn multi_step_decomposition() { let mut ctx = test_context("Refactor the database layer", vec!["src/db/mod.rs", "src/db/connection.rs", "src/db/query.rs"]); let plan = plan_task(&mut ctx).unwrap(); assert!(plan.subtasks.len() >= 3); }
-    #[test] fn missing_context_handling() { let mut ctx = test_context("Implement caching layer", vec![]); assert!(plan_task(&mut ctx).is_err()); }
-    #[test] fn impact_analysis_detects_risks() { let files: Vec<String> = vec!["src/main.rs".into(), "src/types.rs".into(), "src/handler.rs".into()]; let plan = TaskPlan { task_description: "t".into(), objective: "o".into(), affected_files: files.clone(), subtasks: vec![Subtask{id:0,description:"d".into(),dependencies:vec![],required_files:vec!["a".into()],expected_outcome:"ok".into(),confidence_score:0.9},Subtask{id:1,description:"d2".into(),dependencies:vec![0],required_files:vec!["b".into()],expected_outcome:"ok".into(),confidence_score:0.9}], risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.9,estimated_runtime_commands:2,rollback_plan:"Revert".into(),reasoning:"t".into()}; let report = PlanningEngine::impact_analysis(&files, &plan); assert!(!report.regression_risks.is_empty()); }
-    #[test] fn validation_detects_circular_deps() { let plan = TaskPlan { task_description:"t".into(),objective:"o".into(),affected_files:vec!["a.rs".into()],subtasks:vec![Subtask{id:0,description:"A".into(),dependencies:vec![1],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:0.9},Subtask{id:1,description:"B".into(),dependencies:vec![0],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:0.9}],risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.0,estimated_runtime_commands:2,rollback_plan:String::new(),reasoning:String::new()}; let v = PlanningEngine::validate_plan(&plan); assert!(!v.is_valid); }
-    #[test] fn confidence_penalizes_large_plans() { let mut plan = TaskPlan { task_description:"t".into(),objective:"o".into(),affected_files:vec!["a.rs".into()],subtasks:Vec::new(),risks:vec![],verification:vec![],unknown_information:vec![],confidence:0.0,estimated_runtime_commands:0,rollback_plan:String::new(),reasoning:String::new()}; for i in 0..10 { plan.subtasks.push(Subtask{id:i,description:"s".into(),dependencies:vec![],required_files:vec!["a.rs".into()],expected_outcome:"ok".into(),confidence_score:1.0}); } assert!(PlanningEngine::compute_confidence(&plan) <= 0.9); }
+    #[test]
+    fn simple_task_planning() {
+        let mut ctx = test_context("Fix authentication bug", vec!["src/auth.rs"]);
+        let plan = plan_task(&mut ctx).unwrap();
+        assert!(!plan.subtasks.is_empty());
+        assert!(plan.confidence > 0.0);
+        assert!(!plan.rollback_plan.is_empty());
+    }
+    #[test]
+    fn multi_step_decomposition() {
+        let mut ctx = test_context(
+            "Refactor the database layer",
+            vec!["src/db/mod.rs", "src/db/connection.rs", "src/db/query.rs"],
+        );
+        let plan = plan_task(&mut ctx).unwrap();
+        assert!(plan.subtasks.len() >= 3);
+    }
+    #[test]
+    fn missing_context_handling() {
+        let mut ctx = test_context("Implement caching layer", vec![]);
+        assert!(plan_task(&mut ctx).is_err());
+    }
+    #[test]
+    fn impact_analysis_detects_risks() {
+        let files: Vec<String> = vec![
+            "src/main.rs".into(),
+            "src/types.rs".into(),
+            "src/handler.rs".into(),
+        ];
+        let plan = TaskPlan {
+            task_description: "t".into(),
+            objective: "o".into(),
+            affected_files: files.clone(),
+            subtasks: vec![
+                Subtask {
+                    id: 0,
+                    description: "d".into(),
+                    dependencies: vec![],
+                    required_files: vec!["a".into()],
+                    expected_outcome: "ok".into(),
+                    confidence_score: 0.9,
+                },
+                Subtask {
+                    id: 1,
+                    description: "d2".into(),
+                    dependencies: vec![0],
+                    required_files: vec!["b".into()],
+                    expected_outcome: "ok".into(),
+                    confidence_score: 0.9,
+                },
+            ],
+            risks: vec![],
+            verification: vec![],
+            unknown_information: vec![],
+            confidence: 0.9,
+            estimated_runtime_commands: 2,
+            rollback_plan: "Revert".into(),
+            reasoning: "t".into(),
+        };
+        let report = PlanningEngine::impact_analysis(&files, &plan);
+        assert!(!report.regression_risks.is_empty());
+    }
+    #[test]
+    fn validation_detects_circular_deps() {
+        let plan = TaskPlan {
+            task_description: "t".into(),
+            objective: "o".into(),
+            affected_files: vec!["a.rs".into()],
+            subtasks: vec![
+                Subtask {
+                    id: 0,
+                    description: "A".into(),
+                    dependencies: vec![1],
+                    required_files: vec!["a.rs".into()],
+                    expected_outcome: "ok".into(),
+                    confidence_score: 0.9,
+                },
+                Subtask {
+                    id: 1,
+                    description: "B".into(),
+                    dependencies: vec![0],
+                    required_files: vec!["a.rs".into()],
+                    expected_outcome: "ok".into(),
+                    confidence_score: 0.9,
+                },
+            ],
+            risks: vec![],
+            verification: vec![],
+            unknown_information: vec![],
+            confidence: 0.0,
+            estimated_runtime_commands: 2,
+            rollback_plan: String::new(),
+            reasoning: String::new(),
+        };
+        let v = PlanningEngine::validate_plan(&plan);
+        assert!(!v.is_valid);
+    }
+    #[test]
+    fn confidence_penalizes_large_plans() {
+        let mut plan = TaskPlan {
+            task_description: "t".into(),
+            objective: "o".into(),
+            affected_files: vec!["a.rs".into()],
+            subtasks: Vec::new(),
+            risks: vec![],
+            verification: vec![],
+            unknown_information: vec![],
+            confidence: 0.0,
+            estimated_runtime_commands: 0,
+            rollback_plan: String::new(),
+            reasoning: String::new(),
+        };
+        for i in 0..10 {
+            plan.subtasks.push(Subtask {
+                id: i,
+                description: "s".into(),
+                dependencies: vec![],
+                required_files: vec!["a.rs".into()],
+                expected_outcome: "ok".into(),
+                confidence_score: 1.0,
+            });
+        }
+        assert!(PlanningEngine::compute_confidence(&plan) <= 0.9);
+    }
 }

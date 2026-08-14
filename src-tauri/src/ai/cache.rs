@@ -47,7 +47,10 @@ pub fn store_response(
     response: &str,
 ) -> AppResult<()> {
     let hash = hash_prompt(provider_id, model, effective_options, messages);
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     conn.execute(
         "INSERT INTO response_cache (prompt_hash, model, response, success_rating, created_at)
          VALUES (?1, ?2, ?3, 1, ?4)
@@ -77,7 +80,10 @@ mod tests {
     #[test]
     fn cache_miss_then_hit_after_store() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_cache_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -85,7 +91,15 @@ mod tests {
 
         assert!(get_cached(&conn, "provider-a", "model-a", "default", &msgs("hello")).is_none());
 
-        store_response(&conn, "provider-a", "model-a", "default", &msgs("hello"), "hi there").unwrap();
+        store_response(
+            &conn,
+            "provider-a",
+            "model-a",
+            "default",
+            &msgs("hello"),
+            "hi there",
+        )
+        .unwrap();
         assert_eq!(
             get_cached(&conn, "provider-a", "model-a", "default", &msgs("hello")),
             Some("hi there".to_string())
@@ -93,7 +107,14 @@ mod tests {
 
         assert!(get_cached(&conn, "provider-b", "model-a", "default", &msgs("hello")).is_none());
         assert!(get_cached(&conn, "provider-a", "model-b", "default", &msgs("hello")).is_none());
-        assert!(get_cached(&conn, "provider-a", "model-a", "high-effort", &msgs("hello")).is_none());
+        assert!(get_cached(
+            &conn,
+            "provider-a",
+            "model-a",
+            "high-effort",
+            &msgs("hello")
+        )
+        .is_none());
         assert!(get_cached(&conn, "provider-a", "model-a", "default", &msgs("goodbye")).is_none());
 
         let cleared = clear_cache(&conn).unwrap();

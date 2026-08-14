@@ -26,7 +26,21 @@ export default function ExtensionsPanel() {
   }
 
   useEffect(() => {
-    refresh();
+    let active = true;
+    void extensions.listExtensions()
+      .then((found) => {
+        if (active) {
+          setList(found);
+          setError(null);
+        }
+      })
+      .catch((error) => {
+        if (active) setError(String(error));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
   }, []);
 
   async function toggle(name: string, enabled: boolean) {

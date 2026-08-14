@@ -9,9 +9,9 @@ pub fn home_dir() -> AppResult<PathBuf> {
     #[cfg(not(windows))]
     let var = "HOME";
 
-    std::env::var(var)
-        .map(PathBuf::from)
-        .map_err(|_| AppError::Provider(format!("could not resolve home directory ({var} not set)")))
+    std::env::var(var).map(PathBuf::from).map_err(|_| {
+        AppError::Provider(format!("could not resolve home directory ({var} not set)"))
+    })
 }
 
 pub fn extensions_dir() -> AppResult<PathBuf> {
@@ -132,7 +132,8 @@ fn load_enabled_state(dir: &Path) -> HashMap<String, bool> {
 
 pub fn save_enabled_state(dir: &Path, state: &HashMap<String, bool>) -> AppResult<()> {
     let path = dir.join("enabled_state.json");
-    let json = serde_json::to_string_pretty(state).map_err(|e| AppError::Provider(e.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(state).map_err(|e| AppError::Provider(e.to_string()))?;
     std::fs::write(path, json)?;
     Ok(())
 }
@@ -155,8 +156,12 @@ pub fn scan(dir: &Path) -> AppResult<Vec<InstalledExtension>> {
             continue;
         }
         let manifest_path = path.join("extension.json");
-        let Ok(content) = std::fs::read_to_string(&manifest_path) else { continue };
-        let Ok(manifest) = serde_json::from_str::<ExtensionManifest>(&content) else { continue };
+        let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<ExtensionManifest>(&content) else {
+            continue;
+        };
         let enabled = enabled_state.get(&manifest.name).copied().unwrap_or(true);
         extensions.push(InstalledExtension {
             manifest,
@@ -176,7 +181,10 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_ext_loader_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -197,7 +205,10 @@ mod tests {
         let main_path = dir.join("python-repl").join("main.py");
         std::fs::write(&main_path, "# customized by user").unwrap();
         ensure_bundled_extensions(&dir).unwrap();
-        assert_eq!(std::fs::read_to_string(&main_path).unwrap(), "# customized by user");
+        assert_eq!(
+            std::fs::read_to_string(&main_path).unwrap(),
+            "# customized by user"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -233,8 +244,14 @@ mod tests {
         save_enabled_state(&dir, &state).unwrap();
 
         let found = scan(&dir).unwrap();
-        let repl = found.iter().find(|e| e.manifest.name == "python-repl").unwrap();
-        let search = found.iter().find(|e| e.manifest.name == "file-search").unwrap();
+        let repl = found
+            .iter()
+            .find(|e| e.manifest.name == "python-repl")
+            .unwrap();
+        let search = found
+            .iter()
+            .find(|e| e.manifest.name == "file-search")
+            .unwrap();
         assert!(!repl.enabled);
         assert!(search.enabled, "unmentioned extensions default to enabled");
 

@@ -21,7 +21,11 @@ pub struct WorkerMatch {
 }
 
 fn coverage(profile: &WorkerProfile, required: &[String]) -> (usize, Vec<String>) {
-    let have: Vec<String> = profile.capabilities.iter().map(|c| c.to_lowercase()).collect();
+    let have: Vec<String> = profile
+        .capabilities
+        .iter()
+        .map(|c| c.to_lowercase())
+        .collect();
     let mut matched = 0;
     let mut missing = Vec::new();
     for req in required {
@@ -48,16 +52,28 @@ pub fn rank(profiles: &[WorkerProfile], required_capabilities: &[String]) -> Vec
             } else {
                 matched as f64 / required_capabilities.len() as f64
             };
-            WorkerMatch { score: cov * 10.0 + p.reliability_score, profile: p.clone(), matched, missing }
+            WorkerMatch {
+                score: cov * 10.0 + p.reliability_score,
+                profile: p.clone(),
+                matched,
+                missing,
+            }
         })
         .collect();
-    ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ranked
 }
 
 /// The routing decision: best fully- or best-available partial match.
 /// None only when there are no profiles at all.
-pub fn best_match(profiles: &[WorkerProfile], required_capabilities: &[String]) -> Option<WorkerMatch> {
+pub fn best_match(
+    profiles: &[WorkerProfile],
+    required_capabilities: &[String],
+) -> Option<WorkerMatch> {
     rank(profiles, required_capabilities).into_iter().next()
 }
 

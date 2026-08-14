@@ -164,8 +164,11 @@ export function useComposer() {
       })),
     }));
     setSession((prev) => prev ? { ...prev, message_history: h } : null);
-  }, [session]);
-  sendMessageRef.current = sendMessage;
+  }, [attachedDocs, session]);
+
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
 
   const updateBlockStatus = useCallback((blockId: string, status: any) => {
     if (!session) return;
@@ -210,7 +213,7 @@ export function useComposer() {
           const block = updated.message_history.flatMap((m) => m.code_blocks).find((b) => b.id === block_id);
           if (block?.output) {
             const truncated = truncateTerminalOutput(block.output);
-            sendMessage(truncated);
+            void sendMessageRef.current?.(truncated);
           }
         }
         return updated;

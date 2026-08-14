@@ -32,7 +32,12 @@ pub struct SelfImprovementResult {
     pub pr_summary: String,
 }
 
-fn format_pr_summary(proposal: &SelfImprovementProposal, branch_name: &str, tests_passed: bool, test_output: &str) -> String {
+fn format_pr_summary(
+    proposal: &SelfImprovementProposal,
+    branch_name: &str,
+    tests_passed: bool,
+    test_output: &str,
+) -> String {
     format!(
         "# {title}\n\n\
         Branch: `{branch_name}` (created locally - not pushed anywhere)\n\
@@ -61,7 +66,9 @@ fn format_pr_summary(proposal: &SelfImprovementProposal, branch_name: &str, test
 /// contract, no filesystem writes), and renders a diff. No git operation
 /// happens until a human approves via apply_self_improvement.
 #[tauri::command]
-pub async fn propose_self_improvement(state: tauri::State<'_, crate::core::state::AppState>) -> AppResult<SelfImprovementProposal> {
+pub async fn propose_self_improvement(
+    state: tauri::State<'_, crate::core::state::AppState>,
+) -> AppResult<SelfImprovementProposal> {
     let root = state
         .workspace_root
         .lock()
@@ -72,12 +79,13 @@ pub async fn propose_self_improvement(state: tauri::State<'_, crate::core::state
     let analysis = selfanalyze::analyze(&root)?;
     let target = suggest::choose_target(&analysis).await?;
 
-    let original_content =
-        std::fs::read_to_string(root.join(&target.file_path)).map_err(|e| AppError::Provider(format!("failed to read {}: {e}", target.file_path)))?;
+    let original_content = std::fs::read_to_string(root.join(&target.file_path))
+        .map_err(|e| AppError::Provider(format!("failed to read {}: {e}", target.file_path)))?;
 
-    let (proposed_content, risk_summary) = crate::agent::planner::plan_change(&target.rationale, &target.file_path, &original_content)
-        .await
-        .map_err(|e| AppError::Provider(format!("failed to plan the suggested change: {e}")))?;
+    let (proposed_content, risk_summary) =
+        crate::agent::planner::plan_change(&target.rationale, &target.file_path, &original_content)
+            .await
+            .map_err(|e| AppError::Provider(format!("failed to plan the suggested change: {e}")))?;
 
     let diff = diff::unified_diff(&target.file_path, &original_content, &proposed_content);
 
@@ -110,28 +118,32 @@ pub fn record_promotion_bookkeeping(
     let task_id = format!("bootstrap-{}", uuid::Uuid::new_v4());
     // Sprint 7: task + evidence + promotion verdict land atomically.
     crate::database::in_transaction(conn, |conn| {
-    crate::agent::insert_task(
-        conn,
-        &task_id,
-        &proposal.title,
-        crate::agent::task_type::EDIT_FILE,
-        &proposal.file_path,
-        if tests_passed { crate::agent::status::COMPLETED } else { crate::agent::status::FAILED },
-        &proposal.original_content,
-        &proposal.proposed_content,
-        &proposal.risk_summary,
-        None,
-        None,
-    )?;
-    crate::governance::evidence::record(
-        conn,
-        &task_id,
-        None,
-        crate::governance::evidence::kind::VERIFICATION,
-        test_output,
-        tests_passed,
-    )?;
-    crate::governance::promotion::request_promotion(conn, &task_id, None)
+        crate::agent::insert_task(
+            conn,
+            &task_id,
+            &proposal.title,
+            crate::agent::task_type::EDIT_FILE,
+            &proposal.file_path,
+            if tests_passed {
+                crate::agent::status::COMPLETED
+            } else {
+                crate::agent::status::FAILED
+            },
+            &proposal.original_content,
+            &proposal.proposed_content,
+            &proposal.risk_summary,
+            None,
+            None,
+        )?;
+        crate::governance::evidence::record(
+            conn,
+            &task_id,
+            None,
+            crate::governance::evidence::kind::VERIFICATION,
+            test_output,
+            tests_passed,
+        )?;
+        crate::governance::promotion::request_promotion(conn, &task_id, None)
     })
 }
 
@@ -156,7 +168,13 @@ pub async fn apply_self_improvement(
         .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
 
     let branch_name = git::create_branch(&root, &proposal.slug).await?;
-    git::write_and_commit(&root, &proposal.file_path, &proposal.proposed_content, &proposal.title).await?;
+    git::write_and_commit(
+        &root,
+        &proposal.file_path,
+        &proposal.proposed_content,
+        &proposal.title,
+    )
+    .await?;
     let (tests_passed, test_output) = git::run_tests(&root, &proposal.file_path).await?;
 
     // Sprint 4: bookkeep the outcome through the shared
@@ -174,7 +192,13 @@ pub async fn apply_self_improvement(
 
     tracing::info!(target: "bootstrap", event = "self_improvement_applied", branch = %branch_name, tests_passed);
 
-    Ok(SelfImprovementResult { branch_name, diff: proposal.diff.clone(), tests_passed, test_output, pr_summary })
+    Ok(SelfImprovementResult {
+        branch_name,
+        diff: proposal.diff.clone(),
+        tests_passed,
+        test_output,
+        pr_summary,
+    })
 }
 
 #[cfg(test)]
@@ -185,11 +209,18 @@ mod tests {
 
     fn temp_throwaway_repo() -> PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_bootstrap_gate_test_{nanos}"));
         std::fs::create_dir_all(dir.join("src")).unwrap();
 
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"throwaway_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"throwaway_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("src").join("lib.rs"),
             "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {\n        assert_eq!(super::add(2, 2), 4);\n    }\n}\n",
@@ -202,11 +233,32 @@ mod tests {
         )
         .unwrap();
 
-        std::process::Command::new("git").arg("init").arg("--quiet").current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.email", "test@example.com"]).current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.name", "Test"]).current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["add", "."]).current_dir(&dir).output().unwrap();
-        std::process::Command::new("git").args(["commit", "-m", "initial"]).current_dir(&dir).output().unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
 
         dir
     }
@@ -231,8 +283,12 @@ mod tests {
 
         // "Proposes refactoring suggestion" + "Generates diff for human review"
         let original_content = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
-        let proposed_content = original_content.replace("a + b\n", "a + b // sum of the two operands\n");
-        assert_ne!(original_content, proposed_content, "fixture change should actually differ");
+        let proposed_content =
+            original_content.replace("a + b\n", "a + b // sum of the two operands\n");
+        assert_ne!(
+            original_content, proposed_content,
+            "fixture change should actually differ"
+        );
 
         let title = "Document the add() return value".to_string();
         let proposal = SelfImprovementProposal {
@@ -245,26 +301,45 @@ mod tests {
             proposed_content,
             risk_summary: "low risk: +1/-1 lines".to_string(),
         };
-        assert!(proposal.diff.contains("+     a + b // sum of the two operands"));
+        assert!(proposal
+            .diff
+            .contains("+     a + b // sum of the two operands"));
         assert!(proposal.diff.contains("-     a + b"));
 
         // "YOU review + approve/reject" - this test takes the approve path,
         // exercising exactly what apply_self_improvement's body does.
         let branch_name = git::create_branch(&dir, &proposal.slug).await.unwrap();
-        git::write_and_commit(&dir, &proposal.file_path, &proposal.proposed_content, &proposal.title).await.unwrap();
+        git::write_and_commit(
+            &dir,
+            &proposal.file_path,
+            &proposal.proposed_content,
+            &proposal.title,
+        )
+        .await
+        .unwrap();
         let (tests_passed, test_output) = git::run_tests(&dir, &proposal.file_path).await.unwrap();
         let pr_summary = format_pr_summary(&proposal, &branch_name, tests_passed, &test_output);
 
         // "Creates branch + applies changes"
         assert!(branch_name.starts_with("neuralforge/suggest-"));
-        assert_eq!(std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap(), proposal.proposed_content);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap(),
+            proposal.proposed_content
+        );
 
         // "Runs tests (all pass)"
-        assert!(tests_passed, "expected the real cargo test run to pass, got:\n{test_output}");
+        assert!(
+            tests_passed,
+            "expected the real cargo test run to pass, got:\n{test_output}"
+        );
         assert!(test_output.contains("test result: ok"));
 
         // Never pushed - no remote was ever configured on this throwaway repo.
-        let remotes = std::process::Command::new("git").arg("remote").current_dir(&dir).output().unwrap();
+        let remotes = std::process::Command::new("git")
+            .arg("remote")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         assert!(String::from_utf8_lossy(&remotes.stdout).trim().is_empty());
 
         assert!(pr_summary.contains("PASSED"));
@@ -287,7 +362,8 @@ mod tests {
         let conn = crate::database::open_for_workspace(&dir).unwrap();
 
         let original_content = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
-        let proposed_content = original_content.replace("a + b\n", "a + b // sum of the two operands\n");
+        let proposed_content =
+            original_content.replace("a + b\n", "a + b // sum of the two operands\n");
         let title = "Document the add() return value".to_string();
         let proposal = SelfImprovementProposal {
             slug: suggest::slugify(&title),
@@ -302,27 +378,58 @@ mod tests {
 
         // Identical sequence to apply_self_improvement's body.
         let branch_name = git::create_branch(&dir, &proposal.slug).await.unwrap();
-        git::write_and_commit(&dir, &proposal.file_path, &proposal.proposed_content, &proposal.title).await.unwrap();
+        git::write_and_commit(
+            &dir,
+            &proposal.file_path,
+            &proposal.proposed_content,
+            &proposal.title,
+        )
+        .await
+        .unwrap();
         let (tests_passed, test_output) = git::run_tests(&dir, &proposal.file_path).await.unwrap();
-        let promotion = record_promotion_bookkeeping(&conn, &proposal, tests_passed, &test_output).unwrap();
+        let promotion =
+            record_promotion_bookkeeping(&conn, &proposal, tests_passed, &test_output).unwrap();
 
         // Pre-refactor observable behavior, unchanged:
         assert!(branch_name.starts_with("neuralforge/suggest-"));
-        assert_eq!(std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap(), proposal.proposed_content);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap(),
+            proposal.proposed_content
+        );
         assert!(tests_passed, "real cargo test must pass: {test_output}");
         assert!(test_output.contains("test result: ok"));
-        let log = std::process::Command::new("git").args(["log", "-1", "--pretty=%s"]).current_dir(&dir).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "neuralforge: Document the add() return value");
-        let remotes = std::process::Command::new("git").arg("remote").current_dir(&dir).output().unwrap();
-        assert!(String::from_utf8_lossy(&remotes.stdout).trim().is_empty(), "never pushed anywhere");
+        let log = std::process::Command::new("git")
+            .args(["log", "-1", "--pretty=%s"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&log.stdout).trim(),
+            "neuralforge: Document the add() return value"
+        );
+        let remotes = std::process::Command::new("git")
+            .arg("remote")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&remotes.stdout).trim().is_empty(),
+            "never pushed anywhere"
+        );
 
         // New Sprint 4 guarantees on top:
-        assert_eq!(promotion.status, crate::governance::promotion::status::PROMOTED);
+        assert_eq!(
+            promotion.status,
+            crate::governance::promotion::status::PROMOTED
+        );
         assert!(promotion.promoted_at.is_some());
         let evidence = crate::governance::evidence::for_task(&conn, &promotion.task_id).unwrap();
         assert_eq!(evidence.len(), 1);
         assert!(evidence[0].success);
-        assert!(evidence[0].content.contains("test result: ok"), "evidence carries the real test output");
+        assert!(
+            evidence[0].content.contains("test result: ok"),
+            "evidence carries the real test output"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

@@ -26,7 +26,10 @@ pub async fn fetch_ghost_suggestion(
 
     let providers = {
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
+        guard
+            .as_ref()
+            .map(provider_registry::load_providers)
+            .unwrap_or_default()
         // guard dropped here, before the .await below
     };
 

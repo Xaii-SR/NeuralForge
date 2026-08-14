@@ -45,10 +45,6 @@ export default function TaskReportView({ taskId, onRetryCreated }: TaskReportVie
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setRetryResult(null);
-    setRetryConfirm(false);
     governance
       .getTaskReport(taskId)
       .then((r) => !cancelled && setReport(r))

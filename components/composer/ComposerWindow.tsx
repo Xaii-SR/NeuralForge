@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComposerSession } from "@/hooks/useComposer";
 import { useMentionMenu } from "@/hooks/useMentionMenu";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -47,10 +47,14 @@ export default function ComposerWindow({
   const { hasCustomRules } = useComposer();
   const [suggestedItems, setSuggestedItems] = useState<MentionItem[]>([]);
   const debouncedQuery = useDebounce(mention.query, 150);
+  const visibleSuggestedItems = useMemo(
+    () => (mention.isOpen && debouncedQuery ? suggestedItems : []),
+    [debouncedQuery, mention.isOpen, suggestedItems],
+  );
 
   // Debounced workspace file + doc search
   useEffect(() => {
-    if (!mention.isOpen || !debouncedQuery) { setSuggestedItems([]); return; }
+    if (!mention.isOpen || !debouncedQuery) return;
     Promise.all([
       invoke<string[]>("search_workspace_files", { query: debouncedQuery, maxResults: 10 }),
       invoke<string[]>("list_cached_docs"),
@@ -97,6 +101,12 @@ export default function ComposerWindow({
     closeMention(null);
   }, [openMention, closeMention, setMentionQuery]);
 
+  const handleSubmit = useCallback(async () => {
+    if (!inputValue.trim()) return;
+    await onSendMessage(inputValue);
+    setInputValue("");
+  }, [inputValue, onSendMessage]);
+
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (mention.isOpen) {
       if (e.key === "ArrowDown") {
@@ -111,8 +121,8 @@ export default function ComposerWindow({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        const filtered = suggestedItems.length > 0
-          ? suggestedItems
+          const filtered = visibleSuggestedItems.length > 0
+            ? visibleSuggestedItems
           : [];
         const selected = filtered[mention.activeIndex];
         if (selected) {
@@ -135,13 +145,7 @@ export default function ComposerWindow({
       e.preventDefault();
       handleSubmit();
     }
-  }, [mention, inputValue, onAddFile, setMentionIndex, closeMention]);
-
-  const handleSubmit = async () => {
-    if (!inputValue.trim()) return;
-    await onSendMessage(inputValue);
-    setInputValue("");
-  };
+  }, [mention, inputValue, onAddFile, setMentionIndex, closeMention, handleSubmit, visibleSuggestedItems]);
 
   return (
     <div className="fixed z-50 flex flex-col rounded-lg border border-neutral-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900" style={{ left: position.x, top: position.y, width: 520 }}>
@@ -269,7 +273,7 @@ export default function ComposerWindow({
           x={mention.coords.x}
           y={mention.coords.y}
           query={mention.query}
-          items={suggestedItems}
+          items={visibleSuggestedItems}
           activeIndex={mention.activeIndex}
           onSelect={(item) => {
             const atIndex = inputValue.lastIndexOf("@");

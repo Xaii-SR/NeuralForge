@@ -68,7 +68,10 @@ pub mod task_type {
 pub const CODER_AGENT: &str = "coder";
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -95,7 +98,13 @@ pub fn insert_task(
     Ok(())
 }
 
-pub fn update_status(conn: &Connection, id: &str, status: &str, verification: Option<&str>, error: Option<&str>) -> AppResult<()> {
+pub fn update_status(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    verification: Option<&str>,
+    error: Option<&str>,
+) -> AppResult<()> {
     conn.execute(
         "UPDATE agent_tasks SET status = ?1, verification = ?2, error = ?3, updated_at = ?4 WHERE id = ?5",
         params![status, verification, error, now_secs(), id],
@@ -116,8 +125,14 @@ pub fn set_rollback(conn: &Connection, id: &str, rollback_note: &str) -> AppResu
 /// Sprint 3: stamps DAG membership onto an existing task row. Separate
 /// from insert_task so the Sprint 1/2 single-task insert path is
 /// untouched - single tasks simply never get stamped.
-pub fn set_dag_membership(conn: &Connection, task_id: &str, dag_id: &str, depends_on: &[String]) -> AppResult<()> {
-    let deps_json = serde_json::to_string(depends_on).map_err(|e| AppError::Provider(format!("failed to encode depends_on: {e}")))?;
+pub fn set_dag_membership(
+    conn: &Connection,
+    task_id: &str,
+    dag_id: &str,
+    depends_on: &[String],
+) -> AppResult<()> {
+    let deps_json = serde_json::to_string(depends_on)
+        .map_err(|e| AppError::Provider(format!("failed to encode depends_on: {e}")))?;
     conn.execute(
         "UPDATE agent_tasks SET dag_id = ?1, depends_on = ?2, updated_at = ?3 WHERE id = ?4",
         params![dag_id, deps_json, now_secs(), task_id],
@@ -129,7 +144,11 @@ pub fn set_dag_membership(conn: &Connection, task_id: &str, dag_id: &str, depend
 fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
     let file_path: String = row.get("file_path")?;
     let task: String = row.get("task_type")?;
-    let files = if task == task_type::RUN_CODE { vec![] } else { vec![file_path] };
+    let files = if task == task_type::RUN_CODE {
+        vec![]
+    } else {
+        vec![file_path]
+    };
     let depends_on_json: Option<String> = row.get("depends_on")?;
     let depends_on = depends_on_json
         .as_deref()
@@ -156,8 +175,12 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
 }
 
 pub fn get_task(conn: &Connection, id: &str) -> AppResult<AgentTask> {
-    conn.query_row("SELECT * FROM agent_tasks WHERE id = ?1", params![id], row_to_task)
-        .map_err(|_| AppError::NotFound(id.to_string()))
+    conn.query_row(
+        "SELECT * FROM agent_tasks WHERE id = ?1",
+        params![id],
+        row_to_task,
+    )
+    .map_err(|_| AppError::NotFound(id.to_string()))
 }
 
 pub fn get_task_content(conn: &Connection, id: &str) -> AppResult<(String, String)> {
@@ -184,14 +207,19 @@ pub fn list_tasks(conn: &Connection) -> AppResult<Vec<AgentTask>> {
 /// (unchanged) planner consumes: intent plus an explicit acceptance-
 /// criteria checklist, so the model plans against the contract instead
 /// of a raw prompt.
-pub fn objective_from_requirement(req: &crate::governance::requirements::RequirementContract) -> String {
+pub fn objective_from_requirement(
+    req: &crate::governance::requirements::RequirementContract,
+) -> String {
     let criteria = req
         .acceptance_criteria
         .iter()
         .map(|c| format!("- {c}"))
         .collect::<Vec<_>>()
         .join("\n");
-    format!("{}\n\nThe change is only acceptable if all of these criteria hold:\n{criteria}", req.intent)
+    format!(
+        "{}\n\nThe change is only acceptable if all of these criteria hold:\n{criteria}",
+        req.intent
+    )
 }
 
 /// Sprint 1 (Requirement Intelligence): edit_file tasks no longer accept a
@@ -221,38 +249,39 @@ pub async fn create_and_plan_task(
             &db,
             workspace_generation,
             |root, conn| {
-        let target = root.join(&file_path);
-        let canonical_target = std::fs::canonicalize(&target)
-            .map_err(|_| AppError::NotFound(file_path.clone()))?;
-        if !canonical_target.starts_with(root) {
-            return Err(AppError::InvalidPath(format!(
-                "{file_path} is outside the workspace"
-            )));
-        }
-        let original_content = std::fs::read_to_string(&target)?;
-        let requirement = crate::governance::requirements::get_active(conn, &requirement_id)?;
-        let objective = objective_from_requirement(&requirement);
-        insert_task(
-            conn,
-            &id,
-            &objective,
-            task_type::EDIT_FILE,
-            &file_path,
-            status::PLANNING,
-            &original_content,
-            "",
-            "",
-            Some(&requirement_id),
-            Some(&requirement.correlation_id),
+                let target = root.join(&file_path);
+                let canonical_target = std::fs::canonicalize(&target)
+                    .map_err(|_| AppError::NotFound(file_path.clone()))?;
+                if !canonical_target.starts_with(root) {
+                    return Err(AppError::InvalidPath(format!(
+                        "{file_path} is outside the workspace"
+                    )));
+                }
+                let original_content = std::fs::read_to_string(&target)?;
+                let requirement =
+                    crate::governance::requirements::get_active(conn, &requirement_id)?;
+                let objective = objective_from_requirement(&requirement);
+                insert_task(
+                    conn,
+                    &id,
+                    &objective,
+                    task_type::EDIT_FILE,
+                    &file_path,
+                    status::PLANNING,
+                    &original_content,
+                    "",
+                    "",
+                    Some(&requirement_id),
+                    Some(&requirement.correlation_id),
+                )?;
+                Ok((
+                    root.to_path_buf(),
+                    original_content,
+                    objective,
+                    requirement.correlation_id,
+                ))
+            },
         )?;
-        Ok((
-            root.to_path_buf(),
-            original_content,
-            objective,
-            requirement.correlation_id,
-        ))
-    },
-    )?;
 
     let plan_result = planner::plan_change(&objective, &file_path, &original_content).await;
     let conn = crate::database::open_for_workspace(&root)?;
@@ -334,19 +363,27 @@ pub async fn create_and_plan_task(
         }
         Err(e) => {
             update_status(&conn, &id, status::FAILED, None, Some(&e.to_string()))?;
-            
+
             // Record ledger event for task plan failure
             let _ = ledger::append(
                 &conn,
                 LedgerEvent::TaskPlanFailed,
-                if correlation_id.is_empty() { None } else { Some(correlation_id.as_str()) },
-                if requirement_id.is_empty() { None } else { Some(requirement_id.as_str()) },
+                if correlation_id.is_empty() {
+                    None
+                } else {
+                    Some(correlation_id.as_str())
+                },
+                if requirement_id.is_empty() {
+                    None
+                } else {
+                    Some(requirement_id.as_str())
+                },
                 Some(&id),
                 serde_json::json!({
                     "error": e.to_string()
                 }),
             );
-            
+
             tracing::warn!(target: "agent", event = "task_planning_failed", task_id = %id, error = %e);
             Err(e)
         }
@@ -358,7 +395,10 @@ pub async fn create_and_plan_task(
 /// Deliberately does NOT require a workspace to be open - code execution
 /// happens in the extension's own isolated directory, not the workspace.
 #[tauri::command]
-pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbState>, objective: String) -> AppResult<AgentTask> {
+pub async fn create_and_plan_code_task(
+    db: tauri::State<'_, crate::database::DbState>,
+    objective: String,
+) -> AppResult<AgentTask> {
     let id = uuid::Uuid::new_v4().to_string();
 
     {
@@ -366,7 +406,19 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
         let conn = guard
             .as_ref()
             .ok_or_else(|| AppError::InvalidPath("no workspace open".to_string()))?;
-        insert_task(conn, &id, &objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "", None, None)?;
+        insert_task(
+            conn,
+            &id,
+            &objective,
+            task_type::RUN_CODE,
+            "",
+            status::PLANNING,
+            "",
+            "",
+            "",
+            None,
+            None,
+        )?;
     }
 
     let plan_result = planner::plan_code(&objective).await;
@@ -433,7 +485,7 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
         }
         Err(e) => {
             update_status(conn, &id, status::FAILED, None, Some(&e.to_string()))?;
-            
+
             // Record ledger event for code task plan failure
             if let Some(conn_ref) = guard.as_ref() {
                 let _ = ledger::append(
@@ -447,7 +499,7 @@ pub async fn create_and_plan_code_task(db: tauri::State<'_, crate::database::DbS
                     }),
                 );
             }
-            
+
             tracing::warn!(target: "agent", event = "code_task_planning_failed", task_id = %id, error = %e);
             Err(e)
         }
@@ -484,32 +536,27 @@ pub async fn approve_task(
             &db,
             workspace_generation,
             |root, conn| {
-        let task = get_task(conn, &task_id)?;
-        ensure_task_type_is_approvable(&task)?;
-        let (original_content, proposed_content) = get_task_content(conn, &task_id)?;
-        update_status(conn, &task_id, status::APPLYING, None, None)?;
-        
-        // Record ledger event for task approval
-        let _ = ledger::append(
-            conn,
-            LedgerEvent::TaskApproved,
-            task.correlation_id.as_ref().map(|s| s.as_str()),
-            task.requirement_id.as_ref().map(|s| s.as_str()),
-            Some(&task_id),
-            serde_json::json!({
-                "task_type": task.task_type,
-                "file_path": task.files.first().cloned().unwrap_or_default()
-            }),
-        );
-        
-        Ok((
-            root.to_path_buf(),
-            task,
-            original_content,
-            proposed_content,
-        ))
-    },
-    )?;
+                let task = get_task(conn, &task_id)?;
+                ensure_task_type_is_approvable(&task)?;
+                let (original_content, proposed_content) = get_task_content(conn, &task_id)?;
+                update_status(conn, &task_id, status::APPLYING, None, None)?;
+
+                // Record ledger event for task approval
+                let _ = ledger::append(
+                    conn,
+                    LedgerEvent::TaskApproved,
+                    task.correlation_id.as_ref().map(|s| s.as_str()),
+                    task.requirement_id.as_ref().map(|s| s.as_str()),
+                    Some(&task_id),
+                    serde_json::json!({
+                        "task_type": task.task_type,
+                        "file_path": task.files.first().cloned().unwrap_or_default()
+                    }),
+                );
+
+                Ok((root.to_path_buf(), task, original_content, proposed_content))
+            },
+        )?;
 
     if !state.matches_workspace_generation(workspace_generation) {
         let conn = crate::database::open_for_workspace(&root)?;
@@ -540,9 +587,9 @@ pub async fn approve_task(
             None,
             Some("file changed since proposal was approved"),
         )?;
-        return Err(AppError::CommandRejected(
-            format!("{file_path} changed since proposal was approved; review the diff before retrying"),
-        ));
+        return Err(AppError::CommandRejected(format!(
+            "{file_path} changed since proposal was approved; review the diff before retrying"
+        )));
     }
 
     // Only governed file edits reach this point. Other task types are rejected
@@ -554,11 +601,31 @@ pub async fn approve_task(
         Option<String>,
         Option<std::path::PathBuf>,
     ) = {
-        let result = executor::apply_and_verify(&root, &file_path, &original_content, &proposed_content).await?;
-        let final_status = if result.rolled_back { status::ROLLED_BACK } else { status::COMPLETED };
-        let error = if result.rolled_back { Some(result.verification.clone()) } else { None };
-        let rollback_note = if result.rolled_back { Some("original content restored after failed verification".to_string()) } else { None };
-        (final_status, result.verification, error, rollback_note, Some(root.clone()))
+        let result =
+            executor::apply_and_verify(&root, &file_path, &original_content, &proposed_content)
+                .await?;
+        let final_status = if result.rolled_back {
+            status::ROLLED_BACK
+        } else {
+            status::COMPLETED
+        };
+        let error = if result.rolled_back {
+            Some(result.verification.clone())
+        } else {
+            None
+        };
+        let rollback_note = if result.rolled_back {
+            Some("original content restored after failed verification".to_string())
+        } else {
+            None
+        };
+        (
+            final_status,
+            result.verification,
+            error,
+            rollback_note,
+            Some(root.clone()),
+        )
     };
 
     let origin_conn = crate::database::open_for_workspace(&root)?;
@@ -576,7 +643,15 @@ pub async fn approve_task(
     // outside (after) the DB transaction, per the audit remediation.
     if let Some(root) = &memory_root {
         let file_path = task.files.first().cloned().unwrap_or_default();
-        memory::record_task_outcome(root, &task_id, &task.objective, &file_path, final_status, &verification).ok();
+        memory::record_task_outcome(
+            root,
+            &task_id,
+            &task.objective,
+            &file_path,
+            final_status,
+            &verification,
+        )
+        .ok();
     }
 
     tracing::info!(
@@ -601,8 +676,13 @@ pub async fn approve_task(
 /// execution. Previously `guard.as_ref().unwrap()` - a panic if the
 /// workspace was closed while the executor's long await was in flight.
 /// Now a clean error, matching every other connection access in this file.
-pub(crate) fn read_task_after_finish(conn: Option<&Connection>, task_id: &str) -> AppResult<AgentTask> {
-    let conn = conn.ok_or_else(|| AppError::InvalidPath("workspace was closed while the task was finishing".to_string()))?;
+pub(crate) fn read_task_after_finish(
+    conn: Option<&Connection>,
+    task_id: &str,
+) -> AppResult<AgentTask> {
+    let conn = conn.ok_or_else(|| {
+        AppError::InvalidPath("workspace was closed while the task was finishing".to_string())
+    })?;
     get_task(conn, task_id)
 }
 
@@ -666,7 +746,11 @@ pub(crate) fn record_task_outcome_atomic(
         // Sprint 4: judge that evidence through the shared
         // PromotionController - PROMOTED for a verified pass, BLOCKED for
         // a failure/rollback - on the task's correlation chain.
-        let _ = crate::governance::promotion::request_promotion(conn, task_id, task.correlation_id.as_deref());
+        let _ = crate::governance::promotion::request_promotion(
+            conn,
+            task_id,
+            task.correlation_id.as_deref(),
+        );
 
         // Record ledger events for task completion
         match final_status {
@@ -683,7 +767,7 @@ pub(crate) fn record_task_outcome_atomic(
                         "rollback_occurred": rollback_note.is_some()
                     }),
                 );
-            },
+            }
             status::FAILED => {
                 let _ = ledger::append(
                     conn,
@@ -697,7 +781,7 @@ pub(crate) fn record_task_outcome_atomic(
                         "rollback_occurred": rollback_note.is_some()
                     }),
                 );
-            },
+            }
             status::ROLLED_BACK => {
                 let _ = ledger::append(
                     conn,
@@ -711,8 +795,8 @@ pub(crate) fn record_task_outcome_atomic(
                         "rollback_occurred": rollback_note.is_some()
                     }),
                 );
-            },
-            _ => {}, // Don't record events for intermediate states
+            }
+            _ => {} // Don't record events for intermediate states
         }
 
         // Sprint 3: if this task is a DAG node and it just failed or rolled
@@ -742,20 +826,20 @@ pub fn reject_task(
         &db,
         workspace_generation,
         |_root, conn| {
-        update_status(conn, &task_id, status::REJECTED, None, None)?;
-        let task = get_task(conn, &task_id)?;
-        ledger::append(
-            conn,
-            LedgerEvent::TaskRejected,
-            task.correlation_id.as_ref().map(|s| s.as_str()),
-            task.requirement_id.as_ref().map(|s| s.as_str()),
-            Some(&task_id),
-            serde_json::json!({
-                "reason": "user_rejection"
-            }),
-        )?;
-        Ok(())
-    },
+            update_status(conn, &task_id, status::REJECTED, None, None)?;
+            let task = get_task(conn, &task_id)?;
+            ledger::append(
+                conn,
+                LedgerEvent::TaskRejected,
+                task.correlation_id.as_ref().map(|s| s.as_str()),
+                task.requirement_id.as_ref().map(|s| s.as_str()),
+                Some(&task_id),
+                serde_json::json!({
+                    "reason": "user_rejection"
+                }),
+            )?;
+            Ok(())
+        },
     )?;
 
     tracing::info!(target: "agent", event = "task_rejected", task_id = %task_id);
@@ -823,7 +907,12 @@ fn dep_state_with_lineage(tasks: &[AgentTask], dep_id: &str) -> DepState {
     if lineage.iter().any(|t| t.status == status::COMPLETED) {
         return DepState::Completed;
     }
-    if lineage.iter().any(|t| matches!(t.status.as_str(), status::PLANNING | status::AWAITING_APPROVAL | status::APPLYING)) {
+    if lineage.iter().any(|t| {
+        matches!(
+            t.status.as_str(),
+            status::PLANNING | status::AWAITING_APPROVAL | status::APPLYING
+        )
+    }) {
         return DepState::Pending;
     }
     DepState::Failed
@@ -841,8 +930,13 @@ pub fn dag_runnable_tasks(conn: &Connection, dag_id: &str) -> AppResult<Vec<Agen
     Ok(tasks
         .iter()
         .filter(|t| {
-            matches!(t.status.as_str(), status::PLANNING | status::AWAITING_APPROVAL)
-                && t.depends_on.iter().all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed)
+            matches!(
+                t.status.as_str(),
+                status::PLANNING | status::AWAITING_APPROVAL
+            ) && t
+                .depends_on
+                .iter()
+                .all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed)
         })
         .cloned()
         .collect())
@@ -860,14 +954,30 @@ pub fn propagate_dag_blocks(conn: &Connection, dag_id: &str) -> AppResult<Vec<St
 
         let mut changed = false;
         for task in &tasks {
-            if matches!(task.status.as_str(), status::COMPLETED | status::FAILED | status::ROLLED_BACK | status::BLOCKED | status::REJECTED) {
+            if matches!(
+                task.status.as_str(),
+                status::COMPLETED
+                    | status::FAILED
+                    | status::ROLLED_BACK
+                    | status::BLOCKED
+                    | status::REJECTED
+            ) {
                 continue;
             }
             // Sprint 8: lineage-aware - a dependency with a pending or
             // completed retry is NOT failed, so its dependents don't block.
-            let has_failed_dep = task.depends_on.iter().any(|d| dep_state_with_lineage(&tasks, d) == DepState::Failed);
+            let has_failed_dep = task
+                .depends_on
+                .iter()
+                .any(|d| dep_state_with_lineage(&tasks, d) == DepState::Failed);
             if has_failed_dep {
-                update_status(conn, &task.id, status::BLOCKED, None, Some("a dependency failed - task was never attempted"))?;
+                update_status(
+                    conn,
+                    &task.id,
+                    status::BLOCKED,
+                    None,
+                    Some("a dependency failed - task was never attempted"),
+                )?;
                 let _ = ledger::append(
                     conn,
                     LedgerEvent::TaskFailed,
@@ -902,7 +1012,10 @@ pub fn reopen_blocked_dependents(conn: &Connection, dag_id: &str) -> AppResult<V
             if task.status != status::BLOCKED {
                 continue;
             }
-            let all_deps_completed = task.depends_on.iter().all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed);
+            let all_deps_completed = task
+                .depends_on
+                .iter()
+                .all(|d| dep_state_with_lineage(&tasks, d) == DepState::Completed);
             if all_deps_completed {
                 update_status(conn, &task.id, status::PLANNING, None, None)?;
                 let _ = ledger::append(
@@ -961,7 +1074,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_agent_db_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -982,8 +1098,24 @@ mod tests {
         // And with a live connection it still reads the task (success path
         // preserved).
         let (dir, conn) = temp_conn();
-        insert_task(&conn, "rb-task", "obj", task_type::EDIT_FILE, "f.rs", status::COMPLETED, "o", "n", "low", None, None).unwrap();
-        assert_eq!(read_task_after_finish(Some(&conn), "rb-task").unwrap().id, "rb-task");
+        insert_task(
+            &conn,
+            "rb-task",
+            "obj",
+            task_type::EDIT_FILE,
+            "f.rs",
+            status::COMPLETED,
+            "o",
+            "n",
+            "low",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read_task_after_finish(Some(&conn), "rb-task").unwrap().id,
+            "rb-task"
+        );
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -995,33 +1127,89 @@ mod tests {
     #[test]
     fn task_outcome_is_all_or_nothing() {
         let (dir, conn) = temp_conn();
-        insert_task(&conn, "atomic-task", "obj", task_type::EDIT_FILE, "f.rs", status::APPLYING, "old", "new", "low", Some("req-1"), Some("corr-atomic")).unwrap();
+        insert_task(
+            &conn,
+            "atomic-task",
+            "obj",
+            task_type::EDIT_FILE,
+            "f.rs",
+            status::APPLYING,
+            "old",
+            "new",
+            "low",
+            Some("req-1"),
+            Some("corr-atomic"),
+        )
+        .unwrap();
         let task = get_task(&conn, "atomic-task").unwrap();
-        let ledger_before: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+        let ledger_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0))
+            .unwrap();
 
         // Sabotage: the evidence write mid-transaction will fail.
-        conn.execute("ALTER TABLE evidence RENAME TO evidence_sabotaged", []).unwrap();
-        let result = record_task_outcome_atomic(&conn, &task, "atomic-task", status::COMPLETED, "cargo check passed", None, None);
-        conn.execute("ALTER TABLE evidence_sabotaged RENAME TO evidence", []).unwrap();
+        conn.execute("ALTER TABLE evidence RENAME TO evidence_sabotaged", [])
+            .unwrap();
+        let result = record_task_outcome_atomic(
+            &conn,
+            &task,
+            "atomic-task",
+            status::COMPLETED,
+            "cargo check passed",
+            None,
+            None,
+        );
+        conn.execute("ALTER TABLE evidence_sabotaged RENAME TO evidence", [])
+            .unwrap();
 
-        assert!(result.is_err(), "a failed evidence write must fail the outcome");
+        assert!(
+            result.is_err(),
+            "a failed evidence write must fail the outcome"
+        );
         // NOTHING partial persisted: status untouched, no ledger growth,
         // no evidence, no promotion.
-        assert_eq!(get_task(&conn, "atomic-task").unwrap().status, status::APPLYING, "status update must have rolled back");
-        let ledger_after: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
-        assert_eq!(ledger_before, ledger_after, "no ledger events may survive the rollback");
-        assert!(crate::governance::evidence::for_task(&conn, "atomic-task").unwrap().is_empty());
-        assert!(crate::governance::promotion::for_task(&conn, "atomic-task").unwrap().is_empty());
+        assert_eq!(
+            get_task(&conn, "atomic-task").unwrap().status,
+            status::APPLYING,
+            "status update must have rolled back"
+        );
+        let ledger_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            ledger_before, ledger_after,
+            "no ledger events may survive the rollback"
+        );
+        assert!(crate::governance::evidence::for_task(&conn, "atomic-task")
+            .unwrap()
+            .is_empty());
+        assert!(crate::governance::promotion::for_task(&conn, "atomic-task")
+            .unwrap()
+            .is_empty());
 
         // Un-sabotaged, the identical call commits everything together.
-        record_task_outcome_atomic(&conn, &task, "atomic-task", status::COMPLETED, "cargo check passed", None, None).unwrap();
-        assert_eq!(get_task(&conn, "atomic-task").unwrap().status, status::COMPLETED);
+        record_task_outcome_atomic(
+            &conn,
+            &task,
+            "atomic-task",
+            status::COMPLETED,
+            "cargo check passed",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            get_task(&conn, "atomic-task").unwrap().status,
+            status::COMPLETED
+        );
         let evidence = crate::governance::evidence::for_task(&conn, "atomic-task").unwrap();
         assert_eq!(evidence.len(), 1);
         assert!(evidence[0].success);
         let promotions = crate::governance::promotion::for_task(&conn, "atomic-task").unwrap();
         assert_eq!(promotions.len(), 1);
-        assert_eq!(promotions[0].status, crate::governance::promotion::status::PROMOTED);
+        assert_eq!(
+            promotions[0].status,
+            crate::governance::promotion::status::PROMOTED
+        );
         let chain = crate::governance::ledger::list_by_correlation(&conn, "corr-atomic").unwrap();
         assert!(chain.iter().any(|e| e.event_type == "task_completed"));
 
@@ -1036,24 +1224,51 @@ mod tests {
     #[test]
     fn rolled_back_task_outcome_writes_rollback_evidence_and_blocked_promotion() {
         let (dir, conn) = temp_conn();
-        insert_task(&conn, "rb-atomic", "obj", task_type::EDIT_FILE, "f.rs", status::APPLYING, "old", "new", "low", None, Some("corr-rb")).unwrap();
+        insert_task(
+            &conn,
+            "rb-atomic",
+            "obj",
+            task_type::EDIT_FILE,
+            "f.rs",
+            status::APPLYING,
+            "old",
+            "new",
+            "low",
+            None,
+            Some("corr-rb"),
+        )
+        .unwrap();
         let task = get_task(&conn, "rb-atomic").unwrap();
 
         record_task_outcome_atomic(
-            &conn, &task, "rb-atomic", status::ROLLED_BACK,
-            "cargo check failed:\nerror[E0308]", Some("verification failed"),
+            &conn,
+            &task,
+            "rb-atomic",
+            status::ROLLED_BACK,
+            "cargo check failed:\nerror[E0308]",
+            Some("verification failed"),
             Some("original content restored after failed verification"),
-        ).unwrap();
+        )
+        .unwrap();
 
         let task = get_task(&conn, "rb-atomic").unwrap();
         assert_eq!(task.status, status::ROLLED_BACK);
         let evidence = crate::governance::evidence::for_task(&conn, "rb-atomic").unwrap();
         assert_eq!(evidence.len(), 2, "verification + rollback evidence");
-        assert_eq!(evidence[0].kind, crate::governance::evidence::kind::VERIFICATION);
+        assert_eq!(
+            evidence[0].kind,
+            crate::governance::evidence::kind::VERIFICATION
+        );
         assert!(!evidence[0].success);
-        assert_eq!(evidence[1].kind, crate::governance::evidence::kind::ROLLBACK);
+        assert_eq!(
+            evidence[1].kind,
+            crate::governance::evidence::kind::ROLLBACK
+        );
         let promotions = crate::governance::promotion::for_task(&conn, "rb-atomic").unwrap();
-        assert_eq!(promotions[0].status, crate::governance::promotion::status::BLOCKED);
+        assert_eq!(
+            promotions[0].status,
+            crate::governance::promotion::status::BLOCKED
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -1063,7 +1278,20 @@ mod tests {
     fn insert_get_update_roundtrip() {
         let (dir, conn) = temp_conn();
 
-        insert_task(&conn, "task-1", "add a comment", task_type::EDIT_FILE, "main.rs", status::AWAITING_APPROVAL, "old", "new", "1 line changed", Some("req-1"), Some("corr-1")).unwrap();
+        insert_task(
+            &conn,
+            "task-1",
+            "add a comment",
+            task_type::EDIT_FILE,
+            "main.rs",
+            status::AWAITING_APPROVAL,
+            "old",
+            "new",
+            "1 line changed",
+            Some("req-1"),
+            Some("corr-1"),
+        )
+        .unwrap();
 
         let task = get_task(&conn, "task-1").unwrap();
         assert_eq!(task.objective, "add a comment");
@@ -1071,14 +1299,24 @@ mod tests {
         assert_eq!(task.files, vec!["main.rs".to_string()]);
         assert_eq!(task.proposed_content.as_deref(), Some("new"));
 
-        update_status(&conn, "task-1", status::COMPLETED, Some("cargo check passed"), None).unwrap();
+        update_status(
+            &conn,
+            "task-1",
+            status::COMPLETED,
+            Some("cargo check passed"),
+            None,
+        )
+        .unwrap();
         let updated = get_task(&conn, "task-1").unwrap();
         assert_eq!(updated.status, status::COMPLETED);
         assert_eq!(updated.verification.as_deref(), Some("cargo check passed"));
 
         set_rollback(&conn, "task-1", "restored original content").unwrap();
         let with_rollback = get_task(&conn, "task-1").unwrap();
-        assert_eq!(with_rollback.rollback.as_deref(), Some("restored original content"));
+        assert_eq!(
+            with_rollback.rollback.as_deref(),
+            Some("restored original content")
+        );
 
         let all = list_tasks(&conn).unwrap();
         assert_eq!(all.len(), 1);
@@ -1113,7 +1351,12 @@ mod tests {
             "test-user",
         )
         .unwrap();
-        crate::governance::requirements::set_status(&conn, &req.id, crate::governance::requirements::status::RETIRED).unwrap();
+        crate::governance::requirements::set_status(
+            &conn,
+            &req.id,
+            crate::governance::requirements::status::RETIRED,
+        )
+        .unwrap();
         assert!(crate::governance::requirements::get_active(&conn, &req.id).is_err());
 
         drop(conn);
@@ -1132,7 +1375,10 @@ mod tests {
             &conn,
             "Personalize greeting",
             "The greeting should address the user by name",
-            vec!["the output contains the user's name".to_string(), "existing tests still pass".to_string()],
+            vec![
+                "the output contains the user's name".to_string(),
+                "existing tests still pass".to_string(),
+            ],
             "test-user",
         )
         .unwrap();
@@ -1160,7 +1406,11 @@ mod tests {
 
         let task = get_task(&conn, "gated-task").unwrap();
         assert_eq!(task.requirement_id.as_deref(), Some(req.id.as_str()));
-        assert_eq!(task.correlation_id.as_deref(), Some(req.correlation_id.as_str()), "task must share the requirement's correlation ID");
+        assert_eq!(
+            task.correlation_id.as_deref(),
+            Some(req.correlation_id.as_str()),
+            "task must share the requirement's correlation ID"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -1170,11 +1420,27 @@ mod tests {
     fn run_code_task_reports_no_files_since_it_never_touches_the_workspace() {
         let (dir, conn) = temp_conn();
 
-        insert_task(&conn, "code-task-1", "print 42", task_type::RUN_CODE, "", status::AWAITING_APPROVAL, "", "print(42)", "low risk", None, None).unwrap();
+        insert_task(
+            &conn,
+            "code-task-1",
+            "print 42",
+            task_type::RUN_CODE,
+            "",
+            status::AWAITING_APPROVAL,
+            "",
+            "print(42)",
+            "low risk",
+            None,
+            None,
+        )
+        .unwrap();
 
         let task = get_task(&conn, "code-task-1").unwrap();
         assert_eq!(task.task_type, task_type::RUN_CODE);
-        assert!(task.files.is_empty(), "run_code tasks should not report a workspace file");
+        assert!(
+            task.files.is_empty(),
+            "run_code tasks should not report a workspace file"
+        );
         assert_eq!(task.proposed_content.as_deref(), Some("print(42)"));
 
         drop(conn);
@@ -1184,12 +1450,28 @@ mod tests {
     #[test]
     fn legacy_run_code_task_cannot_be_approved() {
         let (dir, conn) = temp_conn();
-        insert_task(&conn, "legacy-code", "print 42", task_type::RUN_CODE, "", status::AWAITING_APPROVAL, "", "print(42)", "low risk", None, None).unwrap();
+        insert_task(
+            &conn,
+            "legacy-code",
+            "print 42",
+            task_type::RUN_CODE,
+            "",
+            status::AWAITING_APPROVAL,
+            "",
+            "print(42)",
+            "low risk",
+            None,
+            None,
+        )
+        .unwrap();
 
         let task = get_task(&conn, "legacy-code").unwrap();
         let error = ensure_task_type_is_approvable(&task).unwrap_err();
         assert!(matches!(error, AppError::CommandRejected(_)));
-        assert_eq!(get_task(&conn, "legacy-code").unwrap().status, status::AWAITING_APPROVAL);
+        assert_eq!(
+            get_task(&conn, "legacy-code").unwrap().status,
+            status::AWAITING_APPROVAL
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -1198,7 +1480,20 @@ mod tests {
     #[test]
     fn governed_file_edit_remains_approvable() {
         let (dir, conn) = temp_conn();
-        insert_task(&conn, "edit-task", "edit", task_type::EDIT_FILE, "main.rs", status::AWAITING_APPROVAL, "old", "new", "low risk", None, None).unwrap();
+        insert_task(
+            &conn,
+            "edit-task",
+            "edit",
+            task_type::EDIT_FILE,
+            "main.rs",
+            status::AWAITING_APPROVAL,
+            "old",
+            "new",
+            "low risk",
+            None,
+            None,
+        )
+        .unwrap();
 
         let task = get_task(&conn, "edit-task").unwrap();
         ensure_task_type_is_approvable(&task).unwrap();
@@ -1217,7 +1512,11 @@ mod tests {
     /// genuinely spawns python.exe rather than mocking the extension layer.
     #[tokio::test]
     async fn gate_test_run_python_code_via_agent_task_lifecycle() {
-        if std::process::Command::new("python").arg("--version").output().is_err() {
+        if std::process::Command::new("python")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("skipping: python not on PATH");
             return;
         }
@@ -1225,7 +1524,10 @@ mod tests {
         let (dir, conn) = temp_conn();
 
         let mut home = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         home.push(format!("neuralforge_agent_gate_test_home_{nanos}"));
         std::fs::create_dir_all(&home).unwrap();
 
@@ -1242,7 +1544,10 @@ mod tests {
         let ext_dir = crate::extensions::loader::extensions_dir().unwrap();
         crate::extensions::loader::ensure_bundled_extensions(&ext_dir).unwrap();
         let installed = crate::extensions::loader::scan(&ext_dir).unwrap();
-        assert!(installed.iter().any(|e| e.manifest.name == "python-repl"), "python-repl should be discoverable after bundling");
+        assert!(
+            installed.iter().any(|e| e.manifest.name == "python-repl"),
+            "python-repl should be discoverable after bundling"
+        );
 
         // Planning step (plan_code itself needs a live Ollama call, so this
         // test supplies a fixed objective/code pair the same way plan_code
@@ -1250,7 +1555,20 @@ mod tests {
         let id = "code-gate-task";
         let objective = "print the sum of 40 and 2";
         let code = "print(40 + 2)";
-        insert_task(&conn, id, objective, task_type::RUN_CODE, "", status::PLANNING, "", "", "", None, None).unwrap();
+        insert_task(
+            &conn,
+            id,
+            objective,
+            task_type::RUN_CODE,
+            "",
+            status::PLANNING,
+            "",
+            "",
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         conn.execute(
             "UPDATE agent_tasks SET status = ?1, proposed_content = ?2, risk_summary = ?3 WHERE id = ?4",
             rusqlite::params![status::AWAITING_APPROVAL, code, "low risk: 1 line", id],
@@ -1263,8 +1581,19 @@ mod tests {
         // Approval step: run the exact same extension invocation approve_task uses.
         update_status(&conn, id, status::APPLYING, None, None).unwrap();
         let result = executor::run_code_via_extension(code).await.unwrap();
-        let final_status = if result.success { status::COMPLETED } else { status::FAILED };
-        update_status(&conn, id, final_status, Some(&format_extension_output(&result.output)), result.error.as_deref()).unwrap();
+        let final_status = if result.success {
+            status::COMPLETED
+        } else {
+            status::FAILED
+        };
+        update_status(
+            &conn,
+            id,
+            final_status,
+            Some(&format_extension_output(&result.output)),
+            result.error.as_deref(),
+        )
+        .unwrap();
 
         let finished = get_task(&conn, id).unwrap();
 
@@ -1292,8 +1621,10 @@ mod tests {
         let approved_snapshot = "original\n".to_string();
         std::fs::write("nf-agnet002-test.rs", "external edit\n").unwrap();
         let current_content = std::fs::read_to_string("nf-agnet002-test.rs").unwrap();
-        assert_ne!(current_content, approved_snapshot,
-            "base hash check must detect that the file was modified after approval");
+        assert_ne!(
+            current_content, approved_snapshot,
+            "base hash check must detect that the file was modified after approval"
+        );
         std::fs::remove_file("nf-agnet002-test.rs").ok();
     }
 
@@ -1302,8 +1633,10 @@ mod tests {
         let approved_snapshot = "unchanged\n".to_string();
         std::fs::write("nf-agnet002-ok.rs", "unchanged\n").unwrap();
         let current_content = std::fs::read_to_string("nf-agnet002-ok.rs").unwrap();
-        assert_eq!(current_content, approved_snapshot,
-            "base hash check must pass when file matches approved snapshot");
+        assert_eq!(
+            current_content, approved_snapshot,
+            "base hash check must pass when file matches approved snapshot"
+        );
         std::fs::remove_file("nf-agnet002-ok.rs").ok();
     }
 }

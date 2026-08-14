@@ -37,29 +37,43 @@ pub struct TaskDagRecord {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 /// requirement -> Vec<PlannedTask> -> validated TaskDAG. Pure (no DB):
 /// builds one node per spec, wiring dependency indices into task IDs.
-pub fn decompose(requirement: &crate::governance::requirements::RequirementContract, specs: &[DagTaskSpec]) -> AppResult<TaskDAG> {
+pub fn decompose(
+    requirement: &crate::governance::requirements::RequirementContract,
+    specs: &[DagTaskSpec],
+) -> AppResult<TaskDAG> {
     let base_objective = crate::agent::objective_from_requirement(requirement);
-    let ids: Vec<String> = specs.iter().map(|_| uuid::Uuid::new_v4().to_string()).collect();
+    let ids: Vec<String> = specs
+        .iter()
+        .map(|_| uuid::Uuid::new_v4().to_string())
+        .collect();
 
     let mut nodes = Vec::with_capacity(specs.len());
     for (i, spec) in specs.iter().enumerate() {
         let mut depends_on = Vec::with_capacity(spec.depends_on.len());
         for &dep in &spec.depends_on {
-            let dep_id = ids
-                .get(dep)
-                .ok_or_else(|| AppError::Provider(format!("task {i} depends on out-of-range spec index {dep}")))?;
+            let dep_id = ids.get(dep).ok_or_else(|| {
+                AppError::Provider(format!("task {i} depends on out-of-range spec index {dep}"))
+            })?;
             depends_on.push(dep_id.clone());
         }
         let objective = match &spec.note {
             Some(note) => format!("{base_objective}\n\nThis task's focus: {note}"),
             None => base_objective.clone(),
         };
-        nodes.push(PlannedTask { id: ids[i].clone(), objective, file_path: spec.file_path.clone(), depends_on });
+        nodes.push(PlannedTask {
+            id: ids[i].clone(),
+            objective,
+            file_path: spec.file_path.clone(),
+            depends_on,
+        });
     }
 
     let dag = TaskDAG::from_nodes(nodes);
@@ -79,7 +93,9 @@ pub fn plan_dag(
     original_contents: &[String],
 ) -> AppResult<TaskDagRecord> {
     if specs.len() != original_contents.len() {
-        return Err(AppError::Provider("one original-content entry per task spec is required".to_string()));
+        return Err(AppError::Provider(
+            "one original-content entry per task spec is required".to_string(),
+        ));
     }
     let dag = decompose(requirement, specs)?;
     let execution_order = dag.topological_order()?;
@@ -90,41 +106,41 @@ pub fn plan_dag(
     // every task_planned ledger event commit as one unit - a kill mid-plan
     // must never leave a partial DAG (which load_dag would then reject).
     crate::database::in_transaction(conn, |conn| {
-    conn.execute(
+        conn.execute(
         "INSERT INTO task_dags (id, requirement_id, version, created_at, correlation_id) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![dag_id, requirement.id, requirement.version, created_at, requirement.correlation_id],
     )
     .map_err(|e| AppError::Provider(format!("failed to create task DAG: {e}")))?;
 
-    for (node, original) in dag.nodes.iter().zip(original_contents) {
-        crate::agent::insert_task(
-            conn,
-            &node.id,
-            &node.objective,
-            crate::agent::task_type::EDIT_FILE,
-            &node.file_path,
-            crate::agent::status::PLANNING,
-            original,
-            "",
-            "",
-            Some(&requirement.id),
-            Some(&requirement.correlation_id),
-        )?;
-        crate::agent::set_dag_membership(conn, &node.id, &dag_id, &node.depends_on)?;
-        let _ = ledger::append(
-            conn,
-            LedgerEvent::TaskPlanned,
-            Some(&requirement.correlation_id),
-            Some(&requirement.id),
-            Some(&node.id),
-            serde_json::json!({
-                "dag_id": dag_id,
-                "file_path": node.file_path,
-                "depends_on": node.depends_on,
-            }),
-        );
-    }
-    Ok(())
+        for (node, original) in dag.nodes.iter().zip(original_contents) {
+            crate::agent::insert_task(
+                conn,
+                &node.id,
+                &node.objective,
+                crate::agent::task_type::EDIT_FILE,
+                &node.file_path,
+                crate::agent::status::PLANNING,
+                original,
+                "",
+                "",
+                Some(&requirement.id),
+                Some(&requirement.correlation_id),
+            )?;
+            crate::agent::set_dag_membership(conn, &node.id, &dag_id, &node.depends_on)?;
+            let _ = ledger::append(
+                conn,
+                LedgerEvent::TaskPlanned,
+                Some(&requirement.correlation_id),
+                Some(&requirement.id),
+                Some(&node.id),
+                serde_json::json!({
+                    "dag_id": dag_id,
+                    "file_path": node.file_path,
+                    "depends_on": node.depends_on,
+                }),
+            );
+        }
+        Ok(())
     })?;
 
     tracing::info!(target: "planning", event = "dag_planned", dag_id = %dag_id, requirement_id = %requirement.id, tasks = dag.nodes.len());

@@ -19,10 +19,14 @@ pub fn validate(input: &RequirementInput) -> Result<(), Vec<String>> {
 
     let title = input.title.trim();
     if title.len() < MIN_TITLE_CHARS {
-        problems.push(format!("title must be at least {MIN_TITLE_CHARS} characters"));
+        problems.push(format!(
+            "title must be at least {MIN_TITLE_CHARS} characters"
+        ));
     }
     if title.len() > MAX_TITLE_CHARS {
-        problems.push(format!("title must be at most {MAX_TITLE_CHARS} characters"));
+        problems.push(format!(
+            "title must be at most {MAX_TITLE_CHARS} characters"
+        ));
     }
 
     let intent = input.intent.trim();
@@ -35,7 +39,10 @@ pub fn validate(input: &RequirementInput) -> Result<(), Vec<String>> {
     }
     for (i, criterion) in input.acceptance_criteria.iter().enumerate() {
         if criterion.trim().len() < MIN_CRITERION_CHARS {
-            problems.push(format!("acceptance criterion {} is too short - state a checkable outcome", i + 1));
+            problems.push(format!(
+                "acceptance criterion {} is too short - state a checkable outcome",
+                i + 1
+            ));
         }
     }
 
@@ -68,15 +75,26 @@ mod tests {
     #[test]
     fn empty_everything_reports_every_problem_not_just_the_first() {
         let ac: Vec<String> = vec![];
-        let input = RequirementInput { title: "", intent: "", acceptance_criteria: &ac };
+        let input = RequirementInput {
+            title: "",
+            intent: "",
+            acceptance_criteria: &ac,
+        };
         let problems = validate(&input).unwrap_err();
-        assert!(problems.len() >= 3, "expected title + intent + criteria problems, got: {problems:?}");
+        assert!(
+            problems.len() >= 3,
+            "expected title + intent + criteria problems, got: {problems:?}"
+        );
     }
 
     #[test]
     fn whitespace_only_fields_are_rejected_like_empty_ones() {
         let ac = criteria(&["   "]);
-        let input = RequirementInput { title: "   ", intent: "          ", acceptance_criteria: &ac };
+        let input = RequirementInput {
+            title: "   ",
+            intent: "          ",
+            acceptance_criteria: &ac,
+        };
         let problems = validate(&input).unwrap_err();
         assert!(problems.iter().any(|p| p.contains("title")));
         assert!(problems.iter().any(|p| p.contains("intent")));
@@ -86,7 +104,11 @@ mod tests {
     #[test]
     fn vague_one_word_intent_is_rejected() {
         let ac = criteria(&["tests still pass afterwards"]);
-        let input = RequirementInput { title: "Fix stuff", intent: "fix it", acceptance_criteria: &ac };
+        let input = RequirementInput {
+            title: "Fix stuff",
+            intent: "fix it",
+            acceptance_criteria: &ac,
+        };
         assert!(validate(&input).is_err());
     }
 

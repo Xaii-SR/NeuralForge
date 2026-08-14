@@ -273,11 +273,15 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // Some test/portable workspace paths can be read-only to SQLite even
     // though the database itself is usable. Keep the existing timeout-based
     // fallback there; normal workspace databases use WAL.
-    if let Err(e) = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get::<_, String>(0)) {
+    if let Err(e) = conn.query_row("PRAGMA journal_mode = WAL", [], |row| {
+        row.get::<_, String>(0)
+    }) {
         tracing::warn!(target: "database", event = "wal_unavailable", error = %e);
     }
     conn.execute_batch("PRAGMA synchronous = NORMAL;")
-        .map_err(|e| AppError::Provider(format!("failed to configure SQLite synchronous mode: {e}")))?;
+        .map_err(|e| {
+            AppError::Provider(format!("failed to configure SQLite synchronous mode: {e}"))
+        })?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| AppError::Provider(format!("failed to init schema: {e}")))?;
     if let Err(error) = retry_pending_secure_scrub(&conn) {
@@ -296,12 +300,27 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // inspects `PRAGMA table_info` first and only issues the ALTER when the
     // column is genuinely missing, so a real failure now propagates instead
     // of vanishing.
-    ensure_column(&conn, "agent_tasks", "task_type", "task_type TEXT NOT NULL DEFAULT 'edit_file'")?;
+    ensure_column(
+        &conn,
+        "agent_tasks",
+        "task_type",
+        "task_type TEXT NOT NULL DEFAULT 'edit_file'",
+    )?;
     // Sprint 1 (Requirement Intelligence): tasks link back to the
     // requirement that gated them. Nullable because pre-Sprint-1 task rows
     // (and run_code tasks, which stay ungated this sprint) have none.
-    ensure_column(&conn, "agent_tasks", "requirement_id", "requirement_id TEXT")?;
-    ensure_column(&conn, "agent_tasks", "correlation_id", "correlation_id TEXT")?;
+    ensure_column(
+        &conn,
+        "agent_tasks",
+        "requirement_id",
+        "requirement_id TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "agent_tasks",
+        "correlation_id",
+        "correlation_id TEXT",
+    )?;
     // Sprint 3 (Task DAG Planning): DAG membership for multi-task
     // decomposition. NULL for single-task flow rows - that path never
     // sets them.
@@ -316,10 +335,30 @@ pub fn open_for_workspace(workspace_root: &Path) -> AppResult<Connection> {
     // this chain, so there is no counter column to drift.
     ensure_column(&conn, "agent_tasks", "retry_of", "retry_of TEXT")?;
     // Sprint 12 (Context Engine): file metadata columns for existing databases
-    ensure_column(&conn, "files", "file_size", "file_size INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&conn, "files", "modified_at", "modified_at INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&conn, "files", "language", "language TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(&conn, "files", "line_count", "line_count INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &conn,
+        "files",
+        "file_size",
+        "file_size INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "files",
+        "modified_at",
+        "modified_at INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "files",
+        "language",
+        "language TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &conn,
+        "files",
+        "line_count",
+        "line_count INTEGER NOT NULL DEFAULT 0",
+    )?;
 
     Ok(conn)
 }
@@ -344,7 +383,9 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, column_ddl: &str)
         return Ok(());
     }
     conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column_ddl}"), [])
-        .map_err(|e| AppError::Provider(format!("failed to add column {column} to {table}: {e}")))?;
+        .map_err(|e| {
+            AppError::Provider(format!("failed to add column {column} to {table}: {e}"))
+        })?;
     Ok(())
 }
 
@@ -357,7 +398,9 @@ pub(crate) fn mark_secure_scrub_pending(conn: &Connection) -> AppResult<()> {
         [SECURE_SCRUB_PENDING_KEY],
     )
     .map_err(|error| {
-        AppError::Provider(format!("failed to mark sensitive storage for scrubbing: {error}"))
+        AppError::Provider(format!(
+            "failed to mark sensitive storage for scrubbing: {error}"
+        ))
     })?;
     Ok(())
 }
@@ -380,9 +423,13 @@ pub(crate) fn retry_pending_secure_scrub(conn: &Connection) -> AppResult<()> {
 
 fn checkpoint_sensitive_wal(conn: &Connection) -> AppResult<()> {
     let busy = conn
-        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get::<_, i64>(0))
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .map_err(|error| {
-            AppError::Provider(format!("failed to checkpoint sensitive SQLite data: {error}"))
+            AppError::Provider(format!(
+                "failed to checkpoint sensitive SQLite data: {error}"
+            ))
         })?;
     if busy != 0 {
         return Err(AppError::Provider(
@@ -394,15 +441,18 @@ fn checkpoint_sensitive_wal(conn: &Connection) -> AppResult<()> {
 
 pub(crate) fn secure_scrub_storage(conn: &Connection) -> AppResult<()> {
     checkpoint_sensitive_wal(conn)?;
-    conn.execute_batch("VACUUM")
-        .map_err(|error| AppError::Provider(format!("failed to vacuum sensitive SQLite data: {error}")))?;
+    conn.execute_batch("VACUUM").map_err(|error| {
+        AppError::Provider(format!("failed to vacuum sensitive SQLite data: {error}"))
+    })?;
     checkpoint_sensitive_wal(conn)?;
     conn.execute(
         "DELETE FROM settings WHERE key = ?1",
         [SECURE_SCRUB_PENDING_KEY],
     )
     .map_err(|error| {
-        AppError::Provider(format!("failed to clear sensitive storage scrub marker: {error}"))
+        AppError::Provider(format!(
+            "failed to clear sensitive storage scrub marker: {error}"
+        ))
     })?;
     Ok(())
 }
@@ -413,13 +463,20 @@ pub(crate) fn secure_scrub_storage(conn: &Connection) -> AppResult<()> {
 /// never e.g. a COMPLETED task with no evidence. Takes &Connection rather
 /// than &mut because the app-wide Mutex already serializes every caller;
 /// BEGIN IMMEDIATE fails loudly if a transaction were somehow already open.
-pub fn in_transaction<T>(conn: &Connection, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| crate::core::errors::AppError::Provider(format!("failed to begin transaction: {e}")))?;
+pub fn in_transaction<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> AppResult<T>,
+) -> AppResult<T> {
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
+        crate::core::errors::AppError::Provider(format!("failed to begin transaction: {e}"))
+    })?;
     match f(conn) {
         Ok(value) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|e| crate::core::errors::AppError::Provider(format!("failed to commit transaction: {e}")))?;
+            conn.execute_batch("COMMIT").map_err(|e| {
+                crate::core::errors::AppError::Provider(format!(
+                    "failed to commit transaction: {e}"
+                ))
+            })?;
             Ok(value)
         }
         Err(e) => {
@@ -429,7 +486,10 @@ pub fn in_transaction<T>(conn: &Connection, f: impl FnOnce(&Connection) -> AppRe
     }
 }
 
-pub fn with_conn<T>(db: &State<DbState>, f: impl FnOnce(&Connection) -> AppResult<T>) -> AppResult<T> {
+pub fn with_conn<T>(
+    db: &State<DbState>,
+    f: impl FnOnce(&Connection) -> AppResult<T>,
+) -> AppResult<T> {
     let guard = db.conn.lock().unwrap();
     let conn = guard
         .as_ref()
@@ -497,17 +557,12 @@ pub fn resolve_file_reference(
     query: String,
     workspace_generation: u64,
 ) -> AppResult<resolver::ResolutionResult> {
-    with_workspace_conn_at_generation(
-        &state,
-        &db,
-        workspace_generation,
-        |root, conn| {
-            let policy = crate::workspace_scanner::WorkspacePathPolicy::new(root)
-                .map_err(AppError::InvalidPath)?;
-            indexer::purge_excluded_rows(conn, root, &policy)?;
-            resolver::resolve_file_reference(conn, &query)
-        },
-    )
+    with_workspace_conn_at_generation(&state, &db, workspace_generation, |root, conn| {
+        let policy = crate::workspace_scanner::WorkspacePathPolicy::new(root)
+            .map_err(AppError::InvalidPath)?;
+        indexer::purge_excluded_rows(conn, root, &policy)?;
+        resolver::resolve_file_reference(conn, &query)
+    })
 }
 
 // ── Session persistence commands (v1.3.0 Phase 2 - IPC layer only) ─────
@@ -651,7 +706,10 @@ mod hardening_tests {
 
     fn temp_dir() -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_db_hardening_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -725,55 +783,118 @@ mod hardening_tests {
     fn migrations_preserve_existing_data_across_reopen() {
         let dir = temp_dir();
         let tables = [
-            "requirements", "agent_tasks", "ledger_entries", "evidence",
-            "promotion_requests", "task_dags", "worker_profiles",
+            "requirements",
+            "agent_tasks",
+            "ledger_entries",
+            "evidence",
+            "promotion_requests",
+            "task_dags",
+            "worker_profiles",
         ];
 
         // (a) fresh DB: all Sprint 1-5 tables exist and are empty.
         let before_counts: Vec<i64> = {
             let conn = open_for_workspace(&dir).unwrap();
             for t in &tables {
-                let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap();
+                let n: i64 = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                    .unwrap();
                 assert_eq!(n, 0, "fresh DB must start empty in {t}");
             }
 
             // Populate through the REAL APIs so rows look like production data.
             let req = crate::governance::requirements::create(
-                &conn, "Migration fixture", "a requirement that must survive reopening",
-                vec!["survives".to_string()], "test-user",
-            ).unwrap();
-            crate::agent::insert_task(&conn, "mig-task", "obj", crate::agent::task_type::EDIT_FILE, "f.rs",
-                crate::agent::status::COMPLETED, "old", "new", "low", Some(&req.id), Some(&req.correlation_id)).unwrap();
-            crate::governance::evidence::record(&conn, "mig-task", Some(&req.correlation_id),
-                crate::governance::evidence::kind::VERIFICATION, "cargo check passed", true).unwrap();
-            crate::governance::promotion::request_promotion(&conn, "mig-task", Some(&req.correlation_id)).unwrap();
-            crate::intelligence::registry::upsert(&conn, &crate::intelligence::registry::WorkerProfile {
-                id: "mig-worker".to_string(), name: "W".to_string(), capabilities: vec!["coding".to_string()],
-                reliability_score: 1.0, tasks_completed: 0, tasks_failed: 0,
-            }).unwrap();
+                &conn,
+                "Migration fixture",
+                "a requirement that must survive reopening",
+                vec!["survives".to_string()],
+                "test-user",
+            )
+            .unwrap();
+            crate::agent::insert_task(
+                &conn,
+                "mig-task",
+                "obj",
+                crate::agent::task_type::EDIT_FILE,
+                "f.rs",
+                crate::agent::status::COMPLETED,
+                "old",
+                "new",
+                "low",
+                Some(&req.id),
+                Some(&req.correlation_id),
+            )
+            .unwrap();
+            crate::governance::evidence::record(
+                &conn,
+                "mig-task",
+                Some(&req.correlation_id),
+                crate::governance::evidence::kind::VERIFICATION,
+                "cargo check passed",
+                true,
+            )
+            .unwrap();
+            crate::governance::promotion::request_promotion(
+                &conn,
+                "mig-task",
+                Some(&req.correlation_id),
+            )
+            .unwrap();
+            crate::intelligence::registry::upsert(
+                &conn,
+                &crate::intelligence::registry::WorkerProfile {
+                    id: "mig-worker".to_string(),
+                    name: "W".to_string(),
+                    capabilities: vec!["coding".to_string()],
+                    reliability_score: 1.0,
+                    tasks_completed: 0,
+                    tasks_failed: 0,
+                },
+            )
+            .unwrap();
             conn.execute("INSERT INTO task_dags (id, requirement_id, version, created_at, correlation_id) VALUES ('mig-dag', ?1, 1, 0, ?2)",
                 rusqlite::params![req.id, req.correlation_id]).unwrap();
 
-            let counts: Vec<i64> = tables.iter()
-                .map(|t| conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap())
+            let counts: Vec<i64> = tables
+                .iter()
+                .map(|t| {
+                    conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                        .unwrap()
+                })
                 .collect();
-            assert!(counts.iter().all(|&n| n > 0), "every table must have fixture data: {counts:?}");
+            assert!(
+                counts.iter().all(|&n| n > 0),
+                "every table must have fixture data: {counts:?}"
+            );
             counts
             // conn dropped here - simulates app shutdown.
         };
 
         // (b) reopen: schema + all ALTER migrations run again against real data.
         let conn = open_for_workspace(&dir).unwrap();
-        let after_counts: Vec<i64> = tables.iter()
-            .map(|t| conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap())
+        let after_counts: Vec<i64> = tables
+            .iter()
+            .map(|t| {
+                conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                    .unwrap()
+            })
             .collect();
-        assert_eq!(before_counts, after_counts, "no migration may drop or truncate anything");
+        assert_eq!(
+            before_counts, after_counts,
+            "no migration may drop or truncate anything"
+        );
 
         // Row content survived, not just row counts.
-        let title: String = conn.query_row("SELECT title FROM requirements", [], |r| r.get(0)).unwrap();
+        let title: String = conn
+            .query_row("SELECT title FROM requirements", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(title, "Migration fixture");
         let chain = crate::governance::ledger::verify_chain(&conn).unwrap();
-        assert!(chain.valid, "hash chain must survive a reopen: {:?}", chain.problem);
+        assert!(
+            chain.valid,
+            "hash chain must survive a reopen: {:?}",
+            chain.problem
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -787,23 +908,48 @@ mod hardening_tests {
         let conn = open_for_workspace(&dir).unwrap();
 
         let result: AppResult<()> = in_transaction(&conn, |conn| {
-            conn.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('doomed', 'D', '[]')", []).unwrap();
-            crate::governance::ledger::append(conn, crate::governance::ledger::LedgerEvent::TaskCreated, None, None, None, serde_json::json!({})).unwrap();
-            Err(crate::core::errors::AppError::Provider("simulated mid-sequence crash".to_string()))
+            conn.execute(
+                "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('doomed', 'D', '[]')",
+                [],
+            )
+            .unwrap();
+            crate::governance::ledger::append(
+                conn,
+                crate::governance::ledger::LedgerEvent::TaskCreated,
+                None,
+                None,
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap();
+            Err(crate::core::errors::AppError::Provider(
+                "simulated mid-sequence crash".to_string(),
+            ))
         });
         assert!(result.is_err());
 
-        let workers: i64 = conn.query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0)).unwrap();
-        let entries: i64 = conn.query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0)).unwrap();
+        let workers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0))
+            .unwrap();
+        let entries: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ledger_entries", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(workers, 0, "worker insert must have rolled back");
         assert_eq!(entries, 0, "ledger append must have rolled back with it");
 
         // And the connection is reusable afterwards (no dangling transaction).
         in_transaction(&conn, |conn| {
-            conn.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('kept', 'K', '[]')", []).unwrap();
+            conn.execute(
+                "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('kept', 'K', '[]')",
+                [],
+            )
+            .unwrap();
             Ok(())
-        }).unwrap();
-        let workers: i64 = conn.query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0)).unwrap();
+        })
+        .unwrap();
+        let workers: i64 = conn
+            .query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(workers, 1);
 
         drop(conn);
@@ -819,7 +965,9 @@ mod hardening_tests {
         let dir = temp_dir();
         let conn = open_for_workspace(&dir).unwrap();
 
-        let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fk, 1, "foreign_keys pragma must be ON");
 
         // It bites: a promotion referencing nonexistent evidence is rejected.
@@ -827,11 +975,16 @@ mod hardening_tests {
             "INSERT INTO promotion_requests (id, evidence_id, task_id, status, requested_at) VALUES ('p1', 'no-such-evidence', 't1', 'blocked', 0)",
             [],
         );
-        assert!(violation.is_err(), "dangling evidence_id must violate the FK");
+        assert!(
+            violation.is_err(),
+            "dangling evidence_id must violate the FK"
+        );
 
         // Sprint 4's nullable design is unchanged: NULL evidence_id (the
         // audited no-evidence refusal) still inserts fine.
-        let req = crate::governance::promotion::request_promotion(&conn, "task-without-evidence", None).unwrap();
+        let req =
+            crate::governance::promotion::request_promotion(&conn, "task-without-evidence", None)
+                .unwrap();
         assert_eq!(req.status, crate::governance::promotion::status::BLOCKED);
         assert!(req.evidence_id.is_empty());
 
@@ -846,9 +999,16 @@ mod hardening_tests {
     fn sqlite_journal_guarantees_are_in_effect() {
         let dir = temp_dir();
         let conn = open_for_workspace(&dir).unwrap();
-        let journal: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
-        assert!(!journal.eq_ignore_ascii_case("off"), "journaling must not be disabled, got {journal}");
-        let sync: i64 = conn.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap();
+        let journal: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            !journal.eq_ignore_ascii_case("off"),
+            "journaling must not be disabled, got {journal}"
+        );
+        let sync: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap();
         assert!(sync >= 1, "synchronous must be NORMAL or FULL, got {sync}");
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -863,7 +1023,10 @@ mod hardening_tests {
         let dir = temp_dir();
         let conn = open_for_workspace(&dir).unwrap();
         let result = ensure_column(&conn, "no_such_table", "x", "x TEXT");
-        assert!(result.is_err(), "a genuine DDL failure must not be silently discarded");
+        assert!(
+            result.is_err(),
+            "a genuine DDL failure must not be silently discarded"
+        );
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -877,7 +1040,13 @@ mod hardening_tests {
         // `files.language` already exists from the CREATE TABLE. Calling
         // ensure_column again must succeed without error and without
         // duplicating the column.
-        ensure_column(&conn, "files", "language", "language TEXT NOT NULL DEFAULT ''").unwrap();
+        ensure_column(
+            &conn,
+            "files",
+            "language",
+            "language TEXT NOT NULL DEFAULT ''",
+        )
+        .unwrap();
         let mut stmt = conn.prepare("PRAGMA table_info(files)").unwrap();
         let count = stmt
             .query_map([], |row| row.get::<_, String>(1))
@@ -907,8 +1076,9 @@ mod hardening_tests {
             // Hand-built pre-Sprint-1/Sprint-12 schema: agent_tasks and files
             // WITHOUT any of the columns ensure_column is responsible for.
             let old_conn = Connection::open(&db_path).unwrap();
-            old_conn.execute_batch(
-                "CREATE TABLE agent_tasks (
+            old_conn
+                .execute_batch(
+                    "CREATE TABLE agent_tasks (
                     id TEXT PRIMARY KEY,
                     objective TEXT NOT NULL,
                     agent TEXT NOT NULL,
@@ -929,7 +1099,8 @@ mod hardening_tests {
                     content_hash TEXT NOT NULL,
                     indexed_at INTEGER NOT NULL
                 );",
-            ).unwrap();
+                )
+                .unwrap();
             old_conn.execute(
                 "INSERT INTO agent_tasks (id, objective, agent, file_path, status, created_at, updated_at)
                  VALUES ('old-task', 'legacy objective', 'coder', 'legacy.rs', 'completed', 1, 1)",
@@ -946,28 +1117,58 @@ mod hardening_tests {
         let conn = open_for_workspace(&dir).unwrap();
 
         let task_type: String = conn
-            .query_row("SELECT task_type FROM agent_tasks WHERE id = 'old-task'", [], |r| r.get(0))
+            .query_row(
+                "SELECT task_type FROM agent_tasks WHERE id = 'old-task'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(task_type, "edit_file", "the additive column must get its default, not NULL or an error");
+        assert_eq!(
+            task_type, "edit_file",
+            "the additive column must get its default, not NULL or an error"
+        );
         let objective: String = conn
-            .query_row("SELECT objective FROM agent_tasks WHERE id = 'old-task'", [], |r| r.get(0))
+            .query_row(
+                "SELECT objective FROM agent_tasks WHERE id = 'old-task'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(objective, "legacy objective", "pre-existing row content must survive migration untouched");
+        assert_eq!(
+            objective, "legacy objective",
+            "pre-existing row content must survive migration untouched"
+        );
 
         let language: String = conn
-            .query_row("SELECT language FROM files WHERE path = 'legacy.rs'", [], |r| r.get(0))
+            .query_row(
+                "SELECT language FROM files WHERE path = 'legacy.rs'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(language, "", "the additive files column must get its default");
+        assert_eq!(
+            language, "",
+            "the additive files column must get its default"
+        );
         let hash: String = conn
-            .query_row("SELECT content_hash FROM files WHERE path = 'legacy.rs'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content_hash FROM files WHERE path = 'legacy.rs'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(hash, "deadbeef", "pre-existing files row must survive migration untouched");
+        assert_eq!(
+            hash, "deadbeef",
+            "pre-existing files row must survive migration untouched"
+        );
 
         // A third open (simulating a second app launch) must be fully
         // idempotent - no duplicate-column errors, same data.
         drop(conn);
         let conn2 = open_for_workspace(&dir).unwrap();
-        let task_count: i64 = conn2.query_row("SELECT COUNT(*) FROM agent_tasks", [], |r| r.get(0)).unwrap();
+        let task_count: i64 = conn2
+            .query_row("SELECT COUNT(*) FROM agent_tasks", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(task_count, 1);
         drop(conn2);
         std::fs::remove_dir_all(&dir).ok();
@@ -986,7 +1187,12 @@ mod hardening_tests {
         let writer = open_for_workspace(&dir).unwrap();
 
         holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-        holder.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')", []).unwrap();
+        holder
+            .execute(
+                "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')",
+                [],
+            )
+            .unwrap();
 
         let release = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -997,12 +1203,25 @@ mod hardening_tests {
         // must block and retry (busy_timeout = 5s) rather than fail
         // immediately or silently no-op.
         let started = std::time::Instant::now();
-        writer.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('writer', 'W', '[]')", []).unwrap();
-        assert!(started.elapsed() >= std::time::Duration::from_millis(100), "the write must have actually waited on the lock, not raced past it");
+        writer
+            .execute(
+                "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('writer', 'W', '[]')",
+                [],
+            )
+            .unwrap();
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(100),
+            "the write must have actually waited on the lock, not raced past it"
+        );
 
         release.join().unwrap();
-        let count: i64 = writer.query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0)).unwrap();
-        assert_eq!(count, 2, "both writes must be durably present, none silently dropped");
+        let count: i64 = writer
+            .query_row("SELECT COUNT(*) FROM worker_profiles", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 2,
+            "both writes must be durably present, none silently dropped"
+        );
 
         drop(writer);
         std::fs::remove_dir_all(&dir).ok();
@@ -1019,14 +1238,21 @@ mod hardening_tests {
         let dir = temp_dir();
         let holder = open_for_workspace(&dir).unwrap();
         holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-        holder.execute("INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')", []).unwrap();
+        holder
+            .execute(
+                "INSERT INTO worker_profiles (id, name, capabilities) VALUES ('holder', 'H', '[]')",
+                [],
+            )
+            .unwrap();
         // Deliberately never committed for the lifetime of this test - the
         // contending connection below must never be able to acquire the
         // write lock.
 
         let db_path = dir.join(".neuralforge").join("index.db");
         let contender = Connection::open(&db_path).unwrap();
-        contender.busy_timeout(std::time::Duration::from_millis(150)).unwrap();
+        contender
+            .busy_timeout(std::time::Duration::from_millis(150))
+            .unwrap();
 
         let started = std::time::Instant::now();
         let result = contender.execute(

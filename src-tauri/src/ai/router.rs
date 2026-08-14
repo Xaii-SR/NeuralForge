@@ -26,7 +26,8 @@ impl Default for Preferences {
 const SETTINGS_KEY: &str = "ai_preferences";
 
 pub fn save_preferences(conn: &Connection, prefs: &Preferences) -> AppResult<()> {
-    let json = serde_json::to_string(prefs).map_err(|e| AppError::Provider(format!("failed to serialize preferences: {e}")))?;
+    let json = serde_json::to_string(prefs)
+        .map_err(|e| AppError::Provider(format!("failed to serialize preferences: {e}")))?;
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -37,9 +38,11 @@ pub fn save_preferences(conn: &Connection, prefs: &Preferences) -> AppResult<()>
 }
 
 pub fn load_preferences(conn: &Connection) -> Preferences {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", params![SETTINGS_KEY], |row| {
-        row.get::<_, String>(0)
-    })
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![SETTINGS_KEY],
+        |row| row.get::<_, String>(0),
+    )
     .ok()
     .and_then(|s| serde_json::from_str(&s).ok())
     .unwrap_or_default()
@@ -91,7 +94,10 @@ pub fn estimate_cost(provider: &ProviderId, prompt: &str) -> CostEstimate {
 }
 
 fn parse_param_count(parameter_size: &str) -> f64 {
-    parameter_size.trim_end_matches(['B', 'b']).parse().unwrap_or(1.0)
+    parameter_size
+        .trim_end_matches(['B', 'b'])
+        .parse()
+        .unwrap_or(1.0)
 }
 
 /// Pure scoring: no I/O, fully testable. "speed" goal prefers a smaller
@@ -105,9 +111,21 @@ pub fn score_models(models: &[OllamaModel], prefs: &Preferences) -> Vec<(f64, St
         .map(|m| {
             let params = parse_param_count(&m.parameter_size);
             let (score, reason) = if prefs.goal == "speed" {
-                (1.0 / params.max(0.1), format!("smallest available model (~{} params) for fastest responses", m.parameter_size))
+                (
+                    1.0 / params.max(0.1),
+                    format!(
+                        "smallest available model (~{} params) for fastest responses",
+                        m.parameter_size
+                    ),
+                )
             } else {
-                (params, format!("largest available model (~{} params) for best quality", m.parameter_size))
+                (
+                    params,
+                    format!(
+                        "largest available model (~{} params) for best quality",
+                        m.parameter_size
+                    ),
+                )
             };
             (score, m.name.clone(), reason)
         })
@@ -138,7 +156,9 @@ pub fn select_model(
     prompt: &str,
 ) -> AppResult<AutoSelection> {
     if models.is_empty() {
-        return Err(AppError::Provider("no local models available to select from".to_string()));
+        return Err(AppError::Provider(
+            "no local models available to select from".to_string(),
+        ));
     }
 
     let scored = score_models(models, prefs);
@@ -154,7 +174,10 @@ pub fn select_model(
     Ok(AutoSelection {
         provider: "Ollama".to_string(),
         model,
-        reason: format!("{reason} - {} goal, {} cost preference, local/free{health_note}", prefs.goal, prefs.cost_preference),
+        reason: format!(
+            "{reason} - {} goal, {} cost preference, local/free{health_note}",
+            prefs.goal, prefs.cost_preference
+        ),
         estimated_cost_usd: cost.estimated_cost_usd,
         is_free: cost.is_free,
     })
@@ -178,7 +201,10 @@ mod tests {
     #[test]
     fn speed_goal_prefers_smaller_model() {
         let models = vec![model("big", "70B"), model("small", "1B")];
-        let prefs = Preferences { goal: "speed".to_string(), cost_preference: "free".to_string() };
+        let prefs = Preferences {
+            goal: "speed".to_string(),
+            cost_preference: "free".to_string(),
+        };
         let scored = score_models(&models, &prefs);
         assert_eq!(scored[0].1, "small");
     }
@@ -186,7 +212,10 @@ mod tests {
     #[test]
     fn quality_goal_prefers_larger_model() {
         let models = vec![model("small", "1B"), model("big", "70B")];
-        let prefs = Preferences { goal: "quality".to_string(), cost_preference: "quality_first".to_string() };
+        let prefs = Preferences {
+            goal: "quality".to_string(),
+            cost_preference: "quality_first".to_string(),
+        };
         let scored = score_models(&models, &prefs);
         assert_eq!(scored[0].1, "big");
     }
@@ -231,7 +260,10 @@ mod tests {
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         assert_eq!(load_preferences(&conn).goal, "speed"); // default before any save
 
-        let prefs = Preferences { goal: "quality".to_string(), cost_preference: "quality_first".to_string() };
+        let prefs = Preferences {
+            goal: "quality".to_string(),
+            cost_preference: "quality_first".to_string(),
+        };
         save_preferences(&conn, &prefs).unwrap();
         let loaded = load_preferences(&conn);
         assert_eq!(loaded.goal, "quality");

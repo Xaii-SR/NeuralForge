@@ -1,6 +1,6 @@
-use std::collections::BinaryHeap;
-use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum JobPriority {
@@ -48,7 +48,8 @@ pub struct IndexJob {
 
 impl Ord for IndexJob {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.priority.cmp(&other.priority)
+        self.priority
+            .cmp(&other.priority)
             .then_with(|| other.created_at.cmp(&self.created_at))
     }
 }
@@ -99,7 +100,9 @@ impl SchedulerService {
                         break;
                     }
                 }
-                for j in temp { self.queue.push(j); }
+                for j in temp {
+                    self.queue.push(j);
+                }
             } else {
                 return;
             }

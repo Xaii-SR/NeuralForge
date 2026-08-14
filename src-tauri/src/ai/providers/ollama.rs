@@ -48,7 +48,11 @@ fn client() -> reqwest::Client {
 }
 
 fn endpoint(base_url: &str, path: &str) -> String {
-    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
 }
 
 pub async fn health_check() -> bool {
@@ -111,7 +115,12 @@ pub async fn list_models_at(base_url: &str) -> AppResult<Vec<OllamaModel>> {
 /// HTTP client elsewhere. `raw: true` tells Ollama to use the prompt
 /// verbatim without applying the model's chat template, required for FIM
 /// tokens like `<|fim_prefix|>` to reach the model unmodified.
-pub async fn generate_raw(model: &str, prompt: &str, num_predict: u32, temperature: f32) -> AppResult<String> {
+pub async fn generate_raw(
+    model: &str,
+    prompt: &str,
+    num_predict: u32,
+    temperature: f32,
+) -> AppResult<String> {
     generate_raw_at(BASE_URL, model, prompt, num_predict, temperature).await
 }
 
@@ -136,7 +145,10 @@ pub async fn generate_raw_at(
         .map_err(|e| AppError::Provider(format!("Ollama unreachable: {e}")))?;
 
     if !resp.status().is_success() {
-        return Err(AppError::Provider(format!("Ollama returned status {}", resp.status())));
+        return Err(AppError::Provider(format!(
+            "Ollama returned status {}",
+            resp.status()
+        )));
     }
 
     let body: serde_json::Value = resp
@@ -148,7 +160,11 @@ pub async fn generate_raw_at(
         return Err(AppError::Provider(err.to_string()));
     }
 
-    Ok(body.get("response").and_then(|v| v.as_str()).unwrap_or("").to_string())
+    Ok(body
+        .get("response")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 pub async fn remove_model(name: &str) -> AppResult<()> {
@@ -245,7 +261,11 @@ impl ChatStats {
 
 /// Pure streaming logic, decoupled from Tauri so it's testable against a
 /// real Ollama instance without needing an AppHandle.
-pub async fn chat_stream<F>(model: &str, messages: Vec<ChatMessage>, mut on_token: F) -> AppResult<ChatStats>
+pub async fn chat_stream<F>(
+    model: &str,
+    messages: Vec<ChatMessage>,
+    mut on_token: F,
+) -> AppResult<ChatStats>
 where
     F: FnMut(&str, bool),
 {
@@ -302,7 +322,10 @@ where
                 .and_then(|m| m.get("content"))
                 .and_then(|c| c.as_str())
                 .unwrap_or("");
-            let done = parsed.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+            let done = parsed
+                .get("done")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             on_token(token, done);
 
@@ -344,9 +367,18 @@ mod tests {
         .expect("chat_stream should succeed against a running Ollama instance");
 
         assert!(saw_done, "expected a final done:true chunk");
-        assert!(!accumulated.trim().is_empty(), "expected non-empty streamed content");
-        assert!(stats.eval_count.is_some(), "expected Ollama to report eval_count");
-        assert!(stats.tokens_per_second().is_some(), "expected a computable TPS from real stats");
+        assert!(
+            !accumulated.trim().is_empty(),
+            "expected non-empty streamed content"
+        );
+        assert!(
+            stats.eval_count.is_some(),
+            "expected Ollama to report eval_count"
+        );
+        assert!(
+            stats.tokens_per_second().is_some(),
+            "expected a computable TPS from real stats"
+        );
     }
 
     /// Real round trip for the FIM/raw completion path used by ghost text
@@ -356,10 +388,18 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a running local Ollama instance"]
     async fn generate_raw_produces_real_fim_completion() {
-        let response = generate_raw("deepseek-coder:latest", "<|fim_prefix|>fn add(a: i32, b: i32) -> i32 {\n    <|fim_suffix|>\n}<|fim_middle|>", 32, 0.1)
-            .await
-            .expect("generate_raw should succeed against a running Ollama instance");
+        let response = generate_raw(
+            "deepseek-coder:latest",
+            "<|fim_prefix|>fn add(a: i32, b: i32) -> i32 {\n    <|fim_suffix|>\n}<|fim_middle|>",
+            32,
+            0.1,
+        )
+        .await
+        .expect("generate_raw should succeed against a running Ollama instance");
 
-        assert!(!response.trim().is_empty(), "expected a non-empty real completion");
+        assert!(
+            !response.trim().is_empty(),
+            "expected a non-empty real completion"
+        );
     }
 }

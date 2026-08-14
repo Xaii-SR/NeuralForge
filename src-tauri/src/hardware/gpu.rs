@@ -46,7 +46,11 @@ pub fn detect() -> Vec<GpuInfo> {
                 continue;
             }
 
-            let name_end = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
+            let name_end = desc
+                .Description
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(desc.Description.len());
             let name = String::from_utf16_lossy(&desc.Description[..name_end]);
 
             gpus.push(GpuInfo {

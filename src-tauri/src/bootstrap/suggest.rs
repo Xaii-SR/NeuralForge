@@ -84,18 +84,23 @@ fn parse_response(response: &str) -> (Option<String>, Option<String>, Option<Str
 /// file can't be read.
 pub async fn choose_target(analysis: &SelfAnalysis) -> AppResult<TargetChoice> {
     if analysis.source_files.is_empty() {
-        return Err(AppError::Provider("no source files found to analyze".to_string()));
+        return Err(AppError::Provider(
+            "no source files found to analyze".to_string(),
+        ));
     }
 
     let messages = build_prompt(analysis);
     let mut response = String::new();
-    ollama::chat_stream("deepseek-coder:latest", messages, |token, _done| response.push_str(token))
-        .await
-        .map_err(|e| AppError::Provider(format!("self-analysis suggestion failed: {e}")))?;
+    ollama::chat_stream("deepseek-coder:latest", messages, |token, _done| {
+        response.push_str(token)
+    })
+    .await
+    .map_err(|e| AppError::Provider(format!("self-analysis suggestion failed: {e}")))?;
 
     let (file_path, title, why) = parse_response(&response);
 
-    let file_path = file_path.ok_or_else(|| AppError::Provider("model did not name a target file".to_string()))?;
+    let file_path = file_path
+        .ok_or_else(|| AppError::Provider("model did not name a target file".to_string()))?;
     let title = title.unwrap_or_else(|| "Improve code".to_string());
     let rationale = why.unwrap_or_else(|| "General code quality improvement".to_string());
 
@@ -104,9 +109,18 @@ pub async fn choose_target(analysis: &SelfAnalysis) -> AppResult<TargetChoice> {
         .iter()
         .find(|f| f.as_str() == file_path || f.ends_with(&file_path))
         .cloned()
-        .ok_or_else(|| AppError::Provider(format!("model proposed '{file_path}', which isn't one of the scanned source files")))?;
+        .ok_or_else(|| {
+            AppError::Provider(format!(
+                "model proposed '{file_path}', which isn't one of the scanned source files"
+            ))
+        })?;
 
-    Ok(TargetChoice { slug: slugify(&title), title, file_path: matched, rationale })
+    Ok(TargetChoice {
+        slug: slugify(&title),
+        title,
+        file_path: matched,
+        rationale,
+    })
 }
 
 #[cfg(test)]
@@ -115,7 +129,10 @@ mod tests {
 
     #[test]
     fn slugify_produces_a_branch_safe_string() {
-        assert_eq!(slugify("Simplify the FTS5 query builder!"), "simplify-the-fts5-query-builder");
+        assert_eq!(
+            slugify("Simplify the FTS5 query builder!"),
+            "simplify-the-fts5-query-builder"
+        );
         assert_eq!(slugify("   "), "improvement");
         assert_eq!(slugify("Already-slugged"), "already-slugged");
     }
@@ -137,8 +154,14 @@ mod tests {
         // this offline test) model claimed a file outside it, it must be
         // rejected. Since this test doesn't call Ollama, it instead proves
         // the guard logic itself.
-        let analysis = SelfAnalysis { memory_context: String::new(), source_files: vec!["src/lib.rs".to_string()] };
-        let matched = analysis.source_files.iter().find(|f| f.as_str() == "src/other.rs" || f.ends_with("src/other.rs"));
+        let analysis = SelfAnalysis {
+            memory_context: String::new(),
+            source_files: vec!["src/lib.rs".to_string()],
+        };
+        let matched = analysis
+            .source_files
+            .iter()
+            .find(|f| f.as_str() == "src/other.rs" || f.ends_with("src/other.rs"));
         assert!(matched.is_none());
     }
 

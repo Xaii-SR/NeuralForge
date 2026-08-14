@@ -14,7 +14,10 @@ pub struct VramCheckResult {
 /// weight size, which is conservative enough to catch "this obviously won't
 /// fit" cases without needing per-architecture profiling.
 pub fn estimate_required_mb(parameter_size: &str, quantization_level: &str) -> u64 {
-    let params_billions: f64 = parameter_size.trim_end_matches(['B', 'b']).parse().unwrap_or(0.0);
+    let params_billions: f64 = parameter_size
+        .trim_end_matches(['B', 'b'])
+        .parse()
+        .unwrap_or(0.0);
 
     let bytes_per_param = if quantization_level.starts_with("Q4") {
         0.5
@@ -37,12 +40,24 @@ pub fn estimate_required_mb(parameter_size: &str, quantization_level: &str) -> u
     (with_overhead / 1024.0 / 1024.0) as u64
 }
 
-pub fn check(parameter_size: &str, quantization_level: &str, hardware: &crate::hardware::HardwareInfo) -> VramCheckResult {
+pub fn check(
+    parameter_size: &str,
+    quantization_level: &str,
+    hardware: &crate::hardware::HardwareInfo,
+) -> VramCheckResult {
     let required_mb = estimate_required_mb(parameter_size, quantization_level);
 
     let gpu_vram_mb = hardware.gpus.iter().map(|g| g.vram_mb).max().unwrap_or(0);
-    let available_mb = if gpu_vram_mb > 0 { gpu_vram_mb } else { hardware.memory.available_mb };
-    let source = if gpu_vram_mb > 0 { "GPU VRAM" } else { "system RAM (no dedicated GPU detected)" };
+    let available_mb = if gpu_vram_mb > 0 {
+        gpu_vram_mb
+    } else {
+        hardware.memory.available_mb
+    };
+    let source = if gpu_vram_mb > 0 {
+        "GPU VRAM"
+    } else {
+        "system RAM (no dedicated GPU detected)"
+    };
 
     let sufficient = available_mb >= required_mb;
     let message = if sufficient {
@@ -79,7 +94,10 @@ mod tests {
     fn check_rejects_when_insufficient() {
         let hardware = crate::hardware::HardwareInfo {
             cpu: crate::hardware::cpu::detect(),
-            memory: crate::hardware::memory::MemoryInfo { total_mb: 8000, available_mb: 500 },
+            memory: crate::hardware::memory::MemoryInfo {
+                total_mb: 8000,
+                available_mb: 500,
+            },
             gpus: vec![],
         };
         let result = check("70B", "F16", &hardware);
@@ -90,7 +108,10 @@ mod tests {
     fn check_accepts_when_sufficient() {
         let hardware = crate::hardware::HardwareInfo {
             cpu: crate::hardware::cpu::detect(),
-            memory: crate::hardware::memory::MemoryInfo { total_mb: 32000, available_mb: 16000 },
+            memory: crate::hardware::memory::MemoryInfo {
+                total_mb: 32000,
+                available_mb: 16000,
+            },
             gpus: vec![],
         };
         let result = check("1B", "Q4_0", &hardware);

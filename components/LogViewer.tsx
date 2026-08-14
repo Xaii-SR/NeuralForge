@@ -43,9 +43,12 @@ export default function LogViewer() {
   }, []);
 
   useEffect(() => {
-    refresh();
+    const initial = window.setTimeout(() => { void refresh(); }, 0);
     const interval = setInterval(refresh, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      window.clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [refresh]);
 
   async function handleExport() {

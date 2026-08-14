@@ -40,20 +40,25 @@ pub struct WorkspaceService {
 
 impl WorkspaceService {
     pub fn new() -> Self {
-        Self { state: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            state: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn start_scan(&self, workspace_id: &str) {
         let mut map = self.state.lock().unwrap();
-        map.insert(workspace_id.to_string(), WorkspaceProgress {
-            workspace_id: workspace_id.to_string(),
-            state: IndexingState::Discovering,
-            files_discovered: 0,
-            files_processed: 0,
-            chunks_created: 0,
-            embeddings_created: 0,
-            errors: Vec::new(),
-        });
+        map.insert(
+            workspace_id.to_string(),
+            WorkspaceProgress {
+                workspace_id: workspace_id.to_string(),
+                state: IndexingState::Discovering,
+                files_discovered: 0,
+                files_processed: 0,
+                chunks_created: 0,
+                embeddings_created: 0,
+                errors: Vec::new(),
+            },
+        );
     }
 
     pub fn get_progress(&self, workspace_id: &str) -> Option<WorkspaceProgress> {

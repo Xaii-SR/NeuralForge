@@ -20,7 +20,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 fn temp_workspace(tag: &str) -> std::path::PathBuf {
     let mut dir = std::env::temp_dir();
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     dir.push(format!("neuralforge_release_{tag}_{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -31,7 +34,10 @@ fn make_requirement(conn: &Connection, title: &str) -> requirements::Requirement
         conn,
         title,
         "release validation requirement exercising the full governed pipeline",
-        vec!["the change applies and verifies".to_string(), "the audit chain records it".to_string()],
+        vec![
+            "the change applies and verifies".to_string(),
+            "the audit chain records it".to_string(),
+        ],
         "release-validation",
     )
     .unwrap()
@@ -39,7 +45,14 @@ fn make_requirement(conn: &Connection, title: &str) -> requirements::Requirement
 
 /// One complete pipeline cycle against a real workspace file through the
 /// real executor and the real atomic outcome recorder. Returns the task id.
-async fn full_cycle(conn: &Connection, dir: &std::path::Path, req: &requirements::RequirementContract, file: &str, original: &str, proposed: &str) -> String {
+async fn full_cycle(
+    conn: &Connection,
+    dir: &std::path::Path,
+    req: &requirements::RequirementContract,
+    file: &str,
+    original: &str,
+    proposed: &str,
+) -> String {
     let task_id = uuid::Uuid::new_v4().to_string();
     agent::insert_task(
         conn,
@@ -56,12 +69,35 @@ async fn full_cycle(conn: &Connection, dir: &std::path::Path, req: &requirements
     )
     .unwrap();
 
-    let result = agent::executor::apply_and_verify(dir, file, original, proposed).await.unwrap();
+    let result = agent::executor::apply_and_verify(dir, file, original, proposed)
+        .await
+        .unwrap();
     let task = agent::get_task(conn, &task_id).unwrap();
-    let final_status = if result.rolled_back { status::ROLLED_BACK } else { status::COMPLETED };
-    let error = if result.rolled_back { Some("verification failed") } else { None };
-    let note = if result.rolled_back { Some("original content restored after failed verification") } else { None };
-    agent::record_task_outcome_atomic(conn, &task, &task_id, final_status, &result.verification, error, note).unwrap();
+    let final_status = if result.rolled_back {
+        status::ROLLED_BACK
+    } else {
+        status::COMPLETED
+    };
+    let error = if result.rolled_back {
+        Some("verification failed")
+    } else {
+        None
+    };
+    let note = if result.rolled_back {
+        Some("original content restored after failed verification")
+    } else {
+        None
+    };
+    agent::record_task_outcome_atomic(
+        conn,
+        &task,
+        &task_id,
+        final_status,
+        &result.verification,
+        error,
+        note,
+    )
+    .unwrap();
     task_id
 }
 
@@ -77,19 +113,46 @@ async fn release_fresh_database_first_pipeline_cycle_from_zero() {
     let dir = temp_workspace("fresh");
     let conn = crate::database::open_for_workspace(&dir).unwrap();
 
-    for table in ["requirements", "agent_tasks", "ledger_entries", "evidence", "promotion_requests", "task_dags", "worker_profiles"] {
-        let n: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+    for table in [
+        "requirements",
+        "agent_tasks",
+        "ledger_entries",
+        "evidence",
+        "promotion_requests",
+        "task_dags",
+        "worker_profiles",
+    ] {
+        let n: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 0, "fresh workspace must start empty in {table}");
     }
-    assert!(ledger::verify_chain(&conn).unwrap().valid, "empty chain is valid");
+    assert!(
+        ledger::verify_chain(&conn).unwrap().valid,
+        "empty chain is valid"
+    );
 
     std::fs::write(dir.join("notes.md"), "first content").unwrap();
     let req = make_requirement(&conn, "First-ever change in a fresh workspace");
-    let task_id = full_cycle(&conn, &dir, &req, "notes.md", "first content", "second content").await;
+    let task_id = full_cycle(
+        &conn,
+        &dir,
+        &req,
+        "notes.md",
+        "first content",
+        "second content",
+    )
+    .await;
 
     // The file really changed; the whole story is recorded and promoted.
-    assert_eq!(std::fs::read_to_string(dir.join("notes.md")).unwrap(), "second content");
-    assert_eq!(agent::get_task(&conn, &task_id).unwrap().status, status::COMPLETED);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("notes.md")).unwrap(),
+        "second content"
+    );
+    assert_eq!(
+        agent::get_task(&conn, &task_id).unwrap().status,
+        status::COMPLETED
+    );
     let ev = evidence::for_task(&conn, &task_id).unwrap();
     assert_eq!(ev.len(), 1);
     assert!(ev[0].success);
@@ -120,7 +183,16 @@ async fn release_fresh_database_first_pipeline_cycle_from_zero() {
 #[tokio::test]
 async fn release_aged_database_survives_reopen_and_all_read_apis_work() {
     let dir = temp_workspace("aged");
-    let tables = ["requirements", "requirement_history", "agent_tasks", "ledger_entries", "evidence", "promotion_requests", "task_dags", "worker_profiles"];
+    let tables = [
+        "requirements",
+        "requirement_history",
+        "agent_tasks",
+        "ledger_entries",
+        "evidence",
+        "promotion_requests",
+        "task_dags",
+        "worker_profiles",
+    ];
 
     // ---- Build the aged state ----
     let (counts_before, req_corr, dag_id, retry_id, worker_score) = {
@@ -128,11 +200,22 @@ async fn release_aged_database_survives_reopen_and_all_read_apis_work() {
 
         // Requirement with a version bump (populates requirement_history).
         let req = make_requirement(&conn, "Aged requirement");
-        requirements::update(&conn, &req.id, "Aged requirement v2", "updated intent for the aged-database validation run", vec!["still checkable".to_string()]).unwrap();
+        requirements::update(
+            &conn,
+            &req.id,
+            "Aged requirement v2",
+            "updated intent for the aged-database validation run",
+            vec!["still checkable".to_string()],
+        )
+        .unwrap();
         let req = requirements::get_active(&conn, &req.id).unwrap();
 
         // A completed single task with real executor + real cargo fixture.
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"aged_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"aged_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let original_rs = "pub fn add(a: i32, b: i32) -> i32 { a + b }\n";
         std::fs::write(dir.join("src").join("lib.rs"), original_rs).unwrap();
@@ -145,80 +228,173 @@ async fn release_aged_database_survives_reopen_and_all_read_apis_work() {
             &conn,
             &req,
             &[
-                crate::planning::planner::DagTaskSpec { file_path: "src/lib.rs".to_string(), note: None, depends_on: vec![] },
-                crate::planning::planner::DagTaskSpec { file_path: "notes.md".to_string(), note: None, depends_on: vec![0] },
+                crate::planning::planner::DagTaskSpec {
+                    file_path: "src/lib.rs".to_string(),
+                    note: None,
+                    depends_on: vec![],
+                },
+                crate::planning::planner::DagTaskSpec {
+                    file_path: "notes.md".to_string(),
+                    note: None,
+                    depends_on: vec![0],
+                },
             ],
             &[original_rs.to_string(), "new".to_string()],
         )
         .unwrap();
         let lib_task = record.task_ids[0].clone();
         let broken = "pub fn add(a: i32, b: i32) -> i32 { a + b +\n";
-        let fail = agent::executor::apply_and_verify(&dir, "src/lib.rs", original_rs, broken).await.unwrap();
+        let fail = agent::executor::apply_and_verify(&dir, "src/lib.rs", original_rs, broken)
+            .await
+            .unwrap();
         assert!(fail.rolled_back);
         let lib = agent::get_task(&conn, &lib_task).unwrap();
-        agent::record_task_outcome_atomic(&conn, &lib, &lib_task, status::ROLLED_BACK, &fail.verification, Some("verification failed"), Some("restored")).unwrap();
+        agent::record_task_outcome_atomic(
+            &conn,
+            &lib,
+            &lib_task,
+            status::ROLLED_BACK,
+            &fail.verification,
+            Some("verification failed"),
+            Some("restored"),
+        )
+        .unwrap();
 
-        let decision = crate::intelligence::reliability::request_retry(&conn, &lib_task, &crate::intelligence::reliability::RetryPolicy::default()).unwrap();
+        let decision = crate::intelligence::reliability::request_retry(
+            &conn,
+            &lib_task,
+            &crate::intelligence::reliability::RetryPolicy::default(),
+        )
+        .unwrap();
         assert!(decision.allowed);
         let retry_id = decision.retry_task_id.unwrap();
         let fixed = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
-        let ok = agent::executor::apply_and_verify(&dir, "src/lib.rs", original_rs, fixed).await.unwrap();
+        let ok = agent::executor::apply_and_verify(&dir, "src/lib.rs", original_rs, fixed)
+            .await
+            .unwrap();
         assert!(!ok.rolled_back);
         let retry_task = agent::get_task(&conn, &retry_id).unwrap();
-        agent::record_task_outcome_atomic(&conn, &retry_task, &retry_id, status::COMPLETED, &ok.verification, None, None).unwrap();
+        agent::record_task_outcome_atomic(
+            &conn,
+            &retry_task,
+            &retry_id,
+            status::COMPLETED,
+            &ok.verification,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Worker with derived reliability over real verdicts.
-        crate::intelligence::registry::upsert(&conn, &crate::intelligence::registry::WorkerProfile {
-            id: "aged-coder".to_string(),
-            name: "Aged Coder".to_string(),
-            capabilities: vec!["coding".to_string(), "testing".to_string()],
-            reliability_score: 1.0,
-            tasks_completed: 0,
-            tasks_failed: 0,
-        }).unwrap();
+        crate::intelligence::registry::upsert(
+            &conn,
+            &crate::intelligence::registry::WorkerProfile {
+                id: "aged-coder".to_string(),
+                name: "Aged Coder".to_string(),
+                capabilities: vec!["coding".to_string(), "testing".to_string()],
+                reliability_score: 1.0,
+                tasks_completed: 0,
+                tasks_failed: 0,
+            },
+        )
+        .unwrap();
         crate::intelligence::registry::assign_task(&conn, &lib_task, "aged-coder").unwrap();
         crate::intelligence::registry::assign_task(&conn, &retry_id, "aged-coder").unwrap();
-        let profile = crate::intelligence::registry::refresh_reliability(&conn, "aged-coder").unwrap();
+        let profile =
+            crate::intelligence::registry::refresh_reliability(&conn, "aged-coder").unwrap();
 
         // Ledger volume on top.
         for i in 0..100 {
-            ledger::append(&conn, ledger::LedgerEvent::TaskCreated, Some("aged-volume"), None, Some(&format!("vol-{i}")), serde_json::json!({"i": i})).unwrap();
+            ledger::append(
+                &conn,
+                ledger::LedgerEvent::TaskCreated,
+                Some("aged-volume"),
+                None,
+                Some(&format!("vol-{i}")),
+                serde_json::json!({"i": i}),
+            )
+            .unwrap();
         }
         assert!(ledger::verify_chain(&conn).unwrap().valid);
 
-        let counts: Vec<i64> = tables.iter().map(|t| conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()).collect();
-        assert!(counts.iter().all(|&n| n > 0), "every table must carry aged data: {counts:?}");
-        (counts, req.correlation_id.clone(), record.id.clone(), retry_id, profile.reliability_score)
+        let counts: Vec<i64> = tables
+            .iter()
+            .map(|t| {
+                conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            counts.iter().all(|&n| n > 0),
+            "every table must carry aged data: {counts:?}"
+        );
+        (
+            counts,
+            req.correlation_id.clone(),
+            record.id.clone(),
+            retry_id,
+            profile.reliability_score,
+        )
         // conn dropped: simulated shutdown.
     };
 
     // ---- Reopen three times (each reopen re-runs schema + migrations) ----
     for round in 1..=3 {
         let conn = crate::database::open_for_workspace(&dir).unwrap();
-        let counts_after: Vec<i64> = tables.iter().map(|t| conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()).collect();
-        assert_eq!(counts_before, counts_after, "reopen round {round}: no migration may drop or truncate anything");
+        let counts_after: Vec<i64> = tables
+            .iter()
+            .map(|t| {
+                conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            counts_before, counts_after,
+            "reopen round {round}: no migration may drop or truncate anything"
+        );
 
         let verification = ledger::verify_chain(&conn).unwrap();
-        assert!(verification.valid, "round {round}: chain must verify: {:?}", verification.problem);
+        assert!(
+            verification.valid,
+            "round {round}: chain must verify: {:?}",
+            verification.problem
+        );
 
         // Every read API still functions over the aged rows.
         let report = crate::intelligence::reliability::task_report(&conn, &retry_id).unwrap();
         assert_eq!(report.attempts, 2, "retry lineage visible after reopen");
-        assert!(report.completeness.complete, "aged record complete: {:?}", report.completeness.missing);
+        assert!(
+            report.completeness.complete,
+            "aged record complete: {:?}",
+            report.completeness.missing
+        );
         assert!(report.confidence.score > 0.0);
 
         let (dag_record, _) = crate::planning::planner::load_dag(&conn, &dag_id).unwrap();
         assert_eq!(dag_record.correlation_id, req_corr);
         // The reopened dependent (notes.md node) is runnable over aged data.
         let runnable = agent::dag_runnable_tasks(&conn, &dag_id).unwrap();
-        assert_eq!(runnable.len(), 1, "round {round}: reopened dependent stays runnable");
+        assert_eq!(
+            runnable.len(),
+            1,
+            "round {round}: reopened dependent stays runnable"
+        );
 
         let profiles = crate::intelligence::registry::list(&conn).unwrap();
-        let best = crate::intelligence::matcher::best_match(&profiles, &["testing".to_string()]).unwrap();
+        let best =
+            crate::intelligence::matcher::best_match(&profiles, &["testing".to_string()]).unwrap();
         assert_eq!(best.profile.id, "aged-coder");
-        assert_eq!(best.profile.reliability_score, worker_score, "derived score survives reopen");
+        assert_eq!(
+            best.profile.reliability_score, worker_score,
+            "derived score survives reopen"
+        );
 
-        assert_eq!(ledger::list_by_correlation(&conn, "aged-volume").unwrap().len(), 100);
+        assert_eq!(
+            ledger::list_by_correlation(&conn, "aged-volume")
+                .unwrap()
+                .len(),
+            100
+        );
         drop(conn);
     }
 
@@ -240,7 +416,11 @@ async fn release_long_run_60_cycles_stays_correct_and_flat() {
     let dir = temp_workspace("longrun");
     let conn = crate::database::open_for_workspace(&dir).unwrap();
 
-    std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"longrun_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"longrun_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src").join("lib.rs"), "pub fn f() -> i32 { 0 }\n").unwrap();
     std::fs::write(dir.join("doc.md"), "iteration 0").unwrap();
@@ -266,24 +446,53 @@ async fn release_long_run_60_cycles_stays_correct_and_flat() {
             id
         };
         // Every cycle must fully succeed - status, evidence, verdict.
-        assert_eq!(agent::get_task(&conn, &task_id).unwrap().status, status::COMPLETED, "cycle {i} failed");
-        assert_eq!(promotion::for_task(&conn, &task_id).unwrap().last().unwrap().status, promotion::status::PROMOTED, "cycle {i} not promoted");
+        assert_eq!(
+            agent::get_task(&conn, &task_id).unwrap().status,
+            status::COMPLETED,
+            "cycle {i} failed"
+        );
+        assert_eq!(
+            promotion::for_task(&conn, &task_id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .status,
+            promotion::status::PROMOTED,
+            "cycle {i} not promoted"
+        );
         timings_ms.push(started.elapsed().as_millis());
     }
 
     // Integrity after sustained volume.
     let verification = ledger::verify_chain(&conn).unwrap();
-    assert!(verification.valid, "chain must verify after 60 cycles: {:?}", verification.problem);
-    assert!(verification.entries >= 240, "expected >=4 events per cycle, got {}", verification.entries);
+    assert!(
+        verification.valid,
+        "chain must verify after 60 cycles: {:?}",
+        verification.problem
+    );
+    assert!(
+        verification.entries >= 240,
+        "expected >=4 events per cycle, got {}",
+        verification.entries
+    );
 
     // Evidence ordering: strictly increasing insertion_sequence globally.
     let seqs: Vec<i64> = {
-        let mut stmt = conn.prepare("SELECT insertion_sequence FROM evidence ORDER BY rowid ASC").unwrap();
-        let v: Vec<i64> = stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        let mut stmt = conn
+            .prepare("SELECT insertion_sequence FROM evidence ORDER BY rowid ASC")
+            .unwrap();
+        let v: Vec<i64> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
         v
     };
     assert_eq!(seqs.len(), 60);
-    assert!(seqs.windows(2).all(|w| w[1] > w[0]), "evidence insertion order must be strictly monotonic");
+    assert!(
+        seqs.windows(2).all(|w| w[1] > w[0]),
+        "evidence insertion order must be strictly monotonic"
+    );
 
     // No snapshot/temp accumulation in the workspace root: the executor
     // cleans up after itself, so after 60 cycles the ONLY new entries may
@@ -292,20 +501,44 @@ async fn release_long_run_60_cycles_stays_correct_and_flat() {
     let new_entries: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
-        .filter(|n| !["Cargo.toml", "src", "doc.md", ".neuralforge", "Cargo.lock", "target"].contains(&n.as_str()))
+        .filter(|n| {
+            ![
+                "Cargo.toml",
+                "src",
+                "doc.md",
+                ".neuralforge",
+                "Cargo.lock",
+                "target",
+            ]
+            .contains(&n.as_str())
+        })
         .collect();
-    assert!(new_entries.is_empty(), "leaked temp/snapshot files after 60 cycles: {new_entries:?}");
+    assert!(
+        new_entries.is_empty(),
+        "leaked temp/snapshot files after 60 cycles: {new_entries:?}"
+    );
     let files_after = std::fs::read_dir(&dir).unwrap().count();
-    assert!(files_after <= files_before + 2, "entry count grew beyond cargo artifacts: {files_before} -> {files_after}");
+    assert!(
+        files_after <= files_before + 2,
+        "entry count grew beyond cargo artifacts: {files_before} -> {files_after}"
+    );
 
     // Timing trend: compare markdown-cycle cost early vs late (cargo
     // cycles excluded - their cost is dominated by the compiler). Guard is
     // deliberately generous; it exists to catch O(n^2) blowups, not noise.
-    let md_only: Vec<u128> = timings_ms.iter().enumerate().filter(|(i, _)| (i + 1) % 10 != 0).map(|(_, &t)| t).collect();
+    let md_only: Vec<u128> = timings_ms
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| (i + 1) % 10 != 0)
+        .map(|(_, &t)| t)
+        .collect();
     let early: u128 = md_only[..10].iter().sum::<u128>() / 10;
     let late: u128 = md_only[md_only.len() - 10..].iter().sum::<u128>() / 10;
     println!("long-run timing: early md-cycle avg {early}ms, late md-cycle avg {late}ms, all timings: {timings_ms:?}");
-    assert!(late <= early.max(1) * 3, "per-cycle cost degraded: early avg {early}ms -> late avg {late}ms");
+    assert!(
+        late <= early.max(1) * 3,
+        "per-cycle cost degraded: early avg {early}ms -> late avg {late}ms"
+    );
 
     drop(conn);
     std::fs::remove_dir_all(&dir).ok();
@@ -330,9 +563,17 @@ async fn release_north_star_is_deterministic_across_5_runs() {
         let dir = temp_workspace(&format!("northstar{run}"));
         let conn = crate::database::open_for_workspace(&dir).unwrap();
 
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"north_star_repeat\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"north_star_repeat\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        std::fs::write(dir.join("src").join("lib.rs"), "pub mod save;\n\n#[cfg(test)]\nmod save_tests;\n").unwrap();
+        std::fs::write(
+            dir.join("src").join("lib.rs"),
+            "pub mod save;\n\n#[cfg(test)]\nmod save_tests;\n",
+        )
+        .unwrap();
         let original_save = "pub fn save_to_file(path: &str, content: &str) -> std::io::Result<()> {\n    std::fs::write(path, content)\n}\n";
         std::fs::write(dir.join("src").join("save.rs"), original_save).unwrap();
         let original_tests = "#[test]\nfn placeholder() {\n    assert!(true);\n}\n";
@@ -343,8 +584,16 @@ async fn release_north_star_is_deterministic_across_5_runs() {
             &conn,
             &req,
             &[
-                crate::planning::planner::DagTaskSpec { file_path: "src/save.rs".to_string(), note: None, depends_on: vec![] },
-                crate::planning::planner::DagTaskSpec { file_path: "src/save_tests.rs".to_string(), note: Some("add the validation tests".to_string()), depends_on: vec![0] },
+                crate::planning::planner::DagTaskSpec {
+                    file_path: "src/save.rs".to_string(),
+                    note: None,
+                    depends_on: vec![],
+                },
+                crate::planning::planner::DagTaskSpec {
+                    file_path: "src/save_tests.rs".to_string(),
+                    note: Some("add the validation tests".to_string()),
+                    depends_on: vec![0],
+                },
             ],
             &[original_save.to_string(), original_tests.to_string()],
         )
@@ -354,28 +603,56 @@ async fn release_north_star_is_deterministic_across_5_runs() {
         let validation_tests = "use crate::save::save_to_file;\n\n#[test]\nfn empty_path_is_rejected() {\n    assert!(save_to_file(\"\", \"data\").is_err());\n}\n";
         let mut proposed = std::collections::HashMap::new();
         proposed.insert("src/save.rs".to_string(), (original_save, validated_save));
-        proposed.insert("src/save_tests.rs".to_string(), (original_tests, validation_tests));
+        proposed.insert(
+            "src/save_tests.rs".to_string(),
+            (original_tests, validation_tests),
+        );
 
         for step in 0..2 {
             let runnable = agent::dag_runnable_tasks(&conn, &record.id).unwrap();
-            assert_eq!(runnable.len(), 1, "run {run} step {step}: exactly one runnable task");
+            assert_eq!(
+                runnable.len(),
+                1,
+                "run {run} step {step}: exactly one runnable task"
+            );
             let task = &runnable[0];
             let file = task.files.first().unwrap().clone();
             let (original, new_content) = proposed[&file];
-            let result = agent::executor::apply_and_verify(&dir, &file, original, new_content).await.unwrap();
-            assert!(!result.rolled_back, "run {run} step {step}: {}", result.verification);
+            let result = agent::executor::apply_and_verify(&dir, &file, original, new_content)
+                .await
+                .unwrap();
+            assert!(
+                !result.rolled_back,
+                "run {run} step {step}: {}",
+                result.verification
+            );
             let t = agent::get_task(&conn, &task.id).unwrap();
-            agent::record_task_outcome_atomic(&conn, &t, &task.id, status::COMPLETED, &result.verification, None, None).unwrap();
+            agent::record_task_outcome_atomic(
+                &conn,
+                &t,
+                &task.id,
+                status::COMPLETED,
+                &result.verification,
+                None,
+                None,
+            )
+            .unwrap();
         }
 
         // Real cargo test against the modified code, every run.
-        let (tests_passed, out) = crate::bootstrap::git::run_tests(&dir, "src/save.rs").await.unwrap();
+        let (tests_passed, out) = crate::bootstrap::git::run_tests(&dir, "src/save.rs")
+            .await
+            .unwrap();
         assert!(tests_passed, "run {run}: real cargo test must pass:\n{out}");
 
         let verification = ledger::verify_chain(&conn).unwrap();
         assert!(verification.valid, "run {run}: {:?}", verification.problem);
 
-        let sequence: Vec<String> = ledger::list_by_correlation(&conn, &req.correlation_id).unwrap().into_iter().map(|e| e.event_type).collect();
+        let sequence: Vec<String> = ledger::list_by_correlation(&conn, &req.correlation_id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_type)
+            .collect();
         sequences.push(sequence);
 
         drop(conn);
@@ -384,7 +661,19 @@ async fn release_north_star_is_deterministic_across_5_runs() {
 
     // Determinism: every run produced the identical event-type sequence.
     for (i, seq) in sequences.iter().enumerate().skip(1) {
-        assert_eq!(&sequences[0], seq, "run {} produced a different event sequence than run 1:\nrun1: {:?}\nrun{}: {:?}", i + 1, sequences[0], i + 1, seq);
+        assert_eq!(
+            &sequences[0],
+            seq,
+            "run {} produced a different event sequence than run 1:\nrun1: {:?}\nrun{}: {:?}",
+            i + 1,
+            sequences[0],
+            i + 1,
+            seq
+        );
     }
-    println!("north-star determinism: 5/5 identical sequences ({} events each): {:?}", sequences[0].len(), sequences[0]);
+    println!(
+        "north-star determinism: 5/5 identical sequences ({} events each): {:?}",
+        sequences[0].len(),
+        sequences[0]
+    );
 }

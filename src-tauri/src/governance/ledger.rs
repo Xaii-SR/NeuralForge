@@ -1,8 +1,8 @@
 use crate::core::errors::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use specta::Type;
 use sha2::{Digest, Sha256};
+use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Append-only, hash-chained governance event log. Scope honesty (same
@@ -91,7 +91,10 @@ pub struct ChainVerification {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 /// The canonical byte string that gets hashed - explicit concatenation
@@ -135,16 +138,27 @@ pub fn append(
     payload: serde_json::Value,
 ) -> AppResult<LedgerEntry> {
     let (last_seq, prev_hash): (i64, String) = conn
-        .query_row("SELECT seq, entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1", [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        .query_row(
+            "SELECT seq, entry_hash FROM ledger_entries ORDER BY seq DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .unwrap_or((0, GENESIS_HASH.to_string()));
 
     let seq = last_seq + 1;
     let payload_str = payload.to_string();
     let created_at = now_secs();
     let event_type = event.as_str();
-    let entry_hash = hash_of(&canonical(&prev_hash, seq, event_type, correlation_id, requirement_id, task_id, &payload_str, created_at));
+    let entry_hash = hash_of(&canonical(
+        &prev_hash,
+        seq,
+        event_type,
+        correlation_id,
+        requirement_id,
+        task_id,
+        &payload_str,
+        created_at,
+    ));
 
     conn.execute(
         "INSERT INTO ledger_entries (seq, event_type, correlation_id, requirement_id, task_id, payload, created_at, prev_hash, entry_hash)
@@ -223,14 +237,20 @@ pub fn verify_chain(conn: &Connection) -> AppResult<ChainVerification> {
             return Ok(ChainVerification {
                 valid: false,
                 entries: entries.len() as i64,
-                problem: Some(format!("seq gap: expected {expected_seq}, found {}", entry.seq)),
+                problem: Some(format!(
+                    "seq gap: expected {expected_seq}, found {}",
+                    entry.seq
+                )),
             });
         }
         if entry.prev_hash != expected_prev {
             return Ok(ChainVerification {
                 valid: false,
                 entries: entries.len() as i64,
-                problem: Some(format!("broken link at seq {}: prev_hash does not match previous entry", entry.seq)),
+                problem: Some(format!(
+                    "broken link at seq {}: prev_hash does not match previous entry",
+                    entry.seq
+                )),
             });
         }
         let recomputed = hash_of(&canonical(
@@ -247,14 +267,21 @@ pub fn verify_chain(conn: &Connection) -> AppResult<ChainVerification> {
             return Ok(ChainVerification {
                 valid: false,
                 entries: entries.len() as i64,
-                problem: Some(format!("hash mismatch at seq {}: entry content does not match its recorded hash", entry.seq)),
+                problem: Some(format!(
+                    "hash mismatch at seq {}: entry content does not match its recorded hash",
+                    entry.seq
+                )),
             });
         }
         expected_prev = entry.entry_hash.clone();
         expected_seq += 1;
     }
 
-    Ok(ChainVerification { valid: true, entries: entries.len() as i64, problem: None })
+    Ok(ChainVerification {
+        valid: true,
+        entries: entries.len() as i64,
+        problem: None,
+    })
 }
 
 #[cfg(test)]
@@ -263,7 +290,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_ledger_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -273,7 +303,15 @@ mod tests {
     #[test]
     fn genesis_entry_chains_from_the_zero_hash() {
         let (dir, conn) = temp_conn();
-        let entry = append(&conn, LedgerEvent::RequirementCreated, Some("corr-1"), Some("req-1"), None, serde_json::json!({"v": 1})).unwrap();
+        let entry = append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            Some("corr-1"),
+            Some("req-1"),
+            None,
+            serde_json::json!({"v": 1}),
+        )
+        .unwrap();
         assert_eq!(entry.seq, 1);
         assert_eq!(entry.prev_hash, GENESIS_HASH);
         assert_eq!(entry.entry_hash.len(), 64);
@@ -284,14 +322,34 @@ mod tests {
     #[test]
     fn second_entry_links_to_the_first_and_chain_verifies() {
         let (dir, conn) = temp_conn();
-        let first = append(&conn, LedgerEvent::RequirementCreated, Some("corr-1"), Some("req-1"), None, serde_json::json!({})).unwrap();
-        let second = append(&conn, LedgerEvent::TaskCreated, Some("corr-1"), Some("req-1"), Some("task-1"), serde_json::json!({})).unwrap();
+        let first = append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            Some("corr-1"),
+            Some("req-1"),
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let second = append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            Some("corr-1"),
+            Some("req-1"),
+            Some("task-1"),
+            serde_json::json!({}),
+        )
+        .unwrap();
 
         assert_eq!(second.seq, 2);
         assert_eq!(second.prev_hash, first.entry_hash);
 
         let verification = verify_chain(&conn).unwrap();
-        assert!(verification.valid, "clean chain must verify: {:?}", verification.problem);
+        assert!(
+            verification.valid,
+            "clean chain must verify: {:?}",
+            verification.problem
+        );
         assert_eq!(verification.entries, 2);
 
         drop(conn);
@@ -304,15 +362,51 @@ mod tests {
     #[test]
     fn tampering_with_a_payload_via_raw_sql_is_detected_at_the_right_seq() {
         let (dir, conn) = temp_conn();
-        append(&conn, LedgerEvent::RequirementCreated, Some("corr-1"), None, None, serde_json::json!({"a": 1})).unwrap();
-        append(&conn, LedgerEvent::TaskCreated, Some("corr-1"), None, Some("task-1"), serde_json::json!({"b": 2})).unwrap();
-        append(&conn, LedgerEvent::TaskApproved, Some("corr-1"), None, Some("task-1"), serde_json::json!({"c": 3})).unwrap();
+        append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            Some("corr-1"),
+            None,
+            None,
+            serde_json::json!({"a": 1}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            Some("corr-1"),
+            None,
+            Some("task-1"),
+            serde_json::json!({"b": 2}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskApproved,
+            Some("corr-1"),
+            None,
+            Some("task-1"),
+            serde_json::json!({"c": 3}),
+        )
+        .unwrap();
 
-        conn.execute("UPDATE ledger_entries SET payload = '{\"b\": 999}' WHERE seq = 2", []).unwrap();
+        conn.execute(
+            "UPDATE ledger_entries SET payload = '{\"b\": 999}' WHERE seq = 2",
+            [],
+        )
+        .unwrap();
 
         let verification = verify_chain(&conn).unwrap();
         assert!(!verification.valid);
-        assert!(verification.problem.as_deref().unwrap().contains("hash mismatch at seq 2"), "got: {:?}", verification.problem);
+        assert!(
+            verification
+                .problem
+                .as_deref()
+                .unwrap()
+                .contains("hash mismatch at seq 2"),
+            "got: {:?}",
+            verification.problem
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -321,15 +415,44 @@ mod tests {
     #[test]
     fn deleting_a_middle_row_is_detected_as_a_seq_gap() {
         let (dir, conn) = temp_conn();
-        append(&conn, LedgerEvent::RequirementCreated, None, None, None, serde_json::json!({})).unwrap();
-        append(&conn, LedgerEvent::TaskCreated, None, None, None, serde_json::json!({})).unwrap();
-        append(&conn, LedgerEvent::TaskApproved, None, None, None, serde_json::json!({})).unwrap();
+        append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskApproved,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
 
-        conn.execute("DELETE FROM ledger_entries WHERE seq = 2", []).unwrap();
+        conn.execute("DELETE FROM ledger_entries WHERE seq = 2", [])
+            .unwrap();
 
         let verification = verify_chain(&conn).unwrap();
         assert!(!verification.valid);
-        assert!(verification.problem.as_deref().unwrap().contains("seq gap"), "got: {:?}", verification.problem);
+        assert!(
+            verification.problem.as_deref().unwrap().contains("seq gap"),
+            "got: {:?}",
+            verification.problem
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -338,9 +461,33 @@ mod tests {
     #[test]
     fn list_by_correlation_returns_only_that_chain_in_order() {
         let (dir, conn) = temp_conn();
-        append(&conn, LedgerEvent::RequirementCreated, Some("corr-a"), None, None, serde_json::json!({})).unwrap();
-        append(&conn, LedgerEvent::RequirementCreated, Some("corr-b"), None, None, serde_json::json!({})).unwrap();
-        append(&conn, LedgerEvent::TaskCreated, Some("corr-a"), None, Some("t1"), serde_json::json!({})).unwrap();
+        append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            Some("corr-a"),
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            Some("corr-b"),
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            Some("corr-a"),
+            None,
+            Some("t1"),
+            serde_json::json!({}),
+        )
+        .unwrap();
 
         let chain = list_by_correlation(&conn, "corr-a").unwrap();
         assert_eq!(chain.len(), 2);
@@ -371,13 +518,37 @@ mod tests {
     #[test]
     fn missing_rows_at_the_start_of_the_chain_are_detected() {
         let (dir, conn) = temp_conn();
-        append(&conn, LedgerEvent::RequirementCreated, None, None, None, serde_json::json!({})).unwrap();
-        append(&conn, LedgerEvent::TaskCreated, None, None, None, serde_json::json!({})).unwrap();
-        conn.execute("DELETE FROM ledger_entries WHERE seq = 1", []).unwrap();
+        append(
+            &conn,
+            LedgerEvent::RequirementCreated,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        conn.execute("DELETE FROM ledger_entries WHERE seq = 1", [])
+            .unwrap();
 
         let v = verify_chain(&conn).unwrap();
         assert!(!v.valid);
-        assert!(v.problem.as_deref().unwrap().contains("seq gap: expected 1"), "got: {:?}", v.problem);
+        assert!(
+            v.problem
+                .as_deref()
+                .unwrap()
+                .contains("seq gap: expected 1"),
+            "got: {:?}",
+            v.problem
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -394,7 +565,11 @@ mod tests {
         for i in 0..1000 {
             append(
                 &conn,
-                if i % 2 == 0 { LedgerEvent::TaskCreated } else { LedgerEvent::TaskCompleted },
+                if i % 2 == 0 {
+                    LedgerEvent::TaskCreated
+                } else {
+                    LedgerEvent::TaskCompleted
+                },
                 Some(&format!("corr-{}", i % 10)),
                 None,
                 Some(&format!("task-{i}")),
@@ -409,13 +584,28 @@ mod tests {
         // A correlation query over the volume stays correct.
         assert_eq!(list_by_correlation(&conn, "corr-3").unwrap().len(), 100);
 
-        conn.execute("UPDATE ledger_entries SET payload = '{}' WHERE seq = 500", []).unwrap();
+        conn.execute(
+            "UPDATE ledger_entries SET payload = '{}' WHERE seq = 500",
+            [],
+        )
+        .unwrap();
         let tampered = verify_chain(&conn).unwrap();
         assert!(!tampered.valid);
-        assert!(tampered.problem.as_deref().unwrap().contains("hash mismatch at seq 500"), "got: {:?}", tampered.problem);
+        assert!(
+            tampered
+                .problem
+                .as_deref()
+                .unwrap()
+                .contains("hash mismatch at seq 500"),
+            "got: {:?}",
+            tampered.problem
+        );
 
         let elapsed = started.elapsed();
-        assert!(elapsed.as_secs() < 30, "1000 appends + 2 verifies took {elapsed:?} - something is pathologically slow");
+        assert!(
+            elapsed.as_secs() < 30,
+            "1000 appends + 2 verifies took {elapsed:?} - something is pathologically slow"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -427,10 +617,30 @@ mod tests {
     #[test]
     fn tampered_ledger_does_not_break_evidence_reads_or_promotion_checks() {
         let (dir, conn) = temp_conn();
-        append(&conn, LedgerEvent::TaskCreated, Some("corr-x"), None, Some("t1"), serde_json::json!({})).unwrap();
-        crate::governance::evidence::record(&conn, "t1", Some("corr-x"), crate::governance::evidence::kind::VERIFICATION, "cargo check passed", true).unwrap();
+        append(
+            &conn,
+            LedgerEvent::TaskCreated,
+            Some("corr-x"),
+            None,
+            Some("t1"),
+            serde_json::json!({}),
+        )
+        .unwrap();
+        crate::governance::evidence::record(
+            &conn,
+            "t1",
+            Some("corr-x"),
+            crate::governance::evidence::kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
 
-        conn.execute("UPDATE ledger_entries SET payload = 'tampered' WHERE seq = 1", []).unwrap();
+        conn.execute(
+            "UPDATE ledger_entries SET payload = 'tampered' WHERE seq = 1",
+            [],
+        )
+        .unwrap();
         assert!(!verify_chain(&conn).unwrap().valid);
 
         // Evidence still reads; promotion still judges (and even appends
@@ -438,9 +648,16 @@ mod tests {
         // verify_chain keeps reporting, but nothing panics).
         let ev = crate::governance::evidence::for_task(&conn, "t1").unwrap();
         assert_eq!(ev.len(), 1);
-        let verdict = crate::governance::promotion::request_promotion(&conn, "t1", Some("corr-x")).unwrap();
-        assert_eq!(verdict.status, crate::governance::promotion::status::PROMOTED);
-        assert!(!verify_chain(&conn).unwrap().valid, "tampering is still reported after further appends");
+        let verdict =
+            crate::governance::promotion::request_promotion(&conn, "t1", Some("corr-x")).unwrap();
+        assert_eq!(
+            verdict.status,
+            crate::governance::promotion::status::PROMOTED
+        );
+        assert!(
+            !verify_chain(&conn).unwrap().valid,
+            "tampering is still reported after further appends"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -448,8 +665,14 @@ mod tests {
 
     #[test]
     fn event_enum_serializes_to_the_exact_snake_case_strings() {
-        assert_eq!(LedgerEvent::RequirementCreated.to_string(), "requirement_created");
-        assert_eq!(LedgerEvent::RequirementRejected.to_string(), "requirement_rejected");
+        assert_eq!(
+            LedgerEvent::RequirementCreated.to_string(),
+            "requirement_created"
+        );
+        assert_eq!(
+            LedgerEvent::RequirementRejected.to_string(),
+            "requirement_rejected"
+        );
         assert_eq!(LedgerEvent::TaskRolledBack.to_string(), "task_rolled_back");
         assert_eq!(LedgerEvent::TaskPlanFailed.to_string(), "task_plan_failed");
     }

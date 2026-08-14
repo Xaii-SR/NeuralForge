@@ -1,3 +1,7 @@
+use crate::ai::health::HealthRegistry;
+use crate::ai::provider_registry;
+use crate::ai::provider_router::{self, TaskCapability};
+use crate::database::DbState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -5,10 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
-use crate::ai::health::HealthRegistry;
-use crate::ai::provider_registry;
-use crate::ai::provider_router::{self, TaskCapability};
-use crate::database::DbState;
 
 const MAX_RETRIES: u8 = 3;
 
@@ -34,7 +34,10 @@ async fn generate(
     let providers = {
         let db = app_handle.state::<DbState>();
         let guard = db.conn.lock().map_err(|e| e.to_string())?;
-        guard.as_ref().map(provider_registry::load_providers).unwrap_or_default()
+        guard
+            .as_ref()
+            .map(provider_registry::load_providers)
+            .unwrap_or_default()
         // guard dropped here, before the .await below - a held MutexGuard
         // can't cross an await point (rusqlite::Connection is Send, not Sync)
     };
@@ -99,12 +102,17 @@ pub struct ApprovalRegistry {
 
 impl ApprovalRegistry {
     pub fn new() -> Self {
-        Self { channels: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            channels: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
 #[tauri::command]
-pub async fn approve_agent_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn approve_agent_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     let sender = {
         let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
         map.remove(&id)
@@ -116,7 +124,10 @@ pub async fn approve_agent_task(id: String, registry: State<'_, ApprovalRegistry
 }
 
 #[tauri::command]
-pub async fn reject_agent_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn reject_agent_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     let sender = {
         let mut map = registry.channels.lock().map_err(|e| e.to_string())?;
         map.remove(&id)
@@ -163,7 +174,8 @@ impl PayloadParser {
                 let target_path = search_text[path_start..path_start + path_end].to_string();
                 let content_start = path_start + path_end + end_marker.len();
                 if let Some(content_end) = search_text[content_start..].find(close_marker) {
-                    let content = search_text[content_start..content_start + content_end].to_string();
+                    let content =
+                        search_text[content_start..content_start + content_end].to_string();
                     results.push((target_path, content));
                     search_text = &search_text[content_start + content_end + close_marker.len()..];
                     continue;
@@ -177,19 +189,33 @@ impl PayloadParser {
 
 // ── File Executor ─────────────────────────────────────────────────────────
 
-pub struct FileExecutor { workspace_root: PathBuf }
+pub struct FileExecutor {
+    workspace_root: PathBuf,
+}
 
 impl FileExecutor {
-    pub fn new(root: &str) -> Self { Self { workspace_root: PathBuf::from(root) } }
+    pub fn new(root: &str) -> Self {
+        Self {
+            workspace_root: PathBuf::from(root),
+        }
+    }
 
     pub fn safe_write(&self, relative_path: &str, content: &str) -> Result<Option<String>, String> {
-        if relative_path.contains("..") || relative_path.starts_with('/') || relative_path.starts_with('\\') {
+        if relative_path.contains("..")
+            || relative_path.starts_with('/')
+            || relative_path.starts_with('\\')
+        {
             return Err("SECURITY BREACH: Path traversal detected".to_string());
         }
         let target = self.workspace_root.join(relative_path);
-        let backup = if target.exists() { fs::read_to_string(&target).ok() } else { None };
+        let backup = if target.exists() {
+            fs::read_to_string(&target).ok()
+        } else {
+            None
+        };
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directories: {}", e))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directories: {}", e))?;
         }
         fs::write(&target, content).map_err(|e| format!("Failed to write file: {}", e))?;
         Ok(backup)
@@ -198,7 +224,9 @@ impl FileExecutor {
     pub fn rollback(&self, relative_path: &str, backup: Option<String>) -> Result<(), String> {
         let target = self.workspace_root.join(relative_path);
         match backup {
-            Some(content) => fs::write(&target, content).map_err(|e| format!("Rollback write failed: {}", e)),
+            Some(content) => {
+                fs::write(&target, content).map_err(|e| format!("Rollback write failed: {}", e))
+            }
             None => fs::remove_file(&target).map_err(|e| format!("Rollback delete failed: {}", e)),
         }
     }
@@ -210,10 +238,14 @@ pub struct WorkspaceVerifier;
 
 impl WorkspaceVerifier {
     pub fn verify_cargo_with_stderr(&self, workspace_root: &Path) -> Result<(), String> {
-        let output = Command::new("cargo").arg("check").current_dir(workspace_root)
-            .output().map_err(|e| format!("Failed to spawn cargo check: {}", e))?;
-        if output.status.success() { Ok(()) }
-        else {
+        let output = Command::new("cargo")
+            .arg("check")
+            .current_dir(workspace_root)
+            .output()
+            .map_err(|e| format!("Failed to spawn cargo check: {}", e))?;
+        if output.status.success() {
+            Ok(())
+        } else {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             Err(stderr)
         }
@@ -237,7 +269,14 @@ impl AgentRunner {
             task.description
         );
 
-        match generate(&app_handle, TaskCapability::Reasoning, ARCHITECT_SYSTEM_PROMPT, &prompt).await {
+        match generate(
+            &app_handle,
+            TaskCapability::Reasoning,
+            ARCHITECT_SYSTEM_PROMPT,
+            &prompt,
+        )
+        .await
+        {
             Ok(response) => {
                 println!("[AGENT:{}] Planning successful.", task.id);
                 task.plan_output = Some(response);
@@ -278,9 +317,19 @@ impl AgentRunner {
         let mut coder_prompt = task.description.clone();
         loop {
             task.transition_to(AgentState::ExecutingCoder, Some(&app_handle));
-            println!("[AGENT:{}] Dispatching instruction set to Coder Agent Node (retry {}/{})...", task.id, task.retries, MAX_RETRIES);
+            println!(
+                "[AGENT:{}] Dispatching instruction set to Coder Agent Node (retry {}/{})...",
+                task.id, task.retries, MAX_RETRIES
+            );
 
-            let coder_response = match generate(&app_handle, TaskCapability::Coding, WorkerPrompts::coder_system(), &coder_prompt).await {
+            let coder_response = match generate(
+                &app_handle,
+                TaskCapability::Coding,
+                WorkerPrompts::coder_system(),
+                &coder_prompt,
+            )
+            .await
+            {
                 Ok(res) => res,
                 Err(e) => {
                     let err_msg = format!("Coder node failed: {}", e);
@@ -298,12 +347,20 @@ impl AgentRunner {
 
             task.transition_to(AgentState::ExecutingReviewer, Some(&app_handle));
 
-            let mut review_payload = format!("Original Task: {}\nProposed Code:\n", task.description);
+            let mut review_payload =
+                format!("Original Task: {}\nProposed Code:\n", task.description);
             for (path, code) in &payloads {
                 review_payload.push_str(&format!("--- TARGET: {} ---\n{}\n", path, code));
             }
 
-            match generate(&app_handle, TaskCapability::Coding, WorkerPrompts::reviewer_system(), &review_payload).await {
+            match generate(
+                &app_handle,
+                TaskCapability::Coding,
+                WorkerPrompts::reviewer_system(),
+                &review_payload,
+            )
+            .await
+            {
                 Ok(_) => println!("[AGENT:{}] Review complete.", task.id),
                 Err(e) => {
                     let err_msg = format!("Reviewer node failed: {}", e);
@@ -328,13 +385,19 @@ impl AgentRunner {
             let executor = FileExecutor::new(&workspace_root.to_string_lossy());
             let mut backups: Vec<(String, Option<String>)> = Vec::new();
 
-            println!("[AGENT:{}] Committing {} files to workspace...", task.id, payloads.len());
+            println!(
+                "[AGENT:{}] Committing {} files to workspace...",
+                task.id,
+                payloads.len()
+            );
 
             for (relative_path, new_content) in &payloads {
                 match executor.safe_write(relative_path, new_content) {
                     Ok(backup) => backups.push((relative_path.clone(), backup)),
                     Err(e) => {
-                        for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
+                        for (p, b) in backups.into_iter().rev() {
+                            let _ = executor.rollback(&p, b);
+                        }
                         task.transition_to(AgentState::Failed(e.clone()), Some(&app_handle));
                         return Err(e);
                     }
@@ -344,13 +407,19 @@ impl AgentRunner {
             let verifier = WorkspaceVerifier;
             match verifier.verify_cargo_with_stderr(&workspace_root) {
                 Ok(()) => {
-                    println!("[AGENT:{}] Verification passed for {} files.", task.id, payloads.len());
+                    println!(
+                        "[AGENT:{}] Verification passed for {} files.",
+                        task.id,
+                        payloads.len()
+                    );
                     task.transition_to(AgentState::Completed, Some(&app_handle));
                     return Ok(task);
                 }
                 Err(stderr) if task.retries < MAX_RETRIES => {
                     println!("[AGENT:{}] Compiler rejected changes (retry {}/{}). Rolling back and retrying...", task.id, task.retries + 1, MAX_RETRIES);
-                    for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
+                    for (p, b) in backups.into_iter().rev() {
+                        let _ = executor.rollback(&p, b);
+                    }
                     task.retries += 1;
                     coder_prompt = format!(
                         "{}\n\nThe previous attempt failed with this compiler error:\n{}\nFix the code.",
@@ -360,8 +429,13 @@ impl AgentRunner {
                     continue;
                 }
                 Err(stderr) => {
-                    for (p, b) in backups.into_iter().rev() { let _ = executor.rollback(&p, b); }
-                    let err_msg = format!("Compiler failed after {} retries. Final error:\n{}", task.retries, stderr);
+                    for (p, b) in backups.into_iter().rev() {
+                        let _ = executor.rollback(&p, b);
+                    }
+                    let err_msg = format!(
+                        "Compiler failed after {} retries. Final error:\n{}",
+                        task.retries, stderr
+                    );
                     task.transition_to(AgentState::Failed(err_msg.clone()), Some(&app_handle));
                     return Err(err_msg);
                 }
@@ -389,11 +463,16 @@ pub async fn start_agent_task(
         struct DummyState<T>(T);
         impl<T> std::ops::Deref for DummyState<T> {
             type Target = T;
-            fn deref(&self) -> &Self::Target { &self.0 }
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
         }
-        let dummy_registry = DummyState(ApprovalRegistry { channels: registry_arc });
+        let dummy_registry = DummyState(ApprovalRegistry {
+            channels: registry_arc,
+        });
         // SAFETY: DummyState wraps a persistent Arc; lifetime is bound to the spawned task's duration.
-        let registry_ref: State<'_, ApprovalRegistry> = unsafe { std::mem::transmute(&dummy_registry) };
+        let registry_ref: State<'_, ApprovalRegistry> =
+            unsafe { std::mem::transmute(&dummy_registry) };
         let _ = AgentRunner::process_task(worker_app_handle, registry_ref, task).await;
     });
 

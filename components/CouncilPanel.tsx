@@ -31,12 +31,9 @@ export default function CouncilPanel({ workspaceGeneration }: { workspaceGenerat
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CouncilPassResult | null>(null);
   const workspaceGenerationRef = useRef(workspaceGeneration);
-  workspaceGenerationRef.current = workspaceGeneration;
 
   useEffect(() => {
-    setRunning(false);
-    setError(null);
-    setResult(null);
+    workspaceGenerationRef.current = workspaceGeneration;
   }, [workspaceGeneration]);
 
   async function handleRun() {

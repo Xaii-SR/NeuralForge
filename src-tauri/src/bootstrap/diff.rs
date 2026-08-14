@@ -21,7 +21,11 @@ fn lcs_diff<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<DiffLine<'a>> {
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            dp[i][j] = if a[i] == b[j] { dp[i + 1][j + 1] + 1 } else { dp[i + 1][j].max(dp[i][j + 1]) };
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
         }
     }
 
@@ -58,7 +62,11 @@ pub fn unified_diff(path: &str, original: &str, proposed: &str) -> String {
     let mut out = format!("--- a/{path}\n+++ b/{path}\n");
 
     if a.len().saturating_mul(b.len()) > MAX_DIFF_CELLS {
-        out.push_str(&format!("(diff omitted: file too large for the built-in differ - {} -> {} lines)\n", a.len(), b.len()));
+        out.push_str(&format!(
+            "(diff omitted: file too large for the built-in differ - {} -> {} lines)\n",
+            a.len(),
+            b.len()
+        ));
         return out;
     }
 
@@ -81,7 +89,10 @@ mod tests {
         let content = "fn main() {\n    println!(\"hi\");\n}\n";
         let diff = unified_diff("main.rs", content, content);
         let body_lines: Vec<&str> = diff.lines().skip(2).collect();
-        assert!(body_lines.iter().all(|l| l.starts_with("  ")), "unexpected non-context line in: {diff}");
+        assert!(
+            body_lines.iter().all(|l| l.starts_with("  ")),
+            "unexpected non-context line in: {diff}"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export type PanelId = "sidebar" | "chat" | "bottom";
 
@@ -45,13 +45,12 @@ function loadStoredSizes(): Record<PanelId, number> {
  * and are restored on the next launch. This hook is the single owner of
  * layout sizing state.
  */
-export function usePanelLayout() {
-  const rootRef = useRef<HTMLDivElement | null>(null);
+export function usePanelLayout(rootRef: RefObject<HTMLDivElement | null>) {
   const sizesRef = useRef<Record<PanelId, number>>({ ...DEFAULTS });
 
   const apply = useCallback((panel: PanelId, px: number) => {
     rootRef.current?.style.setProperty(CSS_VAR[panel], `${px}px`);
-  }, []);
+  }, [rootRef]);
 
   const persist = useCallback(() => {
     try {
@@ -78,7 +77,7 @@ export function usePanelLayout() {
     const stored = loadStoredSizes();
     sizesRef.current = stored;
     for (const panel of Object.keys(stored) as PanelId[]) apply(panel, stored[panel]);
-  }, [apply]);
+  }, [apply, rootRef]);
 
   // Re-clamp when the window shrinks so panels never swallow the editor.
   useEffect(() => {
@@ -104,7 +103,7 @@ export function usePanelLayout() {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", onResize);
     };
-  }, [apply, clamp]);
+  }, [apply, clamp, rootRef]);
 
   const startDrag = useCallback(
     (panel: PanelId) => (e: React.PointerEvent<HTMLDivElement>) => {
@@ -141,7 +140,7 @@ export function usePanelLayout() {
       handle.addEventListener("pointerup", end);
       handle.addEventListener("pointercancel", end);
     },
-    [apply, clamp, persist]
+    [apply, clamp, persist, rootRef]
   );
 
   const resetPanel = useCallback(
@@ -162,8 +161,8 @@ export function usePanelLayout() {
       apply(panel, next);
       persist();
     },
-    [apply, clamp, persist]
+    [apply, clamp, persist, rootRef]
   );
 
-  return { rootRef, startDrag, resetPanel, nudgePanel };
+  return { startDrag, resetPanel, nudgePanel };
 }

@@ -28,12 +28,13 @@ export default function GovernancePanel({ workspaceOpen }: GovernancePanelProps)
   const [entries, setEntries] = useState<governance.LedgerEntry[]>([]);
   const [correlationFilter, setCorrelationFilter] = useState("");
   const [verification, setVerification] = useState<governance.ChainVerification | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(workspaceOpen);
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSeq, setExpandedSeq] = useState<number | null>(null);
 
   async function refresh(correlation?: string) {
+    await Promise.resolve();
     setLoading(true);
     setError(null);
     try {
@@ -50,9 +51,9 @@ export default function GovernancePanel({ workspaceOpen }: GovernancePanelProps)
   }
 
   useEffect(() => {
-    if (workspaceOpen) refresh();
-    else setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!workspaceOpen) return;
+    const initial = window.setTimeout(() => { void refresh(); }, 0);
+    return () => window.clearTimeout(initial);
   }, [workspaceOpen]);
 
   async function handleVerify() {

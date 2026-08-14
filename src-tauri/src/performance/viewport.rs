@@ -22,7 +22,11 @@ pub struct TextureHandleDescriptor {
 }
 
 pub trait SharedTextureEngine: Send + Sync {
-    fn create_shared_texture(&self, width: u32, height: u32) -> Result<TextureHandleDescriptor, ViewportError>;
+    fn create_shared_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<TextureHandleDescriptor, ViewportError>;
     fn release_texture(&self, handle_id: u64) -> Result<(), ViewportError>;
 }
 
@@ -36,7 +40,11 @@ extern "system" {
 
 #[cfg(target_os = "windows")]
 impl SharedTextureEngine for DxgiTextureEngine {
-    fn create_shared_texture(&self, width: u32, height: u32) -> Result<TextureHandleDescriptor, ViewportError> {
+    fn create_shared_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<TextureHandleDescriptor, ViewportError> {
         let mock_handle: isize = 0x4242_isize;
         if mock_handle == 0 {
             return Err(ViewportError::AllocationFailed(width, height));
@@ -69,7 +77,11 @@ extern "C" {
 
 #[cfg(target_os = "macos")]
 impl SharedTextureEngine for IoSurfaceTextureEngine {
-    fn create_shared_texture(&self, width: u32, height: u32) -> Result<TextureHandleDescriptor, ViewportError> {
+    fn create_shared_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<TextureHandleDescriptor, ViewportError> {
         let mock_surface_id: u64 = 0x9999_u64;
         Ok(TextureHandleDescriptor {
             handle_id: mock_surface_id,
@@ -82,7 +94,9 @@ impl SharedTextureEngine for IoSurfaceTextureEngine {
     fn release_texture(&self, handle_id: u64) -> Result<(), ViewportError> {
         unsafe {
             if handle_id == 0 {
-                return Err(ViewportError::FfiError("Invalid surface identifier".to_string()));
+                return Err(ViewportError::FfiError(
+                    "Invalid surface identifier".to_string(),
+                ));
             }
             Ok(())
         }
@@ -94,7 +108,11 @@ pub struct DmaBufTextureEngine;
 
 #[cfg(target_os = "linux")]
 impl SharedTextureEngine for DmaBufTextureEngine {
-    fn create_shared_texture(&self, width: u32, height: u32) -> Result<TextureHandleDescriptor, ViewportError> {
+    fn create_shared_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<TextureHandleDescriptor, ViewportError> {
         let mock_fd: i32 = 101;
         Ok(TextureHandleDescriptor {
             handle_id: mock_fd as u64,
@@ -135,7 +153,11 @@ impl ViewportManager {
         Self { engine }
     }
 
-    pub fn allocate_frame(&self, width: u32, height: u32) -> Result<TextureHandleDescriptor, ViewportError> {
+    pub fn allocate_frame(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<TextureHandleDescriptor, ViewportError> {
         self.engine.create_shared_texture(width, height)
     }
 

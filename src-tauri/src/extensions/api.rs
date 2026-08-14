@@ -32,13 +32,24 @@ const EXTENSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 /// needs file data, the host must have already decided to include it in
 /// the request (see FileSearch, which receives a pre-validated file list
 /// rather than filesystem access).
-pub async fn invoke_extension(ext: &InstalledExtension, request: serde_json::Value) -> AppResult<ExtensionResult> {
-    let interpreter = interpreter_for(&ext.manifest.runtime)
-        .ok_or_else(|| AppError::Provider(format!("unsupported extension runtime: {}", ext.manifest.runtime)))?;
+pub async fn invoke_extension(
+    ext: &InstalledExtension,
+    request: serde_json::Value,
+) -> AppResult<ExtensionResult> {
+    let interpreter = interpreter_for(&ext.manifest.runtime).ok_or_else(|| {
+        AppError::Provider(format!(
+            "unsupported extension runtime: {}",
+            ext.manifest.runtime
+        ))
+    })?;
 
     let entry_path = Path::new(&ext.dir).join(&ext.manifest.entry_point);
     if !entry_path.exists() {
-        return Err(AppError::NotFound(format!("{} (entry point for {})", entry_path.display(), ext.manifest.name)));
+        return Err(AppError::NotFound(format!(
+            "{} (entry point for {})",
+            entry_path.display(),
+            ext.manifest.name
+        )));
     }
 
     let mut child = Command::new(interpreter)
@@ -48,9 +59,15 @@ pub async fn invoke_extension(ext: &InstalledExtension, request: serde_json::Val
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| AppError::Provider(format!("failed to spawn extension '{}': {e}", ext.manifest.name)))?;
+        .map_err(|e| {
+            AppError::Provider(format!(
+                "failed to spawn extension '{}': {e}",
+                ext.manifest.name
+            ))
+        })?;
 
-    let request_bytes = serde_json::to_vec(&request).map_err(|e| AppError::Provider(e.to_string()))?;
+    let request_bytes =
+        serde_json::to_vec(&request).map_err(|e| AppError::Provider(e.to_string()))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(&request_bytes)
@@ -61,15 +78,30 @@ pub async fn invoke_extension(ext: &InstalledExtension, request: serde_json::Val
 
     let output = tokio::time::timeout(EXTENSION_TIMEOUT, child.wait_with_output())
         .await
-        .map_err(|_| AppError::Provider(format!("extension '{}' timed out after {}s", ext.manifest.name, EXTENSION_TIMEOUT.as_secs())))?
-        .map_err(|e| AppError::Provider(format!("extension '{}' process error: {e}", ext.manifest.name)))?;
+        .map_err(|_| {
+            AppError::Provider(format!(
+                "extension '{}' timed out after {}s",
+                ext.manifest.name,
+                EXTENSION_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|e| {
+            AppError::Provider(format!(
+                "extension '{}' process error: {e}",
+                ext.manifest.name
+            ))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Ok(ExtensionResult {
             success: false,
             output: serde_json::Value::Null,
-            error: Some(format!("extension exited with {}: {}", output.status, stderr.chars().take(500).collect::<String>())),
+            error: Some(format!(
+                "extension exited with {}: {}",
+                output.status,
+                stderr.chars().take(500).collect::<String>()
+            )),
         });
     }
 
@@ -98,14 +130,20 @@ mod tests {
 
     fn temp_extensions_dir() -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_ext_api_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     fn python_available() -> bool {
-        std::process::Command::new("python").arg("--version").output().is_ok()
+        std::process::Command::new("python")
+            .arg("--version")
+            .output()
+            .is_ok()
     }
 
     #[tokio::test]
@@ -117,11 +155,20 @@ mod tests {
         let dir = temp_extensions_dir();
         loader::ensure_bundled_extensions(&dir).unwrap();
         let extensions = loader::scan(&dir).unwrap();
-        let repl = extensions.iter().find(|e| e.manifest.name == "python-repl").unwrap();
+        let repl = extensions
+            .iter()
+            .find(|e| e.manifest.name == "python-repl")
+            .unwrap();
 
-        let result = invoke_extension(repl, serde_json::json!({ "code": "print(2 + 2)" })).await.unwrap();
+        let result = invoke_extension(repl, serde_json::json!({ "code": "print(2 + 2)" }))
+            .await
+            .unwrap();
 
-        assert!(result.success, "expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.output.as_str().unwrap().trim(), "4");
 
         std::fs::remove_dir_all(&dir).ok();
@@ -136,9 +183,14 @@ mod tests {
         let dir = temp_extensions_dir();
         loader::ensure_bundled_extensions(&dir).unwrap();
         let extensions = loader::scan(&dir).unwrap();
-        let repl = extensions.iter().find(|e| e.manifest.name == "python-repl").unwrap();
+        let repl = extensions
+            .iter()
+            .find(|e| e.manifest.name == "python-repl")
+            .unwrap();
 
-        let result = invoke_extension(repl, serde_json::json!({ "code": "1 / 0" })).await.unwrap();
+        let result = invoke_extension(repl, serde_json::json!({ "code": "1 / 0" }))
+            .await
+            .unwrap();
 
         assert!(!result.success);
         assert!(result.error.unwrap().contains("division"));
@@ -155,10 +207,23 @@ mod tests {
         let dir = temp_extensions_dir();
         loader::ensure_bundled_extensions(&dir).unwrap();
         let extensions = loader::scan(&dir).unwrap();
-        let search = extensions.iter().find(|e| e.manifest.name == "file-search").unwrap();
+        let search = extensions
+            .iter()
+            .find(|e| e.manifest.name == "file-search")
+            .unwrap();
 
-        let files = vec!["src/auth.rs", "src/lib.rs", "tests/auth_test.rs", "README.md"];
-        let result = invoke_extension(search, serde_json::json!({ "query": "auth", "files": files })).await.unwrap();
+        let files = vec![
+            "src/auth.rs",
+            "src/lib.rs",
+            "tests/auth_test.rs",
+            "README.md",
+        ];
+        let result = invoke_extension(
+            search,
+            serde_json::json!({ "query": "auth", "files": files }),
+        )
+        .await
+        .unwrap();
 
         assert!(result.success);
         let results: Vec<String> = serde_json::from_value(result.output).unwrap();

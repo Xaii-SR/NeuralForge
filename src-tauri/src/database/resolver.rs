@@ -54,10 +54,15 @@ fn basename(path: &str) -> &str {
 pub fn resolve_file_reference(conn: &Connection, query: &str) -> AppResult<ResolutionResult> {
     let tokens = tokenize(query);
     if tokens.is_empty() {
-        return Ok(ResolutionResult { resolved: None, candidates: vec![] });
+        return Ok(ResolutionResult {
+            resolved: None,
+            candidates: vec![],
+        });
     }
 
-    let mut stmt = conn.prepare("SELECT path FROM files").map_err(|e| AppError::Provider(format!("failed to list files: {e}")))?;
+    let mut stmt = conn
+        .prepare("SELECT path FROM files")
+        .map_err(|e| AppError::Provider(format!("failed to list files: {e}")))?;
     let paths: Vec<String> = stmt
         .query_map([], |row| row.get(0))
         .map_err(|e| AppError::Provider(format!("failed to list files: {e}")))?
@@ -92,7 +97,11 @@ pub fn resolve_file_reference(conn: &Connection, query: &str) -> AppResult<Resol
 
         let total = filename_score + path_score;
         if total > 0.0 {
-            let kind = if filename_score > 0.0 { "filename" } else { "path" };
+            let kind = if filename_score > 0.0 {
+                "filename"
+            } else {
+                "path"
+            };
             scores.insert(path.clone(), (total, kind));
         }
     }
@@ -103,19 +112,34 @@ pub fn resolve_file_reference(conn: &Connection, query: &str) -> AppResult<Resol
         entry.0 += CONTENT_MATCH_WEIGHT;
     }
 
-    let mut candidates: Vec<FileCandidate> =
-        scores.into_iter().map(|(path, (score, kind))| FileCandidate { path, score, match_kind: kind.to_string() }).collect();
-    candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let mut candidates: Vec<FileCandidate> = scores
+        .into_iter()
+        .map(|(path, (score, kind))| FileCandidate {
+            path,
+            score,
+            match_kind: kind.to_string(),
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     candidates.truncate(MAX_CANDIDATES);
 
     let resolved = match candidates.as_slice() {
         [] => None,
         [only] => Some(only.path.clone()),
-        [first, second, ..] if first.score >= second.score * CLEAR_WINNER_RATIO => Some(first.path.clone()),
+        [first, second, ..] if first.score >= second.score * CLEAR_WINNER_RATIO => {
+            Some(first.path.clone())
+        }
         _ => None,
     };
 
-    Ok(ResolutionResult { resolved, candidates })
+    Ok(ResolutionResult {
+        resolved,
+        candidates,
+    })
 }
 
 #[cfg(test)]
@@ -125,7 +149,10 @@ mod tests {
 
     fn temp_indexed_workspace(files: &[(&str, &str)]) -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_resolver_test_{nanos}"));
         for (rel_path, content) in files {
             let full = dir.join(rel_path);
@@ -164,7 +191,11 @@ mod tests {
         ]);
 
         let result = resolve_file_reference(&conn, "carina ui car").unwrap();
-        assert!(result.candidates.len() >= 2, "expected multiple close candidates, got {:?}", result.candidates);
+        assert!(
+            result.candidates.len() >= 2,
+            "expected multiple close candidates, got {:?}",
+            result.candidates
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).unwrap();

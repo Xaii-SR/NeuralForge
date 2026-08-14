@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 export type Theme = "light" | "dark";
 
@@ -15,20 +15,30 @@ function applyTheme(theme: Theme) {
   }
 }
 
+function readStoredTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  return window.localStorage.getItem(STORAGE_KEY) === "light" ? "light" : "dark";
+}
+
+function subscribeToTheme(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener("nf_theme_changed", onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener("nf_theme_changed", onStoreChange);
+  };
+}
+
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>("dark");
+  const theme = useSyncExternalStore(subscribeToTheme, readStoredTheme, () => "dark" as Theme);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
-    const initial = stored ?? "dark";
-    setThemeState(initial);
-    applyTheme(initial);
-  }, []);
+    applyTheme(theme);
+  }, [theme]);
 
   function setTheme(next: Theme) {
-    setThemeState(next);
-    applyTheme(next);
     window.localStorage.setItem(STORAGE_KEY, next);
+    window.dispatchEvent(new Event("nf_theme_changed"));
   }
 
   function toggleTheme() {

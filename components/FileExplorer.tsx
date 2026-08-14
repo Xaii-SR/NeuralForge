@@ -81,8 +81,6 @@ export default function FileExplorer({ workspaceRoot, onFileClick, onContextSele
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   useEffect(() => {
-    setEntries(null);
-    setSelectedPath(null);
     fs.readDir(workspaceRoot).then(setEntries);
   }, [workspaceRoot]);
 

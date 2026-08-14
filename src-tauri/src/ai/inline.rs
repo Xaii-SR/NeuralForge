@@ -155,12 +155,7 @@ pub async fn stream_inline_edit(
     };
     let _ = app.emit(
         "inline-stream",
-        payload(
-            String::new(),
-            true,
-            Some(status.to_string()),
-            error,
-        ),
+        payload(String::new(), true, Some(status.to_string()), error),
     );
     requests.finish(&request_id);
     Ok(())

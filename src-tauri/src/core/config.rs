@@ -33,7 +33,9 @@ fn header_for(file_name: &str) -> String {
 /// Creates .neuralforge/memory/ with the 7 template files if missing.
 /// Never overwrites a file that already exists.
 pub fn ensure_memory_scaffold(workspace_root: &Path) -> AppResult<()> {
-    let memory_dir = workspace_root.join(MEMORY_DIR_NAME).join(MEMORY_SUBDIR_NAME);
+    let memory_dir = workspace_root
+        .join(MEMORY_DIR_NAME)
+        .join(MEMORY_SUBDIR_NAME);
     std::fs::create_dir_all(&memory_dir)?;
 
     for file_name in MEMORY_FILES {
@@ -72,7 +74,10 @@ mod tests {
             let path = memory_dir.join(file_name);
             assert!(path.exists(), "expected {file_name} to be created");
             let content = fs::read_to_string(&path).unwrap();
-            assert!(content.starts_with('#'), "expected {file_name} to have a header");
+            assert!(
+                content.starts_with('#'),
+                "expected {file_name} to have a header"
+            );
         }
 
         fs::remove_dir_all(&root).unwrap();

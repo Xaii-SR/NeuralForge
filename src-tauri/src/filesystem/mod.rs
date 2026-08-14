@@ -151,8 +151,8 @@ fn validate_new_path_in_workspace(root: &Path, path: &str) -> AppResult<PathBuf>
         .file_name()
         .ok_or_else(|| AppError::InvalidPath(format!("{path} has no file name")))?;
 
-    let canonical_parent =
-        fs::canonicalize(parent).map_err(|_| AppError::NotFound(parent.to_string_lossy().to_string()))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|_| AppError::NotFound(parent.to_string_lossy().to_string()))?;
 
     if !canonical_parent.starts_with(root) {
         return Err(AppError::InvalidPath(format!(
@@ -196,7 +196,10 @@ const LAST_WORKSPACE_FILE: &str = "last_workspace.txt";
 
 fn save_last_workspace_path(data_dir: &Path, workspace: &Path) -> std::io::Result<()> {
     fs::create_dir_all(data_dir)?;
-    fs::write(data_dir.join(LAST_WORKSPACE_FILE), workspace.to_string_lossy().as_bytes())
+    fs::write(
+        data_dir.join(LAST_WORKSPACE_FILE),
+        workspace.to_string_lossy().as_bytes(),
+    )
 }
 
 fn save_last_workspace_if_current(
@@ -250,8 +253,7 @@ pub fn open_workspace(
 ) -> AppResult<WorkspaceInfo> {
     let request = state.begin_workspace_open();
     let (root, connection) = prepare_workspace(&path)?;
-    let generation =
-        activate_prepared_workspace(&state, &db, request, root.clone(), connection)?;
+    let generation = activate_prepared_workspace(&state, &db, request, root.clone(), connection)?;
     tracing::info!(
         target: "filesystem",
         event = "workspace_opened",
@@ -264,9 +266,7 @@ pub fn open_workspace(
     {
         use tauri::Manager;
         if let Ok(data_dir) = app.path().app_data_dir() {
-            if let Err(e) =
-                save_last_workspace_if_current(&state, &data_dir, &root, generation)
-            {
+            if let Err(e) = save_last_workspace_if_current(&state, &data_dir, &root, generation) {
                 tracing::warn!(target: "filesystem", event = "last_workspace_save_failed", error = %e);
             }
         }
@@ -293,8 +293,8 @@ pub fn open_workspace(
     // busy_timeout set in database::open_for_workspace. Indexing failure
     // still can't block the workspace: the thread only logs.
     let index_root = root.clone();
-    std::thread::spawn(move || {
-        match crate::database::open_for_workspace(&index_root) {
+    std::thread::spawn(
+        move || match crate::database::open_for_workspace(&index_root) {
             Ok(conn) => match crate::database::indexer::index_workspace(&conn, &index_root) {
                 Ok(stats) => tracing::info!(
                     target: "filesystem",
@@ -315,8 +315,8 @@ pub fn open_workspace(
                 error = %e,
                 "could not open background indexing connection; workspace remains open"
             ),
-        }
-    });
+        },
+    );
 
     // NF-IDX-002: start (or replace) the live filesystem watcher for this
     // workspace/generation. Assigning into current_watcher drops whatever
@@ -324,7 +324,12 @@ pub fn open_workspace(
     // rapid re-open/switch can never leave two watchers running against two
     // different roots. Watcher failures (e.g. an unreadable root) are
     // logged, not fatal - the same policy as auto-indexing above.
-    match crate::services::watcher_service::WorkspaceWatcher::start(app.clone(), root.clone(), generation, 300) {
+    match crate::services::watcher_service::WorkspaceWatcher::start(
+        app.clone(),
+        root.clone(),
+        generation,
+        300,
+    ) {
         Ok(watcher) => {
             *state.current_watcher.lock().unwrap() = Some(watcher);
         }
@@ -360,7 +365,12 @@ pub fn read_file(state: State<AppState>, path: String) -> AppResult<String> {
 }
 
 #[tauri::command]
-pub fn write_file(app: AppHandle, state: State<AppState>, path: String, contents: String) -> AppResult<()> {
+pub fn write_file(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    contents: String,
+) -> AppResult<()> {
     let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let target = validate_within_workspace(&root, &path)?;
@@ -417,7 +427,12 @@ pub fn delete_path(app: AppHandle, state: State<AppState>, path: String) -> AppR
 }
 
 #[tauri::command]
-pub fn rename_path(app: AppHandle, state: State<AppState>, from: String, to: String) -> AppResult<()> {
+pub fn rename_path(
+    app: AppHandle,
+    state: State<AppState>,
+    from: String,
+    to: String,
+) -> AppResult<()> {
     let _mutation = state.filesystem_mutation.lock().unwrap();
     let root = workspace_root(&state)?;
     let source = validate_within_workspace(&root, &from)?;
@@ -441,7 +456,10 @@ mod tests {
 
     fn uuid_like() -> u128 {
         use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     }
 
     #[test]
@@ -599,12 +617,7 @@ mod tests {
         let file = root.join("proposal.txt");
         fs::write(&file, "newer content").unwrap();
 
-        let result = write_if_unchanged(
-            &root,
-            file.to_str().unwrap(),
-            "old content",
-            "proposal",
-        );
+        let result = write_if_unchanged(&root, file.to_str().unwrap(), "old content", "proposal");
 
         assert!(result.is_err());
         assert_eq!(fs::read_to_string(&file).unwrap(), "newer content");
@@ -677,14 +690,9 @@ mod tests {
 
         ready.wait();
         let second = state.begin_workspace_open();
-        let generation = activate_prepared_workspace(
-            &state,
-            &db,
-            second,
-            second_root.clone(),
-            second_conn,
-        )
-        .unwrap();
+        let generation =
+            activate_prepared_workspace(&state, &db, second, second_root.clone(), second_conn)
+                .unwrap();
         release.wait();
         assert!(stale_thread.join().unwrap().is_err());
 
@@ -705,14 +713,7 @@ mod tests {
         let active_root = temp_workspace();
         let request = state.begin_workspace_open();
         let connection = crate::database::open_for_workspace(&active_root).unwrap();
-        activate_prepared_workspace(
-            &state,
-            &db,
-            request,
-            active_root.clone(),
-            connection,
-        )
-        .unwrap();
+        activate_prepared_workspace(&state, &db, request, active_root.clone(), connection).unwrap();
         let missing = active_root.join("missing");
 
         assert!(prepare_workspace(missing.to_str().unwrap()).is_err());
@@ -736,20 +737,12 @@ mod tests {
         let first_generation = state.advance_workspace_generation();
         let second_generation = state.advance_workspace_generation();
 
-        assert!(save_last_workspace_if_current(
-            &state,
-            &data_dir,
-            &second,
-            second_generation
-        )
-        .unwrap());
-        assert!(!save_last_workspace_if_current(
-            &state,
-            &data_dir,
-            &first,
-            first_generation
-        )
-        .unwrap());
+        assert!(
+            save_last_workspace_if_current(&state, &data_dir, &second, second_generation).unwrap()
+        );
+        assert!(
+            !save_last_workspace_if_current(&state, &data_dir, &first, first_generation).unwrap()
+        );
         assert_eq!(
             PathBuf::from(load_last_workspace_path(&data_dir).unwrap()),
             second
@@ -804,14 +797,22 @@ mod tests {
     #[test]
     fn opening_a_fresh_workspace_indexes_it_without_a_manual_step() {
         let root = temp_workspace();
-        fs::write(root.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+        fs::write(
+            root.join("auth.rs"),
+            "fn authenticate_user() -> bool { true }\n",
+        )
+        .unwrap();
 
         let conn = crate::database::open_for_workspace(&root).unwrap();
         let stats = crate::database::indexer::index_workspace(&conn, &root).unwrap();
         assert_eq!(stats.files_indexed, 1);
 
-        let results = crate::database::search::keyword_search(&conn, "authenticate_user", 20).unwrap();
-        assert!(!results.is_empty(), "freshly auto-indexed content must be queryable without pressing the manual button");
+        let results =
+            crate::database::search::keyword_search(&conn, "authenticate_user", 20).unwrap();
+        assert!(
+            !results.is_empty(),
+            "freshly auto-indexed content must be queryable without pressing the manual button"
+        );
 
         drop(conn); // release the sqlite file handle before deleting on Windows
         fs::remove_dir_all(&root).unwrap();
@@ -830,7 +831,11 @@ mod tests {
     fn background_indexing_connection_does_not_lock_out_the_ui_connection() {
         let root = temp_workspace();
         for i in 0..50 {
-            fs::write(root.join(format!("file_{i}.rs")), format!("fn function_number_{i}() -> u32 {{ {i} }}\n")).unwrap();
+            fs::write(
+                root.join(format!("file_{i}.rs")),
+                format!("fn function_number_{i}() -> u32 {{ {i} }}\n"),
+            )
+            .unwrap();
         }
 
         // "UI" connection: what DbState would hold.
@@ -854,14 +859,31 @@ mod tests {
         )
         .unwrap();
         for i in 0..10 {
-            crate::database::sessions::append_message(&ui_conn, &session.id, "user", &format!("message {i}"), "completed").unwrap();
+            crate::database::sessions::append_message(
+                &ui_conn,
+                &session.id,
+                "user",
+                &format!("message {i}"),
+                "completed",
+            )
+            .unwrap();
         }
 
-        let stats = indexer_thread.join().expect("indexer thread must not panic");
-        assert_eq!(stats.files_indexed, 50, "all files indexed despite concurrent session writes");
+        let stats = indexer_thread
+            .join()
+            .expect("indexer thread must not panic");
+        assert_eq!(
+            stats.files_indexed, 50,
+            "all files indexed despite concurrent session writes"
+        );
 
-        let messages = crate::database::sessions::get_session_messages(&ui_conn, &session.id).unwrap();
-        assert_eq!(messages.len(), 10, "all session writes survived despite concurrent indexing");
+        let messages =
+            crate::database::sessions::get_session_messages(&ui_conn, &session.id).unwrap();
+        assert_eq!(
+            messages.len(),
+            10,
+            "all session writes survived despite concurrent indexing"
+        );
 
         drop(ui_conn);
         fs::remove_dir_all(&root).unwrap();
@@ -870,7 +892,11 @@ mod tests {
     #[test]
     fn reopening_an_already_indexed_workspace_skips_unchanged_files() {
         let root = temp_workspace();
-        fs::write(root.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+        fs::write(
+            root.join("auth.rs"),
+            "fn authenticate_user() -> bool { true }\n",
+        )
+        .unwrap();
 
         let conn = crate::database::open_for_workspace(&root).unwrap();
         let first = crate::database::indexer::index_workspace(&conn, &root).unwrap();
@@ -909,7 +935,10 @@ mod tests {
         // itself is unaffected. WalkDir on a missing root yields no entries
         // rather than an Err, but either outcome must not stop the caller.
         let result = crate::database::indexer::index_workspace(&conn, &vanished_root);
-        assert!(result.is_ok(), "indexer must not panic/hard-fail on an unreadable workspace root");
+        assert!(
+            result.is_ok(),
+            "indexer must not panic/hard-fail on an unreadable workspace root"
+        );
         assert_eq!(result.unwrap().files_indexed, 0);
 
         drop(conn);
@@ -919,7 +948,11 @@ mod tests {
     #[test]
     fn end_to_end_open_then_ai_chat_context_without_manual_indexing() {
         let root = temp_workspace();
-        fs::write(root.join("auth.rs"), "fn authenticate_user() -> bool { true }\n").unwrap();
+        fs::write(
+            root.join("auth.rs"),
+            "fn authenticate_user() -> bool { true }\n",
+        )
+        .unwrap();
 
         // Step 1: open_for_workspace (the DB half of open_workspace).
         let conn = crate::database::open_for_workspace(&root).unwrap();
@@ -931,8 +964,12 @@ mod tests {
         // Step 3: the real backend entry point AI Chat uses for repository
         // context (ai::mod::get_context_for_query delegates straight into
         // this), per the required audit of the AI context retrieval path.
-        let prompt = crate::ai::context::build_context_prompt(&root, &conn, "how does authentication work");
-        assert!(prompt.contains("authenticate_user"), "AI Chat must be repository-aware immediately after open, with no manual indexing step");
+        let prompt =
+            crate::ai::context::build_context_prompt(&root, &conn, "how does authentication work");
+        assert!(
+            prompt.contains("authenticate_user"),
+            "AI Chat must be repository-aware immediately after open, with no manual indexing step"
+        );
 
         drop(conn);
         fs::remove_dir_all(&root).unwrap();

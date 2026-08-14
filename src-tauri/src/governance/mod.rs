@@ -42,12 +42,24 @@ pub fn create_requirement(
 }
 
 #[tauri::command]
-pub fn update_requirement(db: State<DbState>, id: String, title: String, intent: String, acceptance_criteria: Vec<String>) -> AppResult<RequirementContract> {
-    with_conn(&db, |conn| requirements::update(conn, &id, &title, &intent, acceptance_criteria))
+pub fn update_requirement(
+    db: State<DbState>,
+    id: String,
+    title: String,
+    intent: String,
+    acceptance_criteria: Vec<String>,
+) -> AppResult<RequirementContract> {
+    with_conn(&db, |conn| {
+        requirements::update(conn, &id, &title, &intent, acceptance_criteria)
+    })
 }
 
 #[tauri::command]
-pub fn set_requirement_status(db: State<DbState>, id: String, status: String) -> AppResult<RequirementContract> {
+pub fn set_requirement_status(
+    db: State<DbState>,
+    id: String,
+    status: String,
+) -> AppResult<RequirementContract> {
     with_conn(&db, |conn| requirements::set_status(conn, &id, &status))
 }
 
@@ -62,7 +74,10 @@ pub fn list_requirements(db: State<DbState>) -> AppResult<Vec<RequirementContrac
 }
 
 #[tauri::command]
-pub fn get_requirement_history(db: State<DbState>, id: String) -> AppResult<Vec<RequirementHistoryEntry>> {
+pub fn get_requirement_history(
+    db: State<DbState>,
+    id: String,
+) -> AppResult<Vec<RequirementHistoryEntry>> {
     with_conn(&db, |conn| requirements::history(conn, &id))
 }
 
@@ -72,8 +87,13 @@ pub fn get_ledger(db: State<DbState>, limit: usize) -> AppResult<Vec<LedgerEntry
 }
 
 #[tauri::command]
-pub fn get_ledger_for_correlation(db: State<DbState>, correlationId: String) -> AppResult<Vec<LedgerEntry>> {
-    with_conn(&db, |conn| ledger::list_by_correlation(conn, &correlationId))
+pub fn get_ledger_for_correlation(
+    db: State<DbState>,
+    correlationId: String,
+) -> AppResult<Vec<LedgerEntry>> {
+    with_conn(&db, |conn| {
+        ledger::list_by_correlation(conn, &correlationId)
+    })
 }
 
 #[tauri::command]
@@ -87,7 +107,10 @@ pub fn get_evidence_for_task(db: State<DbState>, taskId: String) -> AppResult<Ve
 }
 
 #[tauri::command]
-pub fn get_promotions_for_task(db: State<DbState>, taskId: String) -> AppResult<Vec<promotion::PromotionRequest>> {
+pub fn get_promotions_for_task(
+    db: State<DbState>,
+    taskId: String,
+) -> AppResult<Vec<promotion::PromotionRequest>> {
     with_conn(&db, |conn| promotion::for_task(conn, &taskId))
 }
 
@@ -105,7 +128,10 @@ mod integration_tests {
 
     fn temp_conn() -> (std::path::PathBuf, rusqlite::Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_governance_integration_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -120,7 +146,11 @@ mod integration_tests {
     async fn correlation_id_threads_end_to_end_through_ledger_and_evidence() {
         let (dir, conn) = temp_conn();
 
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"corr_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"corr_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let lib_path = dir.join("src").join("lib.rs");
         let original = "pub fn add(a: i32, b: i32) -> i32 { a + b }\n";
@@ -163,10 +193,25 @@ mod integration_tests {
         )
         .unwrap();
 
-        let result = crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, proposed).await.unwrap();
-        assert!(!result.rolled_back, "valid change must not roll back: {}", result.verification);
+        let result =
+            crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, proposed)
+                .await
+                .unwrap();
+        assert!(
+            !result.rolled_back,
+            "valid change must not roll back: {}",
+            result.verification
+        );
 
-        evidence::record(&conn, &task_id, Some(&correlation_id), evidence::kind::VERIFICATION, &result.verification, true).unwrap();
+        evidence::record(
+            &conn,
+            &task_id,
+            Some(&correlation_id),
+            evidence::kind::VERIFICATION,
+            &result.verification,
+            true,
+        )
+        .unwrap();
         ledger::append(
             &conn,
             ledger::LedgerEvent::TaskCompleted,
@@ -178,8 +223,13 @@ mod integration_tests {
         .unwrap();
 
         let chain = ledger::list_by_correlation(&conn, &correlation_id).unwrap();
-        assert!(chain.len() >= 3, "expected at least requirement_created, task_approved, task_completed");
-        assert!(chain.iter().all(|e| e.correlation_id.as_deref() == Some(correlation_id.as_str())));
+        assert!(
+            chain.len() >= 3,
+            "expected at least requirement_created, task_approved, task_completed"
+        );
+        assert!(chain
+            .iter()
+            .all(|e| e.correlation_id.as_deref() == Some(correlation_id.as_str())));
         assert_eq!(chain.first().unwrap().event_type, "requirement_created");
         assert_eq!(chain.last().unwrap().event_type, "task_completed");
 
@@ -189,7 +239,11 @@ mod integration_tests {
         assert_eq!(ev[0].task_id, task_id);
 
         let verification = ledger::verify_chain(&conn).unwrap();
-        assert!(verification.valid, "chain must verify: {:?}", verification.problem);
+        assert!(
+            verification.valid,
+            "chain must verify: {:?}",
+            verification.problem
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -201,23 +255,50 @@ mod integration_tests {
     #[tokio::test]
     async fn evidence_success_reflects_real_cargo_check_pass_and_fail() {
         let (dir, conn) = temp_conn();
-        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"ev_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"ev_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let lib_path = dir.join("src").join("lib.rs");
         let original = "pub fn add(a: i32, b: i32) -> i32 { a + b }\n";
         std::fs::write(&lib_path, original).unwrap();
 
         let broken = "pub fn add(a: i32, b: i32) -> i32 { a + b +\n";
-        let broken_result = crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, broken).await.unwrap();
+        let broken_result =
+            crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, broken)
+                .await
+                .unwrap();
         assert!(broken_result.rolled_back);
-        let rec_fail = evidence::record(&conn, "task-fail", None, evidence::kind::VERIFICATION, &broken_result.verification, !broken_result.rolled_back).unwrap();
+        let rec_fail = evidence::record(
+            &conn,
+            "task-fail",
+            None,
+            evidence::kind::VERIFICATION,
+            &broken_result.verification,
+            !broken_result.rolled_back,
+        )
+        .unwrap();
         assert!(!rec_fail.success);
         assert!(rec_fail.content.contains("cargo check failed"));
 
-        let valid = "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn double(a: i32) -> i32 { a * 2 }\n";
-        let ok_result = crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, valid).await.unwrap();
+        let valid =
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn double(a: i32) -> i32 { a * 2 }\n";
+        let ok_result =
+            crate::agent::executor::apply_and_verify(&dir, "src/lib.rs", original, valid)
+                .await
+                .unwrap();
         assert!(!ok_result.rolled_back);
-        let rec_ok = evidence::record(&conn, "task-ok", None, evidence::kind::VERIFICATION, &ok_result.verification, !ok_result.rolled_back).unwrap();
+        let rec_ok = evidence::record(
+            &conn,
+            "task-ok",
+            None,
+            evidence::kind::VERIFICATION,
+            &ok_result.verification,
+            !ok_result.rolled_back,
+        )
+        .unwrap();
         assert!(rec_ok.success);
         assert!(rec_ok.content.contains("cargo check passed"));
 

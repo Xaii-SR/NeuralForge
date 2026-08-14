@@ -17,13 +17,16 @@ export interface EditorProps {
 
 export default function Editor({ path, language, value, onChange, onSave, readOnly = false, workspaceGeneration = 0 }: EditorProps) {
   const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
   const { theme } = useTheme();
   const ghostText = useGhostText();
   const { ghost, suggestion, triggerGhostText, acceptGhost, dismissGhost } = ghostText;
   const setGhostRef = useRef(ghostText.setGhost || (() => {}));
   const ghostTextRef = useRef<string | null>(null);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   // Accept ghost text on Tab, dismiss on Esc or printable char
   const handleKeyDown = useCallback((e: KeyboardEvent) => {

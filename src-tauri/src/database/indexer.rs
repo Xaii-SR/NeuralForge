@@ -3,8 +3,8 @@ use regex::Regex;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use specta::Type;
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -127,59 +127,108 @@ fn classify_language(path: &Path) -> &'static str {
 
 fn module_path_from_file_path(file_path: &str) -> String {
     let path = Path::new(file_path);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(file_path);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_path);
     let mut components: Vec<&str> = Vec::new();
     if let Some(parent) = path.parent() {
         for component in parent.components() {
             if let std::path::Component::Normal(name) = component {
                 let name_str = name.to_str().unwrap_or("");
-                if name_str == "src" || name_str == "lib" || name_str == "app" { continue; }
+                if name_str == "src" || name_str == "lib" || name_str == "app" {
+                    continue;
+                }
                 components.push(name_str);
             }
         }
     }
     components.push(stem);
-    if components.is_empty() { return file_path.to_string(); }
+    if components.is_empty() {
+        return file_path.to_string();
+    }
     components.join("::")
 }
 
 fn qualified_name(module_path: &str, name: &str) -> String {
-    if module_path.is_empty() { name.to_string() } else { format!("{}::{}", module_path, name) }
+    if module_path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{}", module_path, name)
+    }
 }
 
-fn symbol_hash_value(file_path: &str, name: &str, kind: &str, start_line: i64, signature: Option<&str>) -> String {
+fn symbol_hash_value(
+    file_path: &str,
+    name: &str,
+    kind: &str,
+    start_line: i64,
+    signature: Option<&str>,
+) -> String {
     let mut hasher = DefaultHasher::new();
-    file_path.hash(&mut hasher); name.hash(&mut hasher); kind.hash(&mut hasher);
+    file_path.hash(&mut hasher);
+    name.hash(&mut hasher);
+    kind.hash(&mut hasher);
     start_line.hash(&mut hasher);
-    if let Some(sig) = signature { sig.hash(&mut hasher); }
+    if let Some(sig) = signature {
+        sig.hash(&mut hasher);
+    }
     format!("{:x}", hasher.finish())
 }
 
 fn capture_doc_comment(lines: &[&str], line_idx: usize) -> Option<String> {
     let mut docs: Vec<&str> = Vec::new();
-    if line_idx == 0 { return None; }
+    if line_idx == 0 {
+        return None;
+    }
     let mut idx = line_idx - 1;
     loop {
         let trimmed = lines[idx].trim();
-        if trimmed.starts_with("///") { docs.push(trimmed.trim_start_matches("///").trim()); }
-        else if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {}
-        else { break; }
-        if idx == 0 { break; }
+        if trimmed.starts_with("///") {
+            docs.push(trimmed.trim_start_matches("///").trim());
+        } else if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+        } else {
+            break;
+        }
+        if idx == 0 {
+            break;
+        }
         idx -= 1;
     }
-    if docs.is_empty() { None } else { docs.reverse(); Some(docs.join(" ")) }
+    if docs.is_empty() {
+        None
+    } else {
+        docs.reverse();
+        Some(docs.join(" "))
+    }
 }
 
 fn find_closing_brace(lines: &[&str], open_line: usize) -> usize {
     let mut depth: i64 = 0;
     let mut started = false;
     for (i, line) in lines.iter().enumerate().skip(open_line.saturating_sub(1)) {
-        for ch in line.chars() { match ch { '{' => { depth += 1; started = true; } '}' => { depth -= 1; if started && depth <= 0 { return (i + 1) as usize; } } _ => {} } }
+        for ch in line.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    started = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if started && depth <= 0 {
+                        return (i + 1) as usize;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     (open_line + 1).min(lines.len())
 }
 
-fn regex_capture<'t>(text: &'t str, pattern: &Regex) -> Option<regex::Captures<'t>> { pattern.captures(text) }
+fn regex_capture<'t>(text: &'t str, pattern: &Regex) -> Option<regex::Captures<'t>> {
+    pattern.captures(text)
+}
 
 lazy_static::lazy_static! {
     static ref RE_RUST_FN: Regex = Regex::new(r"^\s*(pub\s*(?:\([^)]*\))?\s*)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(").unwrap();
@@ -203,77 +252,168 @@ fn extract_rust_symbols(lines: &[&str], file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let module_path = module_path_from_file_path(file_path);
     let vis = |raw: Option<&str>| -> Option<String> {
-        raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).or_else(|| Some("private".to_string()))
+        raw.map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some("private".to_string()))
     };
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') { continue; }
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_FN) {
             let visibility = vis(caps.get(1).map(|m| m.as_str()));
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
             let end_line = find_closing_brace(lines, line_num);
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Function.as_str().to_string(), start_line: line_num as i64, end_line: end_line as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "function", line_num as i64, Some(line)), import_source: None });
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Rust".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Function.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: end_line as i64,
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(
+                    file_path,
+                    name,
+                    "function",
+                    line_num as i64,
+                    Some(line),
+                ),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_STRUCT) {
             let visibility = vis(caps.get(1).map(|m| m.as_str()));
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
-            let end_line = if trimmed.contains(';') { line_num } else { find_closing_brace(lines, line_num) };
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Struct.as_str().to_string(), start_line: line_num as i64, end_line: end_line as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "struct", line_num as i64, None), import_source: None });
+            let end_line = if trimmed.contains(';') {
+                line_num
+            } else {
+                find_closing_brace(lines, line_num)
+            };
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Rust".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Struct.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: end_line as i64,
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "struct", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_ENUM) {
             let visibility = vis(caps.get(1).map(|m| m.as_str()));
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
             let end_line = find_closing_brace(lines, line_num);
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Enum.as_str().to_string(), start_line: line_num as i64, end_line: end_line as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "enum", line_num as i64, None), import_source: None });
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Rust".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Enum.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: end_line as i64,
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "enum", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_TRAIT) {
             let visibility = vis(caps.get(1).map(|m| m.as_str()));
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
             let end_line = find_closing_brace(lines, line_num);
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Trait.as_str().to_string(), start_line: line_num as i64, end_line: end_line as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "trait", line_num as i64, None), import_source: None });
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Rust".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Trait.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: end_line as i64,
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "trait", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_IMPL) {
             let target = caps.get(1).map(|m| m.as_str()).unwrap_or("unnamed");
-            let name = if let Some(idx) = target.find(" for ") { &target[idx + 5..] } else { target };
+            let name = if let Some(idx) = target.find(" for ") {
+                &target[idx + 5..]
+            } else {
+                target
+            };
             let end_line = find_closing_brace(lines, line_num);
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, &format!("impl_{}", name)), name: format!("impl {}", name),
-                kind: SymbolKind::Impl.as_str().to_string(), start_line: line_num as i64, end_line: end_line as i64,
-                visibility: None, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "impl", line_num as i64, None), import_source: None });
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Rust".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, &format!("impl_{}", name)),
+                name: format!("impl {}", name),
+                kind: SymbolKind::Impl.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: end_line as i64,
+                visibility: None,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "impl", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_USE) {
-            let import_target = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("").to_string();
+            let import_target = caps
+                .get(1)
+                .map(|m| m.as_str().trim())
+                .unwrap_or("")
+                .to_string();
             if !import_target.contains("self") {
-                let name = import_target.split("::").last().unwrap_or(&import_target).to_string();
-                symbols.push(Symbol { file_path: file_path.to_string(), language: "Rust".to_string(), module_path: module_path.clone(),
-                    qualified_name: qualified_name(&module_path, &name), name,
-                    kind: SymbolKind::Import.as_str().to_string(), start_line: line_num as i64, end_line: line_num as i64,
-                    visibility: None, signature: None, documentation: None,
-                    symbol_hash: symbol_hash_value(file_path, &import_target, "import", line_num as i64, None),
-                    import_source: Some(import_target) });
+                let name = import_target
+                    .split("::")
+                    .last()
+                    .unwrap_or(&import_target)
+                    .to_string();
+                symbols.push(Symbol {
+                    file_path: file_path.to_string(),
+                    language: "Rust".to_string(),
+                    module_path: module_path.clone(),
+                    qualified_name: qualified_name(&module_path, &name),
+                    name,
+                    kind: SymbolKind::Import.as_str().to_string(),
+                    start_line: line_num as i64,
+                    end_line: line_num as i64,
+                    visibility: None,
+                    signature: None,
+                    documentation: None,
+                    symbol_hash: symbol_hash_value(
+                        file_path,
+                        &import_target,
+                        "import",
+                        line_num as i64,
+                        None,
+                    ),
+                    import_source: Some(import_target),
+                });
             }
             continue;
         }
@@ -287,60 +427,125 @@ fn extract_typescript_symbols(lines: &[&str], file_path: &str) -> Vec<Symbol> {
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") { continue; }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_FN) {
-            let visibility = if caps.get(1).is_some() { Some("export".to_string()) } else { Some("private".to_string()) };
+            let visibility = if caps.get(1).is_some() {
+                Some("export".to_string())
+            } else {
+                Some("private".to_string())
+            };
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "TypeScript".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Function.as_str().to_string(), start_line: line_num as i64,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "TypeScript".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Function.as_str().to_string(),
+                start_line: line_num as i64,
                 end_line: find_closing_brace(lines, line_num) as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "function", line_num as i64, Some(line)), import_source: None });
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(
+                    file_path,
+                    name,
+                    "function",
+                    line_num as i64,
+                    Some(line),
+                ),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_CLASS) {
-            let visibility = if caps.get(1).is_some() { Some("export".to_string()) } else { Some("private".to_string()) };
+            let visibility = if caps.get(1).is_some() {
+                Some("export".to_string())
+            } else {
+                Some("private".to_string())
+            };
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "TypeScript".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Class.as_str().to_string(), start_line: line_num as i64,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "TypeScript".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Class.as_str().to_string(),
+                start_line: line_num as i64,
                 end_line: find_closing_brace(lines, line_num) as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "class", line_num as i64, None), import_source: None });
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "class", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_INTERFACE) {
-            let visibility = if caps.get(1).is_some() { Some("export".to_string()) } else { Some("private".to_string()) };
+            let visibility = if caps.get(1).is_some() {
+                Some("export".to_string())
+            } else {
+                Some("private".to_string())
+            };
             let name = caps.get(2).map(|m| m.as_str()).unwrap_or("unnamed");
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "TypeScript".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Interface.as_str().to_string(), start_line: line_num as i64,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "TypeScript".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Interface.as_str().to_string(),
+                start_line: line_num as i64,
                 end_line: find_closing_brace(lines, line_num) as i64,
-                visibility, signature: Some(line.trim().to_string()), documentation: capture_doc_comment(lines, i),
-                symbol_hash: symbol_hash_value(file_path, name, "interface", line_num as i64, None), import_source: None });
+                visibility,
+                signature: Some(line.trim().to_string()),
+                documentation: capture_doc_comment(lines, i),
+                symbol_hash: symbol_hash_value(file_path, name, "interface", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_IMPORT) {
             let source = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let name = source.split('/').last().unwrap_or(&source).to_string();
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "TypeScript".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, &name), name,
-                kind: SymbolKind::Import.as_str().to_string(), start_line: line_num as i64, end_line: line_num as i64,
-                visibility: None, signature: None, documentation: None,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "TypeScript".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, &name),
+                name,
+                kind: SymbolKind::Import.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: line_num as i64,
+                visibility: None,
+                signature: None,
+                documentation: None,
                 symbol_hash: symbol_hash_value(file_path, &source, "import", line_num as i64, None),
-                import_source: Some(source) });
+                import_source: Some(source),
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_EXPORT_FROM) {
             let source = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let name = source.split('/').last().unwrap_or(&source).to_string();
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "TypeScript".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, &name), name,
-                kind: SymbolKind::Import.as_str().to_string(), start_line: line_num as i64, end_line: line_num as i64,
-                visibility: Some("export".to_string()), signature: None, documentation: None,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "TypeScript".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, &name),
+                name,
+                kind: SymbolKind::Import.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: line_num as i64,
+                visibility: Some("export".to_string()),
+                signature: None,
+                documentation: None,
                 symbol_hash: symbol_hash_value(file_path, &source, "import", line_num as i64, None),
-                import_source: Some(source) });
+                import_source: Some(source),
+            });
             continue;
         }
     }
@@ -351,14 +556,20 @@ fn extract_python_symbols(lines: &[&str], file_path: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let module_path = module_path_from_file_path(file_path);
     fn find_python_block_end(lines: &[&str], start_line: usize) -> usize {
-        if start_line >= lines.len() { return start_line; }
+        if start_line >= lines.len() {
+            return start_line;
+        }
         let base_indent = lines[start_line - 1].len() - lines[start_line - 1].trim_start().len();
         if base_indent == 0 && lines[start_line - 1].trim().ends_with(':') {
             for i in start_line..lines.len() {
                 let trimmed = lines[i].trim();
-                if trimmed.is_empty() { continue; }
+                if trimmed.is_empty() {
+                    continue;
+                }
                 let this_indent = lines[i].len() - trimmed.len();
-                if this_indent <= base_indent && !trimmed.starts_with('#') { return i; }
+                if this_indent <= base_indent && !trimmed.starts_with('#') {
+                    return i;
+                }
             }
         }
         lines.len()
@@ -366,37 +577,77 @@ fn extract_python_symbols(lines: &[&str], file_path: &str) -> Vec<Symbol> {
     for (i, line) in lines.iter().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_PY_FN) {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("unnamed");
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Python".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Function.as_str().to_string(), start_line: line_num as i64,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Python".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Function.as_str().to_string(),
+                start_line: line_num as i64,
                 end_line: find_python_block_end(lines, line_num) as i64,
-                visibility: Some("public".to_string()), signature: Some(line.trim().to_string()), documentation: None,
-                symbol_hash: symbol_hash_value(file_path, name, "function", line_num as i64, Some(line)), import_source: None });
+                visibility: Some("public".to_string()),
+                signature: Some(line.trim().to_string()),
+                documentation: None,
+                symbol_hash: symbol_hash_value(
+                    file_path,
+                    name,
+                    "function",
+                    line_num as i64,
+                    Some(line),
+                ),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_PY_CLASS) {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("unnamed");
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Python".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, name), name: name.to_string(),
-                kind: SymbolKind::Class.as_str().to_string(), start_line: line_num as i64,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Python".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, name),
+                name: name.to_string(),
+                kind: SymbolKind::Class.as_str().to_string(),
+                start_line: line_num as i64,
                 end_line: find_python_block_end(lines, line_num) as i64,
-                visibility: Some("public".to_string()), signature: Some(line.trim().to_string()), documentation: None,
-                symbol_hash: symbol_hash_value(file_path, name, "class", line_num as i64, None), import_source: None });
+                visibility: Some("public".to_string()),
+                signature: Some(line.trim().to_string()),
+                documentation: None,
+                symbol_hash: symbol_hash_value(file_path, name, "class", line_num as i64, None),
+                import_source: None,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_PY_IMPORT) {
-            let source = if let Some(from) = caps.get(1) { from.as_str().to_string() }
-                else { caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default() };
+            let source = if let Some(from) = caps.get(1) {
+                from.as_str().to_string()
+            } else {
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default()
+            };
             let name = source.split('.').last().unwrap_or(&source).to_string();
-            symbols.push(Symbol { file_path: file_path.to_string(), language: "Python".to_string(), module_path: module_path.clone(),
-                qualified_name: qualified_name(&module_path, &name), name,
-                kind: SymbolKind::Import.as_str().to_string(), start_line: line_num as i64, end_line: line_num as i64,
-                visibility: None, signature: None, documentation: None,
+            symbols.push(Symbol {
+                file_path: file_path.to_string(),
+                language: "Python".to_string(),
+                module_path: module_path.clone(),
+                qualified_name: qualified_name(&module_path, &name),
+                name,
+                kind: SymbolKind::Import.as_str().to_string(),
+                start_line: line_num as i64,
+                end_line: line_num as i64,
+                visibility: None,
+                signature: None,
+                documentation: None,
                 symbol_hash: symbol_hash_value(file_path, &source, "import", line_num as i64, None),
-                import_source: Some(source) });
+                import_source: Some(source),
+            });
             continue;
         }
     }
@@ -405,7 +656,12 @@ fn extract_python_symbols(lines: &[&str], file_path: &str) -> Vec<Symbol> {
 
 pub fn extract_symbols(content: &str, file_path: &str, language: &str) -> Vec<Symbol> {
     let lines: Vec<&str> = content.lines().collect();
-    match language { "Rust" => extract_rust_symbols(&lines, file_path), "TypeScript" => extract_typescript_symbols(&lines, file_path), "Python" => extract_python_symbols(&lines, file_path), _ => Vec::new() }
+    match language {
+        "Rust" => extract_rust_symbols(&lines, file_path),
+        "TypeScript" => extract_typescript_symbols(&lines, file_path),
+        "Python" => extract_python_symbols(&lines, file_path),
+        _ => Vec::new(),
+    }
 }
 
 fn extract_rust_dependencies(lines: &[&str], file_path: &str, now: i64) -> Vec<Dependency> {
@@ -413,26 +669,56 @@ fn extract_rust_dependencies(lines: &[&str], file_path: &str, now: i64) -> Vec<D
     let module_path = module_path_from_file_path(file_path);
     for line in lines.iter() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') { continue; }
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_MOD) {
             let mod_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            deps.push(Dependency { source_file: file_path.to_string(), target_file: None, source_symbol: None,
-                target_symbol: Some(format!("mod {}", mod_name)), dependency_type: "file_reference".to_string(),
-                import_source: Some(format!("mod {}", mod_name)), created_at: now });
+            deps.push(Dependency {
+                source_file: file_path.to_string(),
+                target_file: None,
+                source_symbol: None,
+                target_symbol: Some(format!("mod {}", mod_name)),
+                dependency_type: "file_reference".to_string(),
+                import_source: Some(format!("mod {}", mod_name)),
+                created_at: now,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_RUST_USE) {
-            let import_target = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("").to_string();
-            if import_target.contains("self") { continue; }
-            let dep_type = if import_target.starts_with("crate::") { "internal_import" } else { "import" };
-            let target_symbol = import_target.split("::").last().unwrap_or(&import_target).to_string();
+            let import_target = caps
+                .get(1)
+                .map(|m| m.as_str().trim())
+                .unwrap_or("")
+                .to_string();
+            if import_target.contains("self") {
+                continue;
+            }
+            let dep_type = if import_target.starts_with("crate::") {
+                "internal_import"
+            } else {
+                "import"
+            };
+            let target_symbol = import_target
+                .split("::")
+                .last()
+                .unwrap_or(&import_target)
+                .to_string();
             let target_file = if dep_type == "internal_import" {
                 let first = module_path.split("::").next().unwrap_or("crate");
                 Some(import_target.replace("crate::", &format!("{}::", first)))
-            } else { None };
-            deps.push(Dependency { source_file: file_path.to_string(), target_file, source_symbol: None,
-                target_symbol: Some(target_symbol), dependency_type: dep_type.to_string(),
-                import_source: Some(import_target), created_at: now });
+            } else {
+                None
+            };
+            deps.push(Dependency {
+                source_file: file_path.to_string(),
+                target_file,
+                source_symbol: None,
+                target_symbol: Some(target_symbol),
+                dependency_type: dep_type.to_string(),
+                import_source: Some(import_target),
+                created_at: now,
+            });
             continue;
         }
     }
@@ -443,23 +729,53 @@ fn extract_typescript_dependencies(lines: &[&str], file_path: &str, now: i64) ->
     let mut deps = Vec::new();
     for line in lines.iter() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("//") { continue; }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_IMPORT) {
             let source = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let target_symbol = source.split('/').last().unwrap_or(&source).to_string();
-            let dep_type = if source.starts_with('.') { "internal_import" } else { "import" };
-            deps.push(Dependency { source_file: file_path.to_string(), target_file: if source.starts_with('.') { Some(source.clone()) } else { None },
-                source_symbol: None, target_symbol: Some(target_symbol), dependency_type: dep_type.to_string(),
-                import_source: Some(source), created_at: now });
+            let dep_type = if source.starts_with('.') {
+                "internal_import"
+            } else {
+                "import"
+            };
+            deps.push(Dependency {
+                source_file: file_path.to_string(),
+                target_file: if source.starts_with('.') {
+                    Some(source.clone())
+                } else {
+                    None
+                },
+                source_symbol: None,
+                target_symbol: Some(target_symbol),
+                dependency_type: dep_type.to_string(),
+                import_source: Some(source),
+                created_at: now,
+            });
             continue;
         }
         if let Some(caps) = regex_capture(trimmed, &RE_TS_EXPORT_FROM) {
             let source = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
             let target_symbol = source.split('/').last().unwrap_or(&source).to_string();
-            let dep_type = if source.starts_with('.') { "internal_import" } else { "import" };
-            deps.push(Dependency { source_file: file_path.to_string(), target_file: if source.starts_with('.') { Some(source.clone()) } else { None },
-                source_symbol: None, target_symbol: Some(target_symbol), dependency_type: dep_type.to_string(),
-                import_source: Some(source), created_at: now });
+            let dep_type = if source.starts_with('.') {
+                "internal_import"
+            } else {
+                "import"
+            };
+            deps.push(Dependency {
+                source_file: file_path.to_string(),
+                target_file: if source.starts_with('.') {
+                    Some(source.clone())
+                } else {
+                    None
+                },
+                source_symbol: None,
+                target_symbol: Some(target_symbol),
+                dependency_type: dep_type.to_string(),
+                import_source: Some(source),
+                created_at: now,
+            });
             continue;
         }
     }
@@ -470,43 +786,80 @@ fn extract_python_dependencies(lines: &[&str], file_path: &str, now: i64) -> Vec
     let mut deps = Vec::new();
     for line in lines.iter() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
         if let Some(caps) = regex_capture(trimmed, &RE_PY_IMPORT) {
-            let source = if let Some(from) = caps.get(1) { from.as_str().to_string() } else { caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default() };
+            let source = if let Some(from) = caps.get(1) {
+                from.as_str().to_string()
+            } else {
+                caps.get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default()
+            };
             let target_symbol = source.split('.').last().unwrap_or(&source).to_string();
-            let dep_type = if source.starts_with('.') { "internal_import" } else { "import" };
-            deps.push(Dependency { source_file: file_path.to_string(), target_file: None, source_symbol: None,
-                target_symbol: Some(target_symbol), dependency_type: dep_type.to_string(),
-                import_source: Some(source), created_at: now });
+            let dep_type = if source.starts_with('.') {
+                "internal_import"
+            } else {
+                "import"
+            };
+            deps.push(Dependency {
+                source_file: file_path.to_string(),
+                target_file: None,
+                source_symbol: None,
+                target_symbol: Some(target_symbol),
+                dependency_type: dep_type.to_string(),
+                import_source: Some(source),
+                created_at: now,
+            });
             continue;
         }
     }
     deps
 }
 
-pub fn extract_dependencies(content: &str, file_path: &str, language: &str, now: i64) -> Vec<Dependency> {
+pub fn extract_dependencies(
+    content: &str,
+    file_path: &str,
+    language: &str,
+    now: i64,
+) -> Vec<Dependency> {
     let lines: Vec<&str> = content.lines().collect();
-    match language { "Rust" => extract_rust_dependencies(&lines, file_path, now), "TypeScript" => extract_typescript_dependencies(&lines, file_path, now), "Python" => extract_python_dependencies(&lines, file_path, now), _ => Vec::new() }
+    match language {
+        "Rust" => extract_rust_dependencies(&lines, file_path, now),
+        "TypeScript" => extract_typescript_dependencies(&lines, file_path, now),
+        "Python" => extract_python_dependencies(&lines, file_path, now),
+        _ => Vec::new(),
+    }
 }
 
 fn chunk_lines(content: &str) -> Vec<(usize, usize, String)> {
     let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() { return vec![]; }
+    if lines.is_empty() {
+        return vec![];
+    }
     let mut chunks = Vec::new();
     let mut start = 0usize;
     while start < lines.len() {
         let end = (start + CHUNK_LINES).min(lines.len());
         let text = lines[start..end].join("\n");
         chunks.push((start + 1, end, text));
-        if end == lines.len() { break; }
+        if end == lines.len() {
+            break;
+        }
         start = end - CHUNK_OVERLAP;
     }
     chunks
 }
 
 fn store_symbols(conn: &Connection, symbols: &[Symbol], ref_path: &str) -> AppResult<()> {
-    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![ref_path])
-        .map_err(|e| AppError::Provider(format!("failed to clear stale symbols for {ref_path}: {e}")))?;
+    conn.execute(
+        "DELETE FROM symbols WHERE file_path = ?1",
+        params![ref_path],
+    )
+    .map_err(|e| {
+        AppError::Provider(format!("failed to clear stale symbols for {ref_path}: {e}"))
+    })?;
     for sym in symbols {
         conn.execute(
             "INSERT INTO symbols (file_path, language, module_path, qualified_name, name, kind, start_line, end_line, visibility, signature, documentation, symbol_hash, import_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
@@ -517,8 +870,15 @@ fn store_symbols(conn: &Connection, symbols: &[Symbol], ref_path: &str) -> AppRe
 }
 
 fn store_dependencies(conn: &Connection, deps: &[Dependency], ref_path: &str) -> AppResult<()> {
-    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![ref_path])
-        .map_err(|e| AppError::Provider(format!("failed to clear stale dependencies for {ref_path}: {e}")))?;
+    conn.execute(
+        "DELETE FROM dependencies WHERE source_file = ?1",
+        params![ref_path],
+    )
+    .map_err(|e| {
+        AppError::Provider(format!(
+            "failed to clear stale dependencies for {ref_path}: {e}"
+        ))
+    })?;
     for dep in deps {
         conn.execute(
             "INSERT INTO dependencies (source_file, target_file, source_symbol, target_symbol, dependency_type, import_source, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -529,12 +889,26 @@ fn store_dependencies(conn: &Connection, deps: &[Dependency], ref_path: &str) ->
 }
 
 fn delete_indexed_file(conn: &Connection, rel_path: &str) -> AppResult<()> {
-    conn.execute("DELETE FROM symbols WHERE file_path = ?1", params![rel_path])
-        .map_err(|error| AppError::Provider(format!("failed to purge symbols for {rel_path}: {error}")))?;
-    conn.execute("DELETE FROM dependencies WHERE source_file = ?1", params![rel_path])
-        .map_err(|error| AppError::Provider(format!("failed to purge dependencies for {rel_path}: {error}")))?;
+    conn.execute(
+        "DELETE FROM symbols WHERE file_path = ?1",
+        params![rel_path],
+    )
+    .map_err(|error| {
+        AppError::Provider(format!("failed to purge symbols for {rel_path}: {error}"))
+    })?;
+    conn.execute(
+        "DELETE FROM dependencies WHERE source_file = ?1",
+        params![rel_path],
+    )
+    .map_err(|error| {
+        AppError::Provider(format!(
+            "failed to purge dependencies for {rel_path}: {error}"
+        ))
+    })?;
     conn.execute("DELETE FROM files WHERE path = ?1", params![rel_path])
-        .map_err(|error| AppError::Provider(format!("failed to purge indexed file {rel_path}: {error}")))?;
+        .map_err(|error| {
+            AppError::Provider(format!("failed to purge indexed file {rel_path}: {error}"))
+        })?;
     Ok(())
 }
 
@@ -576,41 +950,96 @@ pub(crate) fn purge_excluded_rows(
 pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<IndexStats> {
     let mut stats = IndexStats::default();
     stats.languages_detected = HashMap::new();
-    stats.last_index_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    stats.last_index_timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let policy = crate::workspace_scanner::WorkspacePathPolicy::new(workspace_root)
         .map_err(AppError::InvalidPath)?;
     purge_excluded_rows(conn, workspace_root, &policy)?;
-    let walker = WalkDir::new(workspace_root).into_iter().filter_entry(|entry| {
-        !policy.is_excluded(entry.path(), entry.file_type().is_dir())
-    });
+    let walker = WalkDir::new(workspace_root)
+        .into_iter()
+        .filter_entry(|entry| !policy.is_excluded(entry.path(), entry.file_type().is_dir()));
     for entry in walker.filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
-        if policy.is_excluded(path, false) { continue; }
-        let Ok(metadata) = entry.metadata() else { continue };
+        if policy.is_excluded(path, false) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         let file_size = metadata.len();
-        if file_size > MAX_FILE_BYTES { stats.files_skipped_size += 1; continue; }
+        if file_size > MAX_FILE_BYTES {
+            stats.files_skipped_size += 1;
+            continue;
+        }
         stats.files_scanned += 1;
-        let modified_at = metadata.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
-        let rel_path = path.strip_prefix(workspace_root).unwrap_or(path).to_string_lossy().to_string();
-        let existing: Option<(String, i64)> = conn.query_row("SELECT content_hash, modified_at FROM files WHERE path = ?1", params![rel_path],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).ok();
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let rel_path = path
+            .strip_prefix(workspace_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+        let existing: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT content_hash, modified_at FROM files WHERE path = ?1",
+                params![rel_path],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .ok();
         if let Some((ref existing_hash, _existing_modified)) = existing {
-            let Ok(bytes) = std::fs::read(path) else { stats.files_failed += 1; continue; };
-            if !is_probably_text(&bytes) { stats.files_skipped_binary += 1; continue; }
-            let Ok(content) = String::from_utf8(bytes) else { stats.files_failed += 1; continue; };
+            let Ok(bytes) = std::fs::read(path) else {
+                stats.files_failed += 1;
+                continue;
+            };
+            if !is_probably_text(&bytes) {
+                stats.files_skipped_binary += 1;
+                continue;
+            }
+            let Ok(content) = String::from_utf8(bytes) else {
+                stats.files_failed += 1;
+                continue;
+            };
             if hash_content(&content) == *existing_hash {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-                conn.execute("UPDATE files SET modified_at = ?1, indexed_at = ?2 WHERE path = ?3", params![modified_at, now, rel_path]).ok();
-                stats.files_skipped_unchanged += 1; continue;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                conn.execute(
+                    "UPDATE files SET modified_at = ?1, indexed_at = ?2 WHERE path = ?3",
+                    params![modified_at, now, rel_path],
+                )
+                .ok();
+                stats.files_skipped_unchanged += 1;
+                continue;
             }
         }
-        let Ok(bytes) = std::fs::read(path) else { stats.files_failed += 1; continue; };
-        if !is_probably_text(&bytes) { stats.files_skipped_binary += 1; continue; }
-        let Ok(content) = String::from_utf8(bytes) else { stats.files_failed += 1; continue; };
+        let Ok(bytes) = std::fs::read(path) else {
+            stats.files_failed += 1;
+            continue;
+        };
+        if !is_probably_text(&bytes) {
+            stats.files_skipped_binary += 1;
+            continue;
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
+            stats.files_failed += 1;
+            continue;
+        };
         let hash = hash_content(&content);
         let language = classify_language(path);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let line_count = content.lines().count() as i64;
         let symbols = extract_symbols(&content, &rel_path, language);
         let deps = extract_dependencies(&content, &rel_path, language, now);
@@ -623,9 +1052,20 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
         // missing chunks/symbols - and a later unchanged-hash check would
         // skip repairing it forever.
         let write_result: AppResult<()> = crate::database::in_transaction(conn, |tx| {
-            let file_id: i64 = if let Some(id) = tx.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
+            let file_id: i64 = if let Some(id) = tx
+                .query_row(
+                    "SELECT id FROM files WHERE path = ?1",
+                    params![rel_path],
+                    |row| row.get::<_, i64>(0),
+                )
+                .ok()
+            {
                 tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![id])
-                    .map_err(|e| AppError::Provider(format!("failed to clear stale chunks for {rel_path}: {e}")))?;
+                    .map_err(|e| {
+                        AppError::Provider(format!(
+                            "failed to clear stale chunks for {rel_path}: {e}"
+                        ))
+                    })?;
                 id
             } else {
                 tx.execute("INSERT INTO files (path, content_hash, indexed_at, file_size, modified_at, language, line_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -650,7 +1090,10 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
 
         match write_result {
             Ok(()) => {
-                *stats.languages_detected.entry(language.to_string()).or_insert(0) += 1;
+                *stats
+                    .languages_detected
+                    .entry(language.to_string())
+                    .or_insert(0) += 1;
                 stats.total_bytes_indexed += file_size;
                 stats.symbols_extracted += symbols.len() as u64;
                 stats.dependencies_extracted += deps.len() as u64;
@@ -666,9 +1109,16 @@ pub fn index_workspace(conn: &Connection, workspace_root: &Path) -> AppResult<In
     Ok(stats)
 }
 
-pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &str) -> AppResult<IndexStats> {
+pub fn reindex_single_file(
+    conn: &Connection,
+    workspace_root: &Path,
+    rel_path: &str,
+) -> AppResult<IndexStats> {
     let mut stats = IndexStats::default();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     let policy = crate::workspace_scanner::WorkspacePathPolicy::new(workspace_root)
         .map_err(AppError::InvalidPath)?;
     if policy.is_excluded(&workspace_root.join(rel_path), false) {
@@ -697,7 +1147,12 @@ pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &
     let language = classify_language(&full_path);
     let line_count = content.lines().count() as i64;
     let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
-    let modified_at = std::fs::metadata(&full_path).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let modified_at = std::fs::metadata(&full_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let symbols = extract_symbols(&content, rel_path, language);
     let deps = extract_dependencies(&content, rel_path, language, now);
     let chunks = chunk_lines(&content);
@@ -707,9 +1162,21 @@ pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &
     // in one transaction, so a mid-write failure never leaves this file
     // half updated (e.g. purged symbols with a still-fresh content_hash).
     let write_result: AppResult<()> = crate::database::in_transaction(conn, |tx| {
-        tx.execute("DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?1)", params![rel_path])
-            .map_err(|e| AppError::Provider(format!("failed to clear stale chunks for {rel_path}: {e}")))?;
-        let file_id: i64 = if let Some(id) = tx.query_row("SELECT id FROM files WHERE path = ?1", params![rel_path], |row| row.get::<_, i64>(0)).ok() {
+        tx.execute(
+            "DELETE FROM chunks WHERE file_id IN (SELECT id FROM files WHERE path = ?1)",
+            params![rel_path],
+        )
+        .map_err(|e| {
+            AppError::Provider(format!("failed to clear stale chunks for {rel_path}: {e}"))
+        })?;
+        let file_id: i64 = if let Some(id) = tx
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![rel_path],
+                |row| row.get::<_, i64>(0),
+            )
+            .ok()
+        {
             tx.execute("UPDATE files SET content_hash = ?1, indexed_at = ?2, file_size = ?3, modified_at = ?4, language = ?5, line_count = ?6 WHERE id = ?7",
                 params![hash, now, file_size as i64, modified_at, language, line_count, id])
                 .map_err(|e| AppError::Provider(format!("failed to update file row for {rel_path}: {e}")))?;
@@ -749,8 +1216,12 @@ pub fn reindex_single_file(conn: &Connection, workspace_root: &Path, rel_path: &
 /// Exports the full workspace graph as JSON at .neuralforge/neuralforge-graph.json
 /// for external tool consumption without requiring the full Tauri runtime.
 pub fn export_workspace_graph(conn: &Connection, workspace_root: &Path) -> AppResult<()> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let mut stmt = conn.prepare("SELECT path, language, line_count, modified_at FROM files ORDER BY path")
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let mut stmt = conn
+        .prepare("SELECT path, language, line_count, modified_at FROM files ORDER BY path")
         .map_err(|e| AppError::Provider(format!("export query failed: {e}")))?;
     let files: Vec<serde_json::Value> = stmt.query_map([], |row| {
         Ok(serde_json::json!({"path": row.get::<_, String>(0)?, "language": row.get::<_, String>(1)?, "line_count": row.get::<_, i64>(2)?, "modified_at": row.get::<_, i64>(3)?}))
@@ -770,10 +1241,14 @@ pub fn export_workspace_graph(conn: &Connection, workspace_root: &Path) -> AppRe
 
     let graph = serde_json::json!({"exported_at": now, "files": files, "symbols": symbols, "dependencies": deps});
     let out_dir = workspace_root.join(".neuralforge");
-    std::fs::create_dir_all(&out_dir).map_err(|e| AppError::Provider(format!("failed to create export dir: {e}")))?;
-    std::fs::write(out_dir.join("neuralforge-graph.json"),
-        serde_json::to_string_pretty(&graph).map_err(|e| AppError::Provider(format!("failed to serialize graph: {e}")))?,
-    ).map_err(|e| AppError::Provider(format!("failed to write graph file: {e}")))?;
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| AppError::Provider(format!("failed to create export dir: {e}")))?;
+    std::fs::write(
+        out_dir.join("neuralforge-graph.json"),
+        serde_json::to_string_pretty(&graph)
+            .map_err(|e| AppError::Provider(format!("failed to serialize graph: {e}")))?,
+    )
+    .map_err(|e| AppError::Provider(format!("failed to write graph file: {e}")))?;
     tracing::info!(target: "database", event = "graph_exported", path = %out_dir.join("neuralforge-graph.json").display());
     Ok(())
 }
@@ -781,189 +1256,341 @@ pub fn export_workspace_graph(conn: &Connection, workspace_root: &Path) -> AppRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn chunk_lines_splits_with_overlap() {
-        let content = (1..=100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    #[test]
+    fn chunk_lines_splits_with_overlap() {
+        let content = (1..=100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_lines(&content);
-        assert!(chunks.len() > 1); assert_eq!(chunks[0].0, 1); assert_eq!(chunks[0].1, CHUNK_LINES);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks[0].0, 1);
+        assert_eq!(chunks[0].1, CHUNK_LINES);
         assert_eq!(chunks[1].0, CHUNK_LINES - CHUNK_OVERLAP + 1);
     }
-    #[test] fn chunk_lines_handles_short_content() {
+    #[test]
+    fn chunk_lines_handles_short_content() {
         let chunks = chunk_lines("just one line");
-        assert_eq!(chunks.len(), 1); assert_eq!(chunks[0].0, 1); assert_eq!(chunks[0].1, 1);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].0, 1);
+        assert_eq!(chunks[0].1, 1);
     }
-    #[test] fn is_probably_text_rejects_null_bytes() {
-        assert!(is_probably_text(b"hello world")); assert!(!is_probably_text(b"hello\0world"));
+    #[test]
+    fn is_probably_text_rejects_null_bytes() {
+        assert!(is_probably_text(b"hello world"));
+        assert!(!is_probably_text(b"hello\0world"));
     }
-    #[test] fn classify_language_returns_correct_language() {
+    #[test]
+    fn classify_language_returns_correct_language() {
         assert_eq!(classify_language(Path::new("main.rs")), "Rust");
         assert_eq!(classify_language(Path::new("app.ts")), "TypeScript");
         assert_eq!(classify_language(Path::new("script.py")), "Python");
     }
-    #[test] fn module_path_from_relative_path() {
-        assert_eq!(module_path_from_file_path("src/database/indexer.rs"), "database::indexer");
+    #[test]
+    fn module_path_from_relative_path() {
+        assert_eq!(
+            module_path_from_file_path("src/database/indexer.rs"),
+            "database::indexer"
+        );
         assert_eq!(module_path_from_file_path("src/main.rs"), "main");
     }
-    #[test] fn rust_function_extraction() {
+    #[test]
+    fn rust_function_extraction() {
         let content = "/// Calculate.\npub fn add(a: i32) -> i32 { a }\nfn priv() {}\n";
         let syms = extract_symbols(content, "src/lib.rs", "Rust");
-        assert_eq!(syms.len(), 2); assert_eq!(syms[0].name, "add"); assert_eq!(syms[0].visibility.as_deref(), Some("pub"));
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].name, "add");
+        assert_eq!(syms[0].visibility.as_deref(), Some("pub"));
         assert_eq!(syms[1].name, "priv");
     }
-    #[test] fn rust_struct_extraction() {
+    #[test]
+    fn rust_struct_extraction() {
         let content = "pub struct Config {}\nenum Status { A, B }";
         let syms = extract_symbols(content, "src/config.rs", "Rust");
-        assert!(syms.iter().any(|s| s.name == "Config" && s.kind == "struct"));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "Config" && s.kind == "struct"));
         assert!(syms.iter().any(|s| s.name == "Status" && s.kind == "enum"));
     }
-    #[test] fn rust_trait_and_impl_extraction() {
+    #[test]
+    fn rust_trait_and_impl_extraction() {
         let content = "pub trait R { fn run(&self); }\nimpl R for S { fn run(&self) {} }\n";
         let syms = extract_symbols(content, "src/lib.rs", "Rust");
         assert!(syms.iter().any(|s| s.name == "R" && s.kind == "trait"));
         assert!(syms.iter().any(|s| s.name == "impl S" && s.kind == "impl"));
     }
-    #[test] fn rust_import_extraction_includes_crate() {
-        let content = "use serde::Serialize;\nuse crate::database::indexer;\nuse std::collections::HashMap;";
+    #[test]
+    fn rust_import_extraction_includes_crate() {
+        let content =
+            "use serde::Serialize;\nuse crate::database::indexer;\nuse std::collections::HashMap;";
         let syms = extract_symbols(content, "src/lib.rs", "Rust");
-        assert!(syms.iter().any(|s| s.import_source.as_deref() == Some("serde::Serialize")));
-        assert!(syms.iter().any(|s| s.import_source.as_deref() == Some("crate::database::indexer")));
+        assert!(syms
+            .iter()
+            .any(|s| s.import_source.as_deref() == Some("serde::Serialize")));
+        assert!(syms
+            .iter()
+            .any(|s| s.import_source.as_deref() == Some("crate::database::indexer")));
     }
-    #[test] fn typescript_function_extraction() {
+    #[test]
+    fn typescript_function_extraction() {
         let content = "export function greet(n: string): string { return n; }\nfunction h() {}\n";
         let syms = extract_symbols(content, "src/hello.ts", "TypeScript");
-        assert_eq!(syms.len(), 2); assert_eq!(syms[0].name, "greet"); assert_eq!(syms[0].visibility.as_deref(), Some("export"));
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].name, "greet");
+        assert_eq!(syms[0].visibility.as_deref(), Some("export"));
     }
-    #[test] fn typescript_class_and_interface_extraction() {
-        let content = "export interface U { n: string; }\nexport class A implements U { n = \"a\"; }\n";
+    #[test]
+    fn typescript_class_and_interface_extraction() {
+        let content =
+            "export interface U { n: string; }\nexport class A implements U { n = \"a\"; }\n";
         let syms = extract_symbols(content, "src/types.ts", "TypeScript");
         assert!(syms.iter().any(|s| s.name == "U" && s.kind == "interface"));
         assert!(syms.iter().any(|s| s.name == "A" && s.kind == "class"));
     }
-    #[test] fn typescript_import_single_and_double_quotes() {
+    #[test]
+    fn typescript_import_single_and_double_quotes() {
         let content_dq = r#"import { invoke } from "@tauri-apps/api/core";"#;
         let content_sq = r#"import { invoke } from '@tauri-apps/api/core';"#;
         let syms1 = extract_symbols(content_dq, "src/lib.ts", "TypeScript");
         let syms2 = extract_symbols(content_sq, "src/lib.ts", "TypeScript");
-        assert!(syms1.iter().any(|s| s.import_source.as_deref() == Some("@tauri-apps/api/core")));
-        assert!(syms2.iter().any(|s| s.import_source.as_deref() == Some("@tauri-apps/api/core")));
+        assert!(syms1
+            .iter()
+            .any(|s| s.import_source.as_deref() == Some("@tauri-apps/api/core")));
+        assert!(syms2
+            .iter()
+            .any(|s| s.import_source.as_deref() == Some("@tauri-apps/api/core")));
     }
-    #[test] fn typescript_export_from_extraction() {
+    #[test]
+    fn typescript_export_from_extraction() {
         let content = r#"export { greet } from "./greet";"#;
         let syms = extract_symbols(content, "src/index.ts", "TypeScript");
-        assert!(syms.iter().any(|s| s.import_source.as_deref() == Some("./greet") && s.kind == "import"));
+        assert!(syms
+            .iter()
+            .any(|s| s.import_source.as_deref() == Some("./greet") && s.kind == "import"));
     }
-    #[test] fn python_function_and_class_extraction() {
+    #[test]
+    fn python_function_and_class_extraction() {
         let content = "def greet(name):\n    return name\n\nclass U:\n    def __init__(self):\n        pass\n";
         let syms = extract_symbols(content, "src/main.py", "Python");
         assert_eq!(syms.len(), 3);
-        assert!(syms.iter().any(|s| s.name == "greet" && s.kind == "function"));
+        assert!(syms
+            .iter()
+            .any(|s| s.name == "greet" && s.kind == "function"));
         assert!(syms.iter().any(|s| s.name == "U" && s.kind == "class"));
     }
-    #[test] fn python_import_extraction() {
+    #[test]
+    fn python_import_extraction() {
         let content = "import os\nfrom typing import List";
         let syms = extract_symbols(content, "src/main.py", "Python");
         assert!(syms.iter().any(|s| s.kind == "import"));
     }
-    #[test] fn unknown_language_returns_empty() {
+    #[test]
+    fn unknown_language_returns_empty() {
         let syms = extract_symbols("fn main() {}", "main.json", "JSON");
         assert!(syms.is_empty());
     }
-    #[test] fn rust_dependency_extraction() {
+    #[test]
+    fn rust_dependency_extraction() {
         let content = "use serde::Serialize;\nuse crate::database::indexer;\nmod helpers;\nuse std::collections::HashMap;";
         let deps = extract_dependencies(content, "src/lib.rs", "Rust", 1000);
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("serde::Serialize") && d.dependency_type == "import"));
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("crate::database::indexer") && d.dependency_type == "internal_import"));
-        assert!(deps.iter().any(|d| d.dependency_type == "file_reference" && d.target_symbol.as_deref() == Some("mod helpers")));
+        assert!(deps
+            .iter()
+            .any(|d| d.import_source.as_deref() == Some("serde::Serialize")
+                && d.dependency_type == "import"));
+        assert!(deps.iter().any(|d| d.import_source.as_deref()
+            == Some("crate::database::indexer")
+            && d.dependency_type == "internal_import"));
+        assert!(deps.iter().any(|d| d.dependency_type == "file_reference"
+            && d.target_symbol.as_deref() == Some("mod helpers")));
     }
-    #[test] fn typescript_dependency_extraction() {
+    #[test]
+    fn typescript_dependency_extraction() {
         let content = r#"import { invoke } from "@tauri-apps/api/core";
 import { greet } from './greet';
 export { type } from './types';"#;
         let deps = extract_dependencies(content, "src/index.ts", "TypeScript", 1000);
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("@tauri-apps/api/core") && d.dependency_type == "import"));
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("./greet") && d.dependency_type == "internal_import"));
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("./types") && d.dependency_type == "internal_import"));
+        assert!(deps.iter().any(
+            |d| d.import_source.as_deref() == Some("@tauri-apps/api/core")
+                && d.dependency_type == "import"
+        ));
+        assert!(deps
+            .iter()
+            .any(|d| d.import_source.as_deref() == Some("./greet")
+                && d.dependency_type == "internal_import"));
+        assert!(deps
+            .iter()
+            .any(|d| d.import_source.as_deref() == Some("./types")
+                && d.dependency_type == "internal_import"));
     }
-    #[test] fn python_dependency_extraction() {
+    #[test]
+    fn python_dependency_extraction() {
         let content = "import os\nfrom typing import List\nfrom .helpers import parse";
         let deps = extract_dependencies(content, "src/main.py", "Python", 1000);
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("os") && d.dependency_type == "import"));
-        assert!(deps.iter().any(|d| d.import_source.as_deref() == Some("typing")));
+        assert!(deps
+            .iter()
+            .any(|d| d.import_source.as_deref() == Some("os") && d.dependency_type == "import"));
+        assert!(deps
+            .iter()
+            .any(|d| d.import_source.as_deref() == Some("typing")));
     }
-    #[test] fn dependency_no_duplicates_on_reindex() {
+    #[test]
+    fn dependency_no_duplicates_on_reindex() {
         let content = "use serde::Serialize;\nuse std::collections::HashMap;";
         let deps = extract_dependencies(content, "src/lib.rs", "Rust", 1000);
         assert_eq!(deps.len(), 2);
     }
-    #[test] fn index_workspace_indexes_and_skips_unchanged() {
+    #[test]
+    fn index_workspace_indexes_and_skips_unchanged() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_indexer_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("main.rs"), "fn main() {\n    println!(\"hi\");\n}\n").unwrap();
+        std::fs::write(
+            dir.join("main.rs"),
+            "fn main() {\n    println!(\"hi\");\n}\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(dir.join("node_modules")).unwrap();
         std::fs::write(dir.join("node_modules").join("skip.js"), "x").unwrap();
-        { let conn = crate::database::open_for_workspace(&dir).unwrap();
-          let stats1 = index_workspace(&conn, &dir).unwrap();
-          assert_eq!(stats1.files_indexed, 1); assert_eq!(stats1.symbols_extracted, 1);
-          let stats2 = index_workspace(&conn, &dir).unwrap();
-          assert_eq!(stats2.files_indexed, 0); assert_eq!(stats2.files_skipped_unchanged, 1);
-        } std::fs::remove_dir_all(&dir).unwrap();
+        {
+            let conn = crate::database::open_for_workspace(&dir).unwrap();
+            let stats1 = index_workspace(&conn, &dir).unwrap();
+            assert_eq!(stats1.files_indexed, 1);
+            assert_eq!(stats1.symbols_extracted, 1);
+            let stats2 = index_workspace(&conn, &dir).unwrap();
+            assert_eq!(stats2.files_indexed, 0);
+            assert_eq!(stats2.files_skipped_unchanged, 1);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test] fn index_workspace_reindexes_after_file_change() {
-        let mut dir = std::env::temp_dir(); let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        dir.push(format!("neuralforge_indexer_reindex_{nanos}")); std::fs::create_dir_all(&dir).unwrap();
-        let fp = dir.join("lib.rs"); std::fs::write(&fp, "pub fn a() -> i32 { 1 }").unwrap();
+    #[test]
+    fn index_workspace_reindexes_after_file_change() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("neuralforge_indexer_reindex_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fp = dir.join("lib.rs");
+        std::fs::write(&fp, "pub fn a() -> i32 { 1 }").unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         assert_eq!(index_workspace(&conn, &dir).unwrap().files_indexed, 1);
         std::thread::sleep(std::time::Duration::from_millis(100));
         std::fs::write(&fp, "pub fn b() -> i32 { 2 }").unwrap();
         assert_eq!(index_workspace(&conn, &dir).unwrap().files_indexed, 1);
-        drop(conn); std::fs::remove_dir_all(&dir).ok();
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
-    #[test] fn index_workspace_extracts_symbols_and_stores_in_db() {
-        let mut dir = std::env::temp_dir(); let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        dir.push(format!("neuralforge_sym_db_{nanos}")); std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lib.rs"), "pub fn compute() -> i32 { 42 }\nfn hidden() {}").unwrap();
-        std::fs::write(dir.join("greet.ts"), "export function greet(n: string): string { return n; }").unwrap();
+    #[test]
+    fn index_workspace_extracts_symbols_and_stores_in_db() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("neuralforge_sym_db_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.rs"),
+            "pub fn compute() -> i32 { 42 }\nfn hidden() {}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("greet.ts"),
+            "export function greet(n: string): string { return n; }",
+        )
+        .unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         let stats = index_workspace(&conn, &dir).unwrap();
         assert_eq!(stats.symbols_extracted, 3, "2 Rust fns + 1 TS fn");
-        let cnt: i64 = conn.query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0)).unwrap();
-        assert_eq!(cnt, 3); drop(conn); std::fs::remove_dir_all(&dir).ok();
+        let cnt: i64 = conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cnt, 3);
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
-    #[test] fn index_workspace_extracts_dependencies_and_stores_in_db() {
-        let mut dir = std::env::temp_dir(); let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        dir.push(format!("neuralforge_dep_db_{nanos}")); std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lib.rs"), "use serde::Serialize;\nuse crate::database::indexer;\nmod helpers;\npub fn run() {}").unwrap();
-        std::fs::write(dir.join("index.ts"), r#"import { invoke } from "@tauri-apps/api/core";import { greet } from './utils';"#).unwrap();
+    #[test]
+    fn index_workspace_extracts_dependencies_and_stores_in_db() {
+        let mut dir = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        dir.push(format!("neuralforge_dep_db_{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lib.rs"),
+            "use serde::Serialize;\nuse crate::database::indexer;\nmod helpers;\npub fn run() {}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("index.ts"),
+            r#"import { invoke } from "@tauri-apps/api/core";import { greet } from './utils';"#,
+        )
+        .unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         let stats = index_workspace(&conn, &dir).unwrap();
         assert!(stats.dependencies_extracted > 0);
-        let dep_cnt: i64 = conn.query_row("SELECT COUNT(*) FROM dependencies", [], |r| r.get(0)).unwrap();
+        let dep_cnt: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dependencies", [], |r| r.get(0))
+            .unwrap();
         assert!(dep_cnt > 0);
-        let import_cnt: i64 = conn.query_row("SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'import'", [], |r| r.get(0)).unwrap();
+        let import_cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'import'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(import_cnt > 0);
-        let internal_cnt: i64 = conn.query_row("SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'internal_import'", [], |r| r.get(0)).unwrap();
+        let internal_cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'internal_import'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert!(internal_cnt > 0);
-        let file_ref_cnt: i64 = conn.query_row("SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'file_reference'", [], |r| r.get(0)).unwrap();
+        let file_ref_cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dependencies WHERE dependency_type = 'file_reference'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(file_ref_cnt, 1);
-        drop(conn); std::fs::remove_dir_all(&dir).ok();
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
     #[test]
     fn secret_files_never_enter_files_chunks_or_fts() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_secret_index_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env"), "NF_ENV_SENTINEL=secret").unwrap();
         std::fs::write(dir.join(".npmrc"), "//registry/:_authToken=NF_NPM_SENTINEL").unwrap();
         std::fs::write(dir.join("private.pem"), "NF_PEM_SENTINEL").unwrap();
-        std::fs::write(dir.join("credentials.json"), r#"{"token":"NF_JSON_SENTINEL"}"#).unwrap();
+        std::fs::write(
+            dir.join("credentials.json"),
+            r#"{"token":"NF_JSON_SENTINEL"}"#,
+        )
+        .unwrap();
         std::fs::write(dir.join("main.rs"), "pub fn safe() {}").unwrap();
 
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         index_workspace(&conn, &dir).unwrap();
-        let files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0)).unwrap();
+        let files: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .unwrap();
         let secret_chunks: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM chunks WHERE content LIKE '%NF_%_SENTINEL%'",
@@ -988,7 +1615,10 @@ export { type } from './types';"#;
     #[test]
     fn historical_secret_rows_are_purged_without_touching_sessions() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_secret_purge_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env"), "NF_HISTORICAL_SENTINEL=secret").unwrap();
@@ -1017,7 +1647,11 @@ export { type } from './types';"#;
         index_workspace(&conn, &dir).unwrap();
 
         let secret_files: i64 = conn
-            .query_row("SELECT COUNT(*) FROM files WHERE path = '.env'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = '.env'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         let secret_fts: i64 = conn
             .query_row(
@@ -1027,7 +1661,11 @@ export { type } from './types';"#;
             )
             .unwrap();
         let sessions: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sessions WHERE id = 'session-1'", [], |row| row.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = 'session-1'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(secret_files, 0);
         assert_eq!(secret_fts, 0);
@@ -1060,7 +1698,10 @@ export { type } from './types';"#;
     #[test]
     fn index_workspace_rolls_back_all_writes_when_symbol_insert_fails() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_idx_rollback_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("main.rs"), "pub fn a() -> i32 { 1 }\n").unwrap();
@@ -1071,17 +1712,26 @@ export { type } from './types';"#;
             .unwrap();
 
         let stats = index_workspace(&conn, &dir).unwrap();
-        assert_eq!(stats.files_indexed, 0, "the transaction must not count as indexed");
+        assert_eq!(
+            stats.files_indexed, 0,
+            "the transaction must not count as indexed"
+        );
         assert_eq!(stats.files_failed, 1);
 
         let file_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(file_count, 0, "files row must roll back with the rest of the transaction");
+        assert_eq!(
+            file_count, 0,
+            "files row must roll back with the rest of the transaction"
+        );
         let chunk_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(chunk_count, 0, "chunks written earlier in the same transaction must roll back too");
+        assert_eq!(
+            chunk_count, 0,
+            "chunks written earlier in the same transaction must roll back too"
+        );
 
         // Repair and retry: the file must be fully (not partially) indexed.
         conn.execute("ALTER TABLE symbols_sabotaged RENAME TO symbols", [])
@@ -1105,11 +1755,17 @@ export { type } from './types';"#;
     #[test]
     fn index_workspace_rolls_back_all_writes_when_chunk_insert_fails() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_idx_chunk_rollback_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         // Content long enough to produce more than one chunk.
-        let content = (1..=100).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (1..=100)
+            .map(|i| format!("// line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         std::fs::write(dir.join("notes.txt"), &content).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
         conn.execute("ALTER TABLE chunks RENAME TO chunks_sabotaged", [])
@@ -1121,7 +1777,10 @@ export { type } from './types';"#;
         let file_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(file_count, 0, "the new files row must not survive a failed chunk insert");
+        assert_eq!(
+            file_count, 0,
+            "the new files row must not survive a failed chunk insert"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -1130,7 +1789,10 @@ export { type } from './types';"#;
     #[test]
     fn reindex_single_file_rolls_back_all_writes_on_symbol_insert_failure() {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_reindex_rollback_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("lib.rs"), "pub fn a() -> i32 { 1 }\n").unwrap();
@@ -1138,7 +1800,11 @@ export { type } from './types';"#;
         assert_eq!(index_workspace(&conn, &dir).unwrap().files_indexed, 1);
 
         // Change the file, then sabotage symbols so the reindex write fails.
-        std::fs::write(dir.join("lib.rs"), "pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n").unwrap();
+        std::fs::write(
+            dir.join("lib.rs"),
+            "pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n",
+        )
+        .unwrap();
         conn.execute("ALTER TABLE symbols RENAME TO symbols_sabotaged", [])
             .unwrap();
 
@@ -1150,19 +1816,33 @@ export { type } from './types';"#;
         // untouched - a failed reindex must not corrupt the last-known-good
         // state.
         let hash: String = conn
-            .query_row("SELECT content_hash FROM files WHERE path = 'lib.rs'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content_hash FROM files WHERE path = 'lib.rs'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_ne!(hash, hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n"),
-            "content_hash must not advance to the new content when its write rolled back");
+        assert_ne!(
+            hash,
+            hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n"),
+            "content_hash must not advance to the new content when its write rolled back"
+        );
 
         conn.execute("ALTER TABLE symbols_sabotaged RENAME TO symbols", [])
             .unwrap();
         let stats2 = reindex_single_file(&conn, &dir, "lib.rs").unwrap();
         assert_eq!(stats2.files_indexed, 1);
         let hash2: String = conn
-            .query_row("SELECT content_hash FROM files WHERE path = 'lib.rs'", [], |r| r.get(0))
+            .query_row(
+                "SELECT content_hash FROM files WHERE path = 'lib.rs'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(hash2, hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n"));
+        assert_eq!(
+            hash2,
+            hash_content("pub fn a() -> i32 { 1 }\npub fn b() -> i32 { 2 }\n")
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

@@ -11,14 +11,22 @@ fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if !output.status.success() {
-        let msg = if stderr.is_empty() { stdout.clone() } else { stderr };
+        let msg = if stderr.is_empty() {
+            stdout.clone()
+        } else {
+            stderr
+        };
         if msg.contains("not a git repository") || msg.contains("fatal:") {
             return Err(format!("Repository not initialized: {msg}"));
         }
         return Err(format!("Git error: {msg}"));
     }
 
-    Ok(if stdout.is_empty() { "(no changes)".to_string() } else { stdout })
+    Ok(if stdout.is_empty() {
+        "(no changes)".to_string()
+    } else {
+        stdout
+    })
 }
 
 /// Returns the short-form git status (equivalent to `git status --short`).

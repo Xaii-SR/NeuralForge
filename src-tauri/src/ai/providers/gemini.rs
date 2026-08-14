@@ -88,10 +88,18 @@ impl GeminiProvider {
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .map_err(|e| AppError::Provider(format!("Gemini endpoint unreachable: {}", self.redact_key(e))))?;
+            .map_err(|e| {
+                AppError::Provider(format!(
+                    "Gemini endpoint unreachable: {}",
+                    self.redact_key(e)
+                ))
+            })?;
 
         if !resp.status().is_success() {
-            return Err(AppError::Provider(format!("Gemini returned status {}", resp.status())));
+            return Err(AppError::Provider(format!(
+                "Gemini returned status {}",
+                resp.status()
+            )));
         }
 
         let body: Value = resp
@@ -105,7 +113,11 @@ impl GeminiProvider {
             .map(|arr| {
                 arr.iter()
                     .map(|m| GeminiModel {
-                        name: m.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                        name: m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
                         display_name: m
                             .get("displayName")
                             .and_then(|v| v.as_str())
@@ -167,13 +179,18 @@ impl GeminiProvider {
 
         let resp = self
             .client
-            .post(format!("{}/models/{model}:streamGenerateContent", self.base_url))
+            .post(format!(
+                "{}/models/{model}:streamGenerateContent",
+                self.base_url
+            ))
             .query(&[("alt", "sse"), ("key", &self.api_key)])
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
-            .map_err(|e| AppError::Provider(format!("chat request failed: {}", self.redact_key(e))))?;
+            .map_err(|e| {
+                AppError::Provider(format!("chat request failed: {}", self.redact_key(e)))
+            })?;
 
         if !resp.status().is_success() {
             return Err(AppError::Provider(format!(
@@ -220,7 +237,11 @@ impl GeminiProvider {
                                     }
                                 }
                             }
-                            if candidate.get("finishReason").and_then(|v| v.as_str()).is_some() {
+                            if candidate
+                                .get("finishReason")
+                                .and_then(|v| v.as_str())
+                                .is_some()
+                            {
                                 on_token("", true);
                             }
                         }
@@ -250,13 +271,19 @@ mod tests {
             "https://generativelanguage.googleapis.com/v1beta/".to_string(),
             "test-key".to_string(),
         );
-        assert_eq!(provider.base_url, "https://generativelanguage.googleapis.com/v1beta");
+        assert_eq!(
+            provider.base_url,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
     }
 
     #[test]
     fn with_default_base_url_points_at_the_real_api() {
         let provider = GeminiProvider::with_default_base_url("test-key".to_string());
-        assert_eq!(provider.base_url, "https://generativelanguage.googleapis.com/v1beta");
+        assert_eq!(
+            provider.base_url,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
     }
 
     #[test]
@@ -286,7 +313,10 @@ mod tests {
             !msg.contains("SECRET_TEST_VALUE_LEAK_CHECK_12345"),
             "error message leaked the raw API key: {msg}"
         );
-        assert!(msg.contains("[REDACTED]"), "expected a redaction marker in: {msg}");
+        assert!(
+            msg.contains("[REDACTED]"),
+            "expected a redaction marker in: {msg}"
+        );
     }
 
     /// Requires a real Gemini API key with quota. Not run by default.

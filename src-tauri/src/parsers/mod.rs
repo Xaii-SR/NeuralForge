@@ -25,7 +25,9 @@ pub struct ParserRegistry {
 
 impl ParserRegistry {
     pub fn new() -> Self {
-        Self { parsers: Vec::new() }
+        Self {
+            parsers: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, parser: Box<dyn FileParser>) {
@@ -33,6 +35,9 @@ impl ParserRegistry {
     }
 
     pub fn find(&self, extension: &str) -> Option<&dyn FileParser> {
-        self.parsers.iter().find(|p| p.supports(extension)).map(|p| p.as_ref())
+        self.parsers
+            .iter()
+            .find(|p| p.supports(extension))
+            .map(|p| p.as_ref())
     }
 }

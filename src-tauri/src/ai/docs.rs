@@ -33,16 +33,28 @@ fn validate_url(url_str: &str) -> Result<url::Url, String> {
             || host_lower == "::1"
             || host_lower.starts_with("10.")
             || host_lower.starts_with("192.168.")
-            || host_lower.starts_with("172.16.") || host_lower.starts_with("172.17.") || host_lower.starts_with("172.18.")
-            || host_lower.starts_with("172.19.") || host_lower.starts_with("172.20.") || host_lower.starts_with("172.21.")
-            || host_lower.starts_with("172.22.") || host_lower.starts_with("172.23.") || host_lower.starts_with("172.24.")
-            || host_lower.starts_with("172.25.") || host_lower.starts_with("172.26.") || host_lower.starts_with("172.27.")
-            || host_lower.starts_with("172.28.") || host_lower.starts_with("172.29.") || host_lower.starts_with("172.30.")
+            || host_lower.starts_with("172.16.")
+            || host_lower.starts_with("172.17.")
+            || host_lower.starts_with("172.18.")
+            || host_lower.starts_with("172.19.")
+            || host_lower.starts_with("172.20.")
+            || host_lower.starts_with("172.21.")
+            || host_lower.starts_with("172.22.")
+            || host_lower.starts_with("172.23.")
+            || host_lower.starts_with("172.24.")
+            || host_lower.starts_with("172.25.")
+            || host_lower.starts_with("172.26.")
+            || host_lower.starts_with("172.27.")
+            || host_lower.starts_with("172.28.")
+            || host_lower.starts_with("172.29.")
+            || host_lower.starts_with("172.30.")
             || host_lower.starts_with("172.31.")
             || host_lower.starts_with("169.254.")
             || host_lower == "[::1]"
         {
-            return Err("SSRF blocked: requests to internal/private networks are not allowed".to_string());
+            return Err(
+                "SSRF blocked: requests to internal/private networks are not allowed".to_string(),
+            );
         }
     }
     Ok(parsed)
@@ -75,8 +87,7 @@ pub async fn fetch_and_cache_doc(name: String, url: String) -> Result<String, St
         .map_err(|e| format!("Failed to create docs directory: {e}"))?;
 
     let file_path = output_dir.join(format!("{safe_name}.md"));
-    std::fs::write(&file_path, &markdown)
-        .map_err(|e| format!("Failed to write doc file: {e}"))?;
+    std::fs::write(&file_path, &markdown).map_err(|e| format!("Failed to write doc file: {e}"))?;
 
     let path_str = file_path.to_string_lossy().to_string();
 
@@ -105,8 +116,8 @@ pub fn list_cached_docs(state: State<'_, AppState>) -> Result<Vec<String>, Strin
         return Ok(vec![]);
     }
     let mut names = Vec::new();
-    let entries = std::fs::read_dir(&docs_dir)
-        .map_err(|e| format!("Failed to read docs dir: {e}"))?;
+    let entries =
+        std::fs::read_dir(&docs_dir).map_err(|e| format!("Failed to read docs dir: {e}"))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("Dir entry error: {e}"))?;
         let path = entry.path();
@@ -129,7 +140,10 @@ pub fn read_cached_doc(state: State<'_, AppState>, name: String) -> Result<Strin
         .map_err(|_| "workspace state lock poisoned".to_string())?
         .clone()
         .ok_or_else(|| "no workspace open".to_string())?;
-    let file_path = root.join(".neuralforge").join("docs").join(format!("{safe_name}.md"));
+    let file_path = root
+        .join(".neuralforge")
+        .join("docs")
+        .join(format!("{safe_name}.md"));
     std::fs::read_to_string(&file_path)
         .map_err(|e| format!("Failed to read doc '{}': {}", safe_name, e))
 }

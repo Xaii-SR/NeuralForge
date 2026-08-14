@@ -80,7 +80,8 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
   }, []);
 
   useEffect(() => {
-    loadSettings();
+    const initial = window.setTimeout(loadSettings, 0);
+    return () => window.clearTimeout(initial);
   }, [loadSettings]);
 
   useEffect(() => {

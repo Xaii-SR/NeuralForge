@@ -167,7 +167,7 @@ export function useInlinePrompt() {
       resolveRef.current(result);
       resolveRef.current = null;
     }
-  }, [state.streamedText, state.originalText, state.filePath, state.documentVersion, state.workspaceGeneration]);
+  }, [state.streamedText, state.originalText]);
 
   const rejectChanges = useCallback(() => {
     cancelActiveRequest();

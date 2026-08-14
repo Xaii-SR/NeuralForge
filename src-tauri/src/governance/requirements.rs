@@ -49,11 +49,15 @@ pub mod status {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 fn criteria_to_json(criteria: &[String]) -> AppResult<String> {
-    serde_json::to_string(criteria).map_err(|e| AppError::Provider(format!("failed to encode acceptance criteria: {e}")))
+    serde_json::to_string(criteria)
+        .map_err(|e| AppError::Provider(format!("failed to encode acceptance criteria: {e}")))
 }
 
 fn criteria_from_json(json: &str) -> Vec<String> {
@@ -85,7 +89,12 @@ fn truncated(s: &str) -> String {
     }
 }
 
-fn rejection_payload(title: &str, intent: &str, criteria_count: usize, problems: &[String]) -> serde_json::Value {
+fn rejection_payload(
+    title: &str,
+    intent: &str,
+    criteria_count: usize,
+    problems: &[String],
+) -> serde_json::Value {
     serde_json::json!({
         "title": truncated(title),
         "intent": truncated(intent),
@@ -99,8 +108,18 @@ fn rejection_payload(title: &str, intent: &str, criteria_count: usize, problems:
 /// rejection itself IS recorded: as a ledger event with no
 /// correlation_id (no lifecycle chain was ever born), never as a
 /// requirements row.
-pub fn create(conn: &Connection, title: &str, intent: &str, acceptance_criteria: Vec<String>, created_by: &str) -> AppResult<RequirementContract> {
-    if let Err(problems) = validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria }) {
+pub fn create(
+    conn: &Connection,
+    title: &str,
+    intent: &str,
+    acceptance_criteria: Vec<String>,
+    created_by: &str,
+) -> AppResult<RequirementContract> {
+    if let Err(problems) = validate(&RequirementInput {
+        title,
+        intent,
+        acceptance_criteria: &acceptance_criteria,
+    }) {
         ledger::append(
             conn,
             LedgerEvent::RequirementRejected,
@@ -109,7 +128,10 @@ pub fn create(conn: &Connection, title: &str, intent: &str, acceptance_criteria:
             None,
             rejection_payload(title, intent, acceptance_criteria.len(), &problems),
         )?;
-        return Err(AppError::Provider(format!("requirement rejected: {}", problems.join("; "))));
+        return Err(AppError::Provider(format!(
+            "requirement rejected: {}",
+            problems.join("; ")
+        )));
     }
 
     let now = now_secs();
@@ -162,8 +184,18 @@ pub fn create(conn: &Connection, title: &str, intent: &str, acceptance_criteria:
 /// versions - that's the whole point of them. A rejected update is
 /// ledgered against the requirement's real correlation_id, since here
 /// (unlike a rejected create) the lifecycle chain does exist.
-pub fn update(conn: &Connection, id: &str, title: &str, intent: &str, acceptance_criteria: Vec<String>) -> AppResult<RequirementContract> {
-    if let Err(problems) = validate(&RequirementInput { title, intent, acceptance_criteria: &acceptance_criteria }) {
+pub fn update(
+    conn: &Connection,
+    id: &str,
+    title: &str,
+    intent: &str,
+    acceptance_criteria: Vec<String>,
+) -> AppResult<RequirementContract> {
+    if let Err(problems) = validate(&RequirementInput {
+        title,
+        intent,
+        acceptance_criteria: &acceptance_criteria,
+    }) {
         let correlation = get(conn, id).ok().map(|r| r.correlation_id);
         ledger::append(
             conn,
@@ -173,7 +205,10 @@ pub fn update(conn: &Connection, id: &str, title: &str, intent: &str, acceptance
             None,
             rejection_payload(title, intent, acceptance_criteria.len(), &problems),
         )?;
-        return Err(AppError::Provider(format!("requirement rejected: {}", problems.join("; "))));
+        return Err(AppError::Provider(format!(
+            "requirement rejected: {}",
+            problems.join("; ")
+        )));
     }
 
     let mut req = get(conn, id)?;
@@ -204,7 +239,9 @@ pub fn update(conn: &Connection, id: &str, title: &str, intent: &str, acceptance
 
 pub fn set_status(conn: &Connection, id: &str, new_status: &str) -> AppResult<RequirementContract> {
     if new_status != status::ACTIVE && new_status != status::RETIRED {
-        return Err(AppError::Provider(format!("unknown requirement status: {new_status}")));
+        return Err(AppError::Provider(format!(
+            "unknown requirement status: {new_status}"
+        )));
     }
     let mut req = get(conn, id)?;
     req.status = new_status.to_string();
@@ -217,7 +254,11 @@ pub fn set_status(conn: &Connection, id: &str, new_status: &str) -> AppResult<Re
     .map_err(|e| AppError::Provider(format!("failed to update requirement status: {e}")))?;
 
     append_history(conn, &req)?;
-    let event = if new_status == status::RETIRED { LedgerEvent::RequirementRetired } else { LedgerEvent::RequirementReactivated };
+    let event = if new_status == status::RETIRED {
+        LedgerEvent::RequirementRetired
+    } else {
+        LedgerEvent::RequirementReactivated
+    };
     ledger::append(
         conn,
         event,
@@ -247,8 +288,12 @@ fn row_to_requirement(row: &rusqlite::Row) -> rusqlite::Result<RequirementContra
 }
 
 pub fn get(conn: &Connection, id: &str) -> AppResult<RequirementContract> {
-    conn.query_row("SELECT * FROM requirements WHERE id = ?1", params![id], row_to_requirement)
-        .map_err(|_| AppError::NotFound(format!("requirement {id}")))
+    conn.query_row(
+        "SELECT * FROM requirements WHERE id = ?1",
+        params![id],
+        row_to_requirement,
+    )
+    .map_err(|_| AppError::NotFound(format!("requirement {id}")))
 }
 
 pub fn list(conn: &Connection) -> AppResult<Vec<RequirementContract>> {
@@ -290,7 +335,10 @@ pub fn history(conn: &Connection, requirement_id: &str) -> AppResult<Vec<Require
 pub fn get_active(conn: &Connection, id: &str) -> AppResult<RequirementContract> {
     let req = get(conn, id)?;
     if req.status != status::ACTIVE {
-        return Err(AppError::Provider(format!("requirement {id} is '{}', not active - it cannot gate new tasks", req.status)));
+        return Err(AppError::Provider(format!(
+            "requirement {id} is '{}', not active - it cannot gate new tasks",
+            req.status
+        )));
     }
     Ok(req)
 }
@@ -301,7 +349,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_governance_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -318,7 +369,10 @@ mod tests {
 
         let result = create(&conn, "x", "fix", vec![], "test-user");
         assert!(result.is_err());
-        assert!(list(&conn).unwrap().is_empty(), "a rejected requirement must not persist");
+        assert!(
+            list(&conn).unwrap().is_empty(),
+            "a rejected requirement must not persist"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -328,7 +382,14 @@ mod tests {
     fn valid_requirement_persists_and_round_trips() {
         let (dir, conn) = temp_conn();
 
-        let req = create(&conn, "Personalize greeting", "The greeting should address the user by name", valid_criteria(), "test-user").unwrap();
+        let req = create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            valid_criteria(),
+            "test-user",
+        )
+        .unwrap();
         assert_eq!(req.version, 1);
         assert_eq!(req.status, status::ACTIVE);
         assert!(!req.correlation_id.is_empty());
@@ -348,7 +409,14 @@ mod tests {
     fn update_bumps_version_and_preserves_history_of_both_versions() {
         let (dir, conn) = temp_conn();
 
-        let req = create(&conn, "Personalize greeting", "The greeting should address the user by name", valid_criteria(), "test-user").unwrap();
+        let req = create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            valid_criteria(),
+            "test-user",
+        )
+        .unwrap();
         let updated = update(
             &conn,
             &req.id,
@@ -359,7 +427,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(updated.version, 2);
-        assert_eq!(updated.correlation_id, req.correlation_id, "correlation ID must survive versioning");
+        assert_eq!(
+            updated.correlation_id, req.correlation_id,
+            "correlation ID must survive versioning"
+        );
 
         let hist = history(&conn, &req.id).unwrap();
         assert_eq!(hist.len(), 2);
@@ -376,7 +447,14 @@ mod tests {
     fn update_with_invalid_content_is_rejected_and_version_unchanged() {
         let (dir, conn) = temp_conn();
 
-        let req = create(&conn, "Personalize greeting", "The greeting should address the user by name", valid_criteria(), "test-user").unwrap();
+        let req = create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            valid_criteria(),
+            "test-user",
+        )
+        .unwrap();
         assert!(update(&conn, &req.id, "x", "no", vec![]).is_err());
 
         let unchanged = get(&conn, &req.id).unwrap();
@@ -391,11 +469,25 @@ mod tests {
     fn retired_requirement_fails_the_active_gate_but_stays_readable() {
         let (dir, conn) = temp_conn();
 
-        let req = create(&conn, "Personalize greeting", "The greeting should address the user by name", valid_criteria(), "test-user").unwrap();
+        let req = create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            valid_criteria(),
+            "test-user",
+        )
+        .unwrap();
         set_status(&conn, &req.id, status::RETIRED).unwrap();
 
-        assert!(get_active(&conn, &req.id).is_err(), "retired requirement must not gate new tasks");
-        assert_eq!(get(&conn, &req.id).unwrap().status, status::RETIRED, "but it remains readable for traceability");
+        assert!(
+            get_active(&conn, &req.id).is_err(),
+            "retired requirement must not gate new tasks"
+        );
+        assert_eq!(
+            get(&conn, &req.id).unwrap().status,
+            status::RETIRED,
+            "but it remains readable for traceability"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -404,7 +496,14 @@ mod tests {
     #[test]
     fn unknown_status_is_rejected() {
         let (dir, conn) = temp_conn();
-        let req = create(&conn, "Personalize greeting", "The greeting should address the user by name", valid_criteria(), "test-user").unwrap();
+        let req = create(
+            &conn,
+            "Personalize greeting",
+            "The greeting should address the user by name",
+            valid_criteria(),
+            "test-user",
+        )
+        .unwrap();
         assert!(set_status(&conn, &req.id, "bogus").is_err());
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

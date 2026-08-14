@@ -57,8 +57,14 @@ mod tests {
 
         let expected = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let info = get_build_info();
-        assert_eq!(info.commit, expected, "get_build_info()'s embedded commit must match the real HEAD at build time");
-        assert_ne!(info.commit, "unknown", "git was available at test time, so build.rs should not have fallen back");
+        assert_eq!(
+            info.commit, expected,
+            "get_build_info()'s embedded commit must match the real HEAD at build time"
+        );
+        assert_ne!(
+            info.commit, "unknown",
+            "git was available at test time, so build.rs should not have fallen back"
+        );
     }
 
     #[test]

@@ -85,7 +85,7 @@ export default function Terminal() {
       }
       term.dispose();
     };
-  }, []);
+  }, [appendTerminalOutput, clearTerminalError]);
 
   return (
     <div className="relative h-full w-full">

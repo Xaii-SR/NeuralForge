@@ -20,10 +20,10 @@
 //! `agent::*`/`agent_v2::*` execution, persistence, or approval state.
 //! Neither has a frontend caller yet.
 
+use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::orchestrator;
 use crate::agent_core::service::AgentError;
 use crate::agent_core::types::{AgentEventType, AgentRole, CouncilError, CouncilPassResult};
-use crate::agent_core::lifecycle::AgentLifecycleState;
 use crate::agent_core::AgentCoreState;
 use crate::agent_v2::ApprovalRegistry;
 use crate::core::errors::AppResult;
@@ -44,7 +44,9 @@ pub fn agent_lifecycle_transition(
     role: AgentRole,
     event: AgentEventType,
 ) -> Result<AgentLifecycleState, String> {
-    core.agent_registry.transition(&task_id, role, event).map_err(|e: AgentError| format!("{e:?}"))
+    core.agent_registry
+        .transition(&task_id, role, event)
+        .map_err(|e: AgentError| format!("{e:?}"))
 }
 
 /// Runs one real, sequential Architect -> Critic -> Judge Council v1 pass
@@ -80,8 +82,8 @@ pub async fn run_council_pass(
         &task_id,
         &objective,
     )
-        .await
-        .map_err(|e: CouncilError| e.to_string())
+    .await
+    .map_err(|e: CouncilError| e.to_string())
 }
 
 pub async fn create_and_plan_task(
@@ -146,10 +148,16 @@ pub async fn start_v2_task(
     orchestrator::start_v2_task(&core, app_handle, registry, description).await
 }
 
-pub async fn approve_v2_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn approve_v2_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     orchestrator::approve_v2_task(id, registry).await
 }
 
-pub async fn reject_v2_task(id: String, registry: State<'_, ApprovalRegistry>) -> Result<(), String> {
+pub async fn reject_v2_task(
+    id: String,
+    registry: State<'_, ApprovalRegistry>,
+) -> Result<(), String> {
     orchestrator::reject_v2_task(id, registry).await
 }

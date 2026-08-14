@@ -25,7 +25,9 @@ impl CredentialBackend for KeyringCredentialBackend {
             return Ok(());
         }
         let entry = keyring::Entry::new(SERVICE, provider_id).map_err(|error| error.to_string())?;
-        entry.set_password(api_key).map_err(|error| error.to_string())
+        entry
+            .set_password(api_key)
+            .map_err(|error| error.to_string())
     }
 
     fn load(&self, provider_id: &str) -> Result<Option<String>, String> {
@@ -106,7 +108,10 @@ mod tests {
     #[test]
     #[ignore = "requires a real OS keychain; run explicitly with --ignored"]
     fn loading_a_missing_key_returns_empty_string_not_an_error() {
-        assert_eq!(load_api_key("neuralforge-test-provider-never-registered"), "");
+        assert_eq!(
+            load_api_key("neuralforge-test-provider-never-registered"),
+            ""
+        );
     }
 
     #[test]

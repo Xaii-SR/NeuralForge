@@ -114,7 +114,11 @@ pub fn spawn_shell(
 }
 
 #[tauri::command]
-pub fn write_to_pty(registry: State<TerminalRegistry>, session_id: String, data: String) -> AppResult<()> {
+pub fn write_to_pty(
+    registry: State<TerminalRegistry>,
+    session_id: String,
+    data: String,
+) -> AppResult<()> {
     let mut sessions = registry.sessions.lock().unwrap();
     let session = sessions
         .get_mut(&session_id)
@@ -127,7 +131,12 @@ pub fn write_to_pty(registry: State<TerminalRegistry>, session_id: String, data:
 }
 
 #[tauri::command]
-pub fn resize_pty(registry: State<TerminalRegistry>, session_id: String, rows: u16, cols: u16) -> AppResult<()> {
+pub fn resize_pty(
+    registry: State<TerminalRegistry>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> AppResult<()> {
     let sessions = registry.sessions.lock().unwrap();
     let session = sessions
         .get(&session_id)
@@ -191,7 +200,9 @@ mod tests {
                             let _ = spawned.writer.flush();
                         }
                         if !sent_command {
-                            let _ = spawned.writer.write_all(b"echo neuralforge_test_marker\r\n");
+                            let _ = spawned
+                                .writer
+                                .write_all(b"echo neuralforge_test_marker\r\n");
                             let _ = spawned.writer.flush();
                             sent_command = true;
                         }

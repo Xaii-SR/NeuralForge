@@ -3,7 +3,7 @@
 /// Supervisor + specialized agents (Research, Coding, Testing, Review)
 /// built atop the existing AgentController, TaskOrchestrator, and Knowledge Store.
 use crate::context_retrieval::RankedFile;
-use crate::knowledge_store::{KnowledgeEntry, KnowledgeCategory, KnowledgeStore};
+use crate::knowledge_store::{KnowledgeCategory, KnowledgeEntry, KnowledgeStore};
 use crate::task_orchestrator::{OrchestratorTask, TaskLifecycle, TaskOrchestrator};
 use crate::terminal_executor::ExecutionResult;
 use serde::{Deserialize, Serialize};
@@ -37,8 +37,12 @@ impl AgentRole {
 
     pub fn capabilities(&self) -> Vec<&'static str> {
         match self {
-            AgentRole::Supervisor => vec!["coordination", "task_decomposition", "result_aggregation"],
-            AgentRole::Research => vec!["context_retrieval", "symbol_lookup", "dependency_analysis"],
+            AgentRole::Supervisor => {
+                vec!["coordination", "task_decomposition", "result_aggregation"]
+            }
+            AgentRole::Research => {
+                vec!["context_retrieval", "symbol_lookup", "dependency_analysis"]
+            }
             AgentRole::Coding => vec!["code_generation", "patch_creation", "refactoring"],
             AgentRole::Testing => vec!["verification", "failure_analysis", "regression_detection"],
             AgentRole::Review => vec!["quality_check", "security_audit", "architecture_compliance"],
@@ -121,15 +125,24 @@ impl MultiAgentSupervisor {
         let now = epoch_ms();
 
         let mut agents = HashMap::new();
-        for role in [AgentRole::Supervisor, AgentRole::Research, AgentRole::Coding, AgentRole::Testing, AgentRole::Review] {
-            agents.insert(role.clone(), AgentState {
-                role: role.clone(),
-                status: AgentStatus::Idle,
-                current_task: None,
-                last_result: None,
-                messages_sent: 0,
-                messages_received: 0,
-            });
+        for role in [
+            AgentRole::Supervisor,
+            AgentRole::Research,
+            AgentRole::Coding,
+            AgentRole::Testing,
+            AgentRole::Review,
+        ] {
+            agents.insert(
+                role.clone(),
+                AgentState {
+                    role: role.clone(),
+                    status: AgentStatus::Idle,
+                    current_task: None,
+                    last_result: None,
+                    messages_sent: 0,
+                    messages_received: 0,
+                },
+            );
         }
 
         // Activate supervisor immediately
@@ -229,7 +242,11 @@ impl MultiAgentSupervisor {
             workspace_root.clone(),
         );
 
-        session.sub_tasks = vec![coding_task.clone(), testing_task.clone(), review_task.clone()];
+        session.sub_tasks = vec![
+            coding_task.clone(),
+            testing_task.clone(),
+            review_task.clone(),
+        ];
 
         // Update agent states
         for task in &session.sub_tasks {
@@ -266,18 +283,25 @@ impl MultiAgentSupervisor {
         let task = &mut session.sub_tasks[subtask_index];
 
         // Use the existing task orchestrator pipeline
-        TaskOrchestrator::transition(task, TaskLifecycle::Executing {
-            current_step: 0,
-            total_steps: 1,
-        });
+        TaskOrchestrator::transition(
+            task,
+            TaskLifecycle::Executing {
+                current_step: 0,
+                total_steps: 1,
+            },
+        );
 
         // Record as inter-agent message
         session.message_queue.push(AgentMessage {
             id: format!("msg-{}", epoch_ms()),
             from: AgentRole::Supervisor,
-            to: if task.user_goal.contains("[Coding]") { AgentRole::Coding }
-                else if task.user_goal.contains("[Testing]") { AgentRole::Testing }
-                else { AgentRole::Review },
+            to: if task.user_goal.contains("[Coding]") {
+                AgentRole::Coding
+            } else if task.user_goal.contains("[Testing]") {
+                AgentRole::Testing
+            } else {
+                AgentRole::Review
+            },
             task_id: task.id.clone(),
             content: format!("Executing subtask: {}", task.user_goal),
             data: None,
@@ -294,24 +318,35 @@ impl MultiAgentSupervisor {
         exec_result: &ExecutionResult,
         subtask_index: usize,
     ) {
-        if subtask_index >= session.sub_tasks.len() { return; }
+        if subtask_index >= session.sub_tasks.len() {
+            return;
+        }
         let task = &mut session.sub_tasks[subtask_index];
 
         TaskOrchestrator::observe(task, exec_result);
 
         // Update agent state for the role that executed this subtask
-        let role = if task.user_goal.contains("[Coding]") { AgentRole::Coding }
-            else if task.user_goal.contains("[Testing]") { AgentRole::Testing }
-            else { AgentRole::Review };
+        let role = if task.user_goal.contains("[Coding]") {
+            AgentRole::Coding
+        } else if task.user_goal.contains("[Testing]") {
+            AgentRole::Testing
+        } else {
+            AgentRole::Review
+        };
 
         if let Some(agent) = session.agents.get_mut(&role) {
             if exec_result.exit_code == 0 {
                 agent.status = AgentStatus::Completed;
-                agent.last_result = Some(format!("Success: exit code 0 in {}ms", exec_result.duration_ms));
+                agent.last_result = Some(format!(
+                    "Success: exit code 0 in {}ms",
+                    exec_result.duration_ms
+                ));
             } else {
-                agent.status = AgentStatus::Failed(
-                    format!("Exit code {} — {} failures detected", exec_result.exit_code, exec_result.stderr.lines().count())
-                );
+                agent.status = AgentStatus::Failed(format!(
+                    "Exit code {} — {} failures detected",
+                    exec_result.exit_code,
+                    exec_result.stderr.lines().count()
+                ));
                 agent.last_result = Some(exec_result.stderr.clone());
             }
             agent.messages_sent += 1;
@@ -323,7 +358,10 @@ impl MultiAgentSupervisor {
             from: role,
             to: AgentRole::Supervisor,
             task_id: task.id.clone(),
-            content: format!("Subtask {} completed with exit code {}", subtask_index, exec_result.exit_code),
+            content: format!(
+                "Subtask {} completed with exit code {}",
+                subtask_index, exec_result.exit_code
+            ),
             data: Some(exec_result.stdout.clone()),
             timestamp: epoch_ms(),
         });
@@ -335,11 +373,15 @@ impl MultiAgentSupervisor {
     pub fn aggregate(session: &mut MultiAgentSession) -> String {
         session.phase = MultiAgentPhase::Aggregating;
 
-        let completed: Vec<&OrchestratorTask> = session.sub_tasks.iter()
+        let completed: Vec<&OrchestratorTask> = session
+            .sub_tasks
+            .iter()
             .filter(|t| matches!(t.phase, TaskLifecycle::Completed | TaskLifecycle::Verifying))
             .collect();
 
-        let failed: Vec<&OrchestratorTask> = session.sub_tasks.iter()
+        let failed: Vec<&OrchestratorTask> = session
+            .sub_tasks
+            .iter()
             .filter(|t| matches!(t.phase, TaskLifecycle::Failed(_)))
             .collect();
 
@@ -381,7 +423,10 @@ impl MultiAgentSupervisor {
 }
 
 fn epoch_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -407,7 +452,10 @@ mod tests {
 
     #[test]
     fn create_session_initializes_all_agents() {
-        let session = MultiAgentSupervisor::create_session("Fix auth bug", test_workspace_root("create_session"));
+        let session = MultiAgentSupervisor::create_session(
+            "Fix auth bug",
+            test_workspace_root("create_session"),
+        );
         assert_eq!(session.agents.len(), 5);
         assert!(session.agents.contains_key(&AgentRole::Supervisor));
         assert!(session.agents.contains_key(&AgentRole::Research));
@@ -419,25 +467,59 @@ mod tests {
 
     #[test]
     fn research_phase_produces_summary() {
-        let mut session = MultiAgentSupervisor::create_session("Investigate project", test_workspace_root("research"));
+        let mut session = MultiAgentSupervisor::create_session(
+            "Investigate project",
+            test_workspace_root("research"),
+        );
         let ranked = vec![
-            RankedFile { path: "src/main.rs".into(), language: "Rust".into(), priority: 100, reason: "exact match".into(), matched_symbols: vec![], snippet: String::new() },
-            RankedFile { path: "src/lib.rs".into(), language: "Rust".into(), priority: 90, reason: "path match".into(), matched_symbols: vec![], snippet: String::new() },
+            RankedFile {
+                path: "src/main.rs".into(),
+                language: "Rust".into(),
+                priority: 100,
+                reason: "exact match".into(),
+                matched_symbols: vec![],
+                snippet: String::new(),
+            },
+            RankedFile {
+                path: "src/lib.rs".into(),
+                language: "Rust".into(),
+                priority: 90,
+                reason: "path match".into(),
+                matched_symbols: vec![],
+                snippet: String::new(),
+            },
         ];
         let summary = MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         assert!(summary.contains("main.rs"));
         assert!(summary.contains("lib.rs"));
         assert_eq!(session.phase, MultiAgentPhase::Planning);
-        assert_eq!(session.agents[&AgentRole::Research].status, AgentStatus::Completed);
+        assert_eq!(
+            session.agents[&AgentRole::Research].status,
+            AgentStatus::Completed
+        );
     }
 
     #[test]
     fn planning_decomposes_into_subtasks() {
-        let mut session = MultiAgentSupervisor::create_session("Add auth system", test_workspace_root("planning"));
-        let ranked = vec![RankedFile { path: "src/auth.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec!["authenticate".into()], snippet: String::new() }];
+        let mut session = MultiAgentSupervisor::create_session(
+            "Add auth system",
+            test_workspace_root("planning"),
+        );
+        let ranked = vec![RankedFile {
+            path: "src/auth.rs".into(),
+            language: "Rust".into(),
+            priority: 100,
+            reason: "match".into(),
+            matched_symbols: vec!["authenticate".into()],
+            snippet: String::new(),
+        }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         let subtasks = MultiAgentSupervisor::plan(&mut session).unwrap();
-        assert_eq!(subtasks.len(), 3, "Should generate 3 subtasks (coding, testing, review)");
+        assert_eq!(
+            subtasks.len(),
+            3,
+            "Should generate 3 subtasks (coding, testing, review)"
+        );
         assert!(subtasks.iter().any(|t| t.user_goal.contains("[Coding]")));
         assert!(subtasks.iter().any(|t| t.user_goal.contains("[Testing]")));
         assert!(subtasks.iter().any(|t| t.user_goal.contains("[Review]")));
@@ -445,8 +527,16 @@ mod tests {
 
     #[test]
     fn execute_and_observe_subtask() {
-        let mut session = MultiAgentSupervisor::create_session("Test feature", test_workspace_root("execute"));
-        let ranked = vec![RankedFile { path: "src/lib.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec![], snippet: String::new() }];
+        let mut session =
+            MultiAgentSupervisor::create_session("Test feature", test_workspace_root("execute"));
+        let ranked = vec![RankedFile {
+            path: "src/lib.rs".into(),
+            language: "Rust".into(),
+            priority: 100,
+            reason: "match".into(),
+            matched_symbols: vec![],
+            snippet: String::new(),
+        }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         MultiAgentSupervisor::plan(&mut session).unwrap();
 
@@ -454,21 +544,40 @@ mod tests {
         MultiAgentSupervisor::execute_subtask(&mut session, &conn, 0).unwrap();
 
         let exec_result = ExecutionResult {
-            request: ExecutionRequest { command: "cargo".into(), arguments: vec!["check".into()], working_directory: ".".into(), timeout_seconds: 30 },
+            request: ExecutionRequest {
+                command: "cargo".into(),
+                arguments: vec!["check".into()],
+                working_directory: ".".into(),
+                timeout_seconds: 30,
+            },
             exit_code: 0,
             stdout: "Compiled successfully".into(),
             stderr: String::new(),
-            started_at: 0, finished_at: 1000, duration_ms: 1000, was_cancelled: false,
+            started_at: 0,
+            finished_at: 1000,
+            duration_ms: 1000,
+            was_cancelled: false,
         };
 
         MultiAgentSupervisor::observe_subtask(&mut session, &exec_result, 0);
-        assert!(session.message_queue.iter().any(|m| m.content.contains("exit code 0")));
+        assert!(session
+            .message_queue
+            .iter()
+            .any(|m| m.content.contains("exit code 0")));
     }
 
     #[test]
     fn aggregation_produces_summary() {
-        let mut session = MultiAgentSupervisor::create_session("Complete auth", test_workspace_root("aggregate"));
-        let ranked = vec![RankedFile { path: "src/auth.rs".into(), language: "Rust".into(), priority: 100, reason: "match".into(), matched_symbols: vec![], snippet: String::new() }];
+        let mut session =
+            MultiAgentSupervisor::create_session("Complete auth", test_workspace_root("aggregate"));
+        let ranked = vec![RankedFile {
+            path: "src/auth.rs".into(),
+            language: "Rust".into(),
+            priority: 100,
+            reason: "match".into(),
+            matched_symbols: vec![],
+            snippet: String::new(),
+        }];
         MultiAgentSupervisor::research(&mut session, ranked).unwrap();
         MultiAgentSupervisor::plan(&mut session).unwrap();
 
@@ -480,16 +589,23 @@ mod tests {
 
     #[test]
     fn agent_roles_have_capabilities() {
-        assert!(AgentRole::Research.capabilities().contains(&"context_retrieval"));
-        assert!(AgentRole::Coding.capabilities().contains(&"code_generation"));
+        assert!(AgentRole::Research
+            .capabilities()
+            .contains(&"context_retrieval"));
+        assert!(AgentRole::Coding
+            .capabilities()
+            .contains(&"code_generation"));
         assert!(AgentRole::Testing.capabilities().contains(&"verification"));
         assert!(AgentRole::Review.capabilities().contains(&"security_audit"));
-        assert!(AgentRole::Supervisor.capabilities().contains(&"coordination"));
+        assert!(AgentRole::Supervisor
+            .capabilities()
+            .contains(&"coordination"));
     }
 
     #[test]
     fn message_passing_between_agents() {
-        let mut session = MultiAgentSupervisor::create_session("Message test", test_workspace_root("messages"));
+        let mut session =
+            MultiAgentSupervisor::create_session("Message test", test_workspace_root("messages"));
         session.message_queue.push(AgentMessage {
             id: "msg-1".into(),
             from: AgentRole::Research,
@@ -500,7 +616,14 @@ mod tests {
             timestamp: epoch_ms(),
         });
 
-        assert_eq!(session.message_queue.len(), 1, "pushed message should be in the queue");
-        assert!(session.message_queue.iter().any(|m| m.content.contains("Research findings")));
+        assert_eq!(
+            session.message_queue.len(),
+            1,
+            "pushed message should be in the queue"
+        );
+        assert!(session
+            .message_queue
+            .iter()
+            .any(|m| m.content.contains("Research findings")));
     }
 }

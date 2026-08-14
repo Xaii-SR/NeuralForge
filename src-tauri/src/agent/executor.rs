@@ -25,16 +25,24 @@ pub async fn apply_and_verify(
     let canonical_root = std::fs::canonicalize(workspace_root)?;
     let canonical_target = std::fs::canonicalize(&target)?;
     if !canonical_target.starts_with(&canonical_root) {
-        return Err(AppError::InvalidPath(format!("{file_path} is outside the workspace")));
+        return Err(AppError::InvalidPath(format!(
+            "{file_path} is outside the workspace"
+        )));
     }
 
     std::fs::write(&target, proposed_content)?;
 
     match verify(&canonical_target, &canonical_root).await {
-        Ok(message) => Ok(ApplyResult { verification: message, rolled_back: false }),
+        Ok(message) => Ok(ApplyResult {
+            verification: message,
+            rolled_back: false,
+        }),
         Err(message) => {
             std::fs::write(&target, original_content)?;
-            Ok(ApplyResult { verification: message, rolled_back: true })
+            Ok(ApplyResult {
+                verification: message,
+                rolled_back: true,
+            })
         }
     }
 }
@@ -45,7 +53,9 @@ pub async fn apply_and_verify(
 /// code path invokes this function. Kept as dead code (not deleted) so
 /// future sandbox re-enablement has the implementation available.
 #[allow(dead_code)]
-pub async fn run_code_via_extension(code: &str) -> AppResult<crate::extensions::api::ExtensionResult> {
+pub async fn run_code_via_extension(
+    code: &str,
+) -> AppResult<crate::extensions::api::ExtensionResult> {
     let extensions = crate::extensions::ensure_and_scan()?;
     let ext = extensions
         .into_iter()
@@ -53,7 +63,9 @@ pub async fn run_code_via_extension(code: &str) -> AppResult<crate::extensions::
         .ok_or_else(|| AppError::Provider("python-repl extension is not installed".to_string()))?;
 
     if !ext.enabled {
-        return Err(AppError::Provider("python-repl extension is disabled".to_string()));
+        return Err(AppError::Provider(
+            "python-repl extension is disabled".to_string(),
+        ));
     }
 
     crate::extensions::api::invoke_extension(&ext, serde_json::json!({ "code": code })).await
@@ -90,7 +102,10 @@ async fn verify(file: &Path, workspace_root: &Path) -> Result<String, String> {
     match output {
         Ok(out) if out.status.success() => Ok("cargo check passed".to_string()),
         Ok(out) => {
-            let stderr: String = String::from_utf8_lossy(&out.stderr).chars().take(800).collect();
+            let stderr: String = String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(800)
+                .collect();
             Err(format!("cargo check failed:\n{stderr}"))
         }
         Err(e) => Err(format!("failed to run cargo check: {e}")),
@@ -104,7 +119,10 @@ mod tests {
 
     fn temp_workspace() -> PathBuf {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let tid = std::thread::current().id();
         dir.push(format!("neuralforge_executor_test_{nanos}_{tid:?}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -117,7 +135,9 @@ mod tests {
         let file = dir.join("notes.md");
         std::fs::write(&file, "old content").unwrap();
 
-        let result = apply_and_verify(&dir, "notes.md", "old content", "new content").await.unwrap();
+        let result = apply_and_verify(&dir, "notes.md", "old content", "new content")
+            .await
+            .unwrap();
         assert!(!result.rolled_back);
         assert!(result.verification.contains("no automated verification"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "new content");
@@ -138,7 +158,12 @@ mod tests {
         // Either NotFound (join literally doesn't exist under dir) or
         // InvalidPath (escapes workspace) is acceptable - both mean nothing
         // outside the workspace got written.
-        assert!(result.is_err() || !std::fs::read_to_string(&escape_target).unwrap().contains('y'));
+        assert!(
+            result.is_err()
+                || !std::fs::read_to_string(&escape_target)
+                    .unwrap()
+                    .contains('y')
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
@@ -165,7 +190,9 @@ mod tests {
 
         let broken = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b +\n}\n"; // syntax error
 
-        let result = apply_and_verify(&dir, "src/lib.rs", original, broken).await.unwrap();
+        let result = apply_and_verify(&dir, "src/lib.rs", original, broken)
+            .await
+            .unwrap();
 
         assert!(result.rolled_back, "a syntax error should trigger rollback");
         assert!(result.verification.contains("cargo check failed"));
@@ -193,9 +220,15 @@ mod tests {
 
         let valid_change = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\npub fn sub(a: i32, b: i32) -> i32 {\n    a - b\n}\n";
 
-        let result = apply_and_verify(&dir, "src/lib.rs", original, valid_change).await.unwrap();
+        let result = apply_and_verify(&dir, "src/lib.rs", original, valid_change)
+            .await
+            .unwrap();
 
-        assert!(!result.rolled_back, "valid code should not be rolled back: {}", result.verification);
+        assert!(
+            !result.rolled_back,
+            "valid code should not be rolled back: {}",
+            result.verification
+        );
         assert_eq!(std::fs::read_to_string(&lib_path).unwrap(), valid_change);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -207,13 +240,20 @@ mod tests {
     /// python-repl child process rather than mocking the extension layer.
     #[tokio::test]
     async fn run_code_via_extension_executes_real_python() {
-        if std::process::Command::new("python").arg("--version").output().is_err() {
+        if std::process::Command::new("python")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("skipping: python not on PATH");
             return;
         }
 
         let mut home = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         home.push(format!("neuralforge_executor_home_test_{nanos}"));
         std::fs::create_dir_all(&home).unwrap();
 
@@ -236,7 +276,11 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
 
         let result = result.unwrap();
-        assert!(result.success, "expected success, got error: {:?}", result.error);
+        assert!(
+            result.success,
+            "expected success, got error: {:?}",
+            result.error
+        );
         assert_eq!(result.output.as_str().unwrap().trim(), "42");
     }
 }

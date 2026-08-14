@@ -103,8 +103,16 @@ impl AnthropicProvider {
             .map(|arr| {
                 arr.iter()
                     .map(|m| AnthropicModel {
-                        id: m.get("id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                        kind: m.get("type").and_then(|v| v.as_str()).unwrap_or("model").to_string(),
+                        id: m
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        kind: m
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("model")
+                            .to_string(),
                         display_name: m
                             .get("display_name")
                             .and_then(|v| v.as_str())
@@ -237,7 +245,10 @@ mod tests {
 
     #[test]
     fn provider_has_correct_base_url() {
-        let provider = AnthropicProvider::new("https://api.anthropic.com/".to_string(), "sk-ant-test".to_string());
+        let provider = AnthropicProvider::new(
+            "https://api.anthropic.com/".to_string(),
+            "sk-ant-test".to_string(),
+        );
         assert_eq!(provider.base_url, "https://api.anthropic.com");
     }
 
@@ -251,7 +262,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a real Anthropic API key"]
     async fn live_anthropic_chat() {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY to run this test");
+        let api_key =
+            std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY to run this test");
         let provider = AnthropicProvider::with_default_base_url(api_key);
 
         let messages = vec![ChatMessage {

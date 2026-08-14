@@ -49,7 +49,8 @@ function workspaceName(workspaceRoot: string | null): string | null {
 export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedContext, activeSessionId, sessionsReady, externalError, onDismissExternalError, onSendingChange }: ChatPaneProps) {
   const workspaceOpen = !!workspaceRoot;
   const connectedWorkspace = workspaceName(workspaceRoot);
-  const [liveSelectedContext, setLiveSelectedContext] = useState<string | null>(selectedContext ?? null);
+  const [eventSelectedContext, setEventSelectedContext] = useState<string | null>(null);
+  const liveSelectedContext = selectedContext === undefined ? eventSelectedContext : selectedContext;
   const [models, setModels] = useState<ai.ChatModelDescriptor[]>([]);
   const [selectedModelKey, setSelectedModelKey] = useState("");
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -59,7 +60,9 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
   const [error, setError] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexStatus, setIndexStatus] = useState<string | null>(null);
-  const [sessionState, setSessionState] = useState<SessionState>("uninitialized");
+  const [sessionState, setSessionState] = useState<SessionState>(() =>
+    activeSessionId ? "loading" : sessionsReady ? "ready" : workspaceOpen ? "loading" : "uninitialized",
+  );
   const activeRequestId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Mirrors the activeSessionId prop into a ref: useEvent (see hooks/useEvent.ts)
@@ -88,9 +91,8 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
     setMessages([]);
     setSessionState(workspaceRoot ? "loading" : "uninitialized");
   }, [workspaceGeneration, workspaceRoot]);
-  useEffect(() => { setLiveSelectedContext(selectedContext ?? null); }, [selectedContext]);
   useEffect(() => {
-    const onContextSelected = (event: Event) => setLiveSelectedContext((event as CustomEvent<string>).detail);
+    const onContextSelected = (event: Event) => setEventSelectedContext((event as CustomEvent<string>).detail);
     window.addEventListener("nf_context_selected", onContextSelected);
     return () => window.removeEventListener("nf_context_selected", onContextSelected);
   }, []);
@@ -163,11 +165,8 @@ export default function ChatPane({ workspaceRoot, workspaceGeneration, selectedC
   useEffect(() => {
     persistedRequestIds.current.clear();
     if (!activeSessionId) {
-      setMessages([]);
-      setSessionState(sessionsReady ? "ready" : workspaceOpen ? "loading" : "uninitialized");
       return;
     }
-    setSessionState("loading");
     let cancelled = false;
     (async () => {
       try {

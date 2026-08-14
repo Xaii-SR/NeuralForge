@@ -13,7 +13,10 @@ pub fn list_worker_profiles(db: State<DbState>) -> AppResult<Vec<registry::Worke
 }
 
 #[tauri::command]
-pub fn upsert_worker_profile(db: State<DbState>, profile: registry::WorkerProfile) -> AppResult<registry::WorkerProfile> {
+pub fn upsert_worker_profile(
+    db: State<DbState>,
+    profile: registry::WorkerProfile,
+) -> AppResult<registry::WorkerProfile> {
     with_conn(&db, |conn| {
         registry::upsert(conn, &profile)?;
         registry::get(conn, &profile.id)
@@ -26,28 +29,45 @@ pub fn delete_worker_profile(db: State<DbState>, workerId: String) -> AppResult<
 }
 
 #[tauri::command]
-pub fn refresh_worker_reliability(db: State<DbState>, workerId: String) -> AppResult<registry::WorkerProfile> {
+pub fn refresh_worker_reliability(
+    db: State<DbState>,
+    workerId: String,
+) -> AppResult<registry::WorkerProfile> {
     with_conn(&db, |conn| registry::refresh_reliability(conn, &workerId))
 }
 
 #[tauri::command]
-pub fn match_workers(db: State<DbState>, requiredCapabilities: Vec<String>) -> AppResult<Vec<matcher::WorkerMatch>> {
-    with_conn(&db, |conn| Ok(matcher::rank(&registry::list(conn)?, &requiredCapabilities)))
+pub fn match_workers(
+    db: State<DbState>,
+    requiredCapabilities: Vec<String>,
+) -> AppResult<Vec<matcher::WorkerMatch>> {
+    with_conn(&db, |conn| {
+        Ok(matcher::rank(&registry::list(conn)?, &requiredCapabilities))
+    })
 }
 
 // ---- Sprint 8 commands (additive) ----
 
 #[tauri::command]
-pub fn retry_failed_task(db: State<DbState>, taskId: String, maxRetries: Option<usize>) -> AppResult<reliability::RetryDecision> {
+pub fn retry_failed_task(
+    db: State<DbState>,
+    taskId: String,
+    maxRetries: Option<usize>,
+) -> AppResult<reliability::RetryDecision> {
     let policy = reliability::RetryPolicy {
         max_retries: maxRetries.unwrap_or_else(|| reliability::RetryPolicy::default().max_retries),
         ..Default::default()
     };
-    with_conn(&db, |conn| reliability::request_retry(conn, &taskId, &policy))
+    with_conn(&db, |conn| {
+        reliability::request_retry(conn, &taskId, &policy)
+    })
 }
 
 #[tauri::command]
-pub fn get_task_confidence(db: State<DbState>, taskId: String) -> AppResult<reliability::ConfidenceReport> {
+pub fn get_task_confidence(
+    db: State<DbState>,
+    taskId: String,
+) -> AppResult<reliability::ConfidenceReport> {
     with_conn(&db, |conn| reliability::confidence_for_task(conn, &taskId))
 }
 
@@ -68,7 +88,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, rusqlite::Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_intelligence_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -95,7 +118,11 @@ mod tests {
             "objective",
             agent::task_type::EDIT_FILE,
             "f.rs",
-            if passed { status::COMPLETED } else { status::ROLLED_BACK },
+            if passed {
+                status::COMPLETED
+            } else {
+                status::ROLLED_BACK
+            },
             "old",
             "new",
             "low",
@@ -104,7 +131,19 @@ mod tests {
         )
         .unwrap();
         registry::assign_task(conn, task_id, worker_id).unwrap();
-        evidence::record(conn, task_id, None, kind::VERIFICATION, if passed { "cargo check passed" } else { "cargo check failed" }, passed).unwrap();
+        evidence::record(
+            conn,
+            task_id,
+            None,
+            kind::VERIFICATION,
+            if passed {
+                "cargo check passed"
+            } else {
+                "cargo check failed"
+            },
+            passed,
+        )
+        .unwrap();
         promotion::request_promotion(conn, task_id, None).unwrap();
     }
 
@@ -129,7 +168,11 @@ mod tests {
         let refreshed = registry::refresh_reliability(&conn, "coder-1").unwrap();
         assert_eq!(refreshed.tasks_completed, 3);
         assert_eq!(refreshed.tasks_failed, 1);
-        assert!((refreshed.reliability_score - 0.75).abs() < 1e-9, "got {}", refreshed.reliability_score);
+        assert!(
+            (refreshed.reliability_score - 0.75).abs() < 1e-9,
+            "got {}",
+            refreshed.reliability_score
+        );
 
         // And it round-trips through the stored profile.
         assert!((registry::get(&conn, "coder-1").unwrap().reliability_score - 0.75).abs() < 1e-9);
@@ -145,16 +188,49 @@ mod tests {
         let (dir, conn) = temp_conn();
         registry::upsert(&conn, &worker("coder-2")).unwrap();
 
-        agent::insert_task(&conn, "retry-t", "objective", agent::task_type::EDIT_FILE, "f.rs", status::COMPLETED, "old", "new", "low", None, None).unwrap();
+        agent::insert_task(
+            &conn,
+            "retry-t",
+            "objective",
+            agent::task_type::EDIT_FILE,
+            "f.rs",
+            status::COMPLETED,
+            "old",
+            "new",
+            "low",
+            None,
+            None,
+        )
+        .unwrap();
         registry::assign_task(&conn, "retry-t", "coder-2").unwrap();
 
         // First attempt fails and is judged; second attempt passes and is judged.
-        evidence::record(&conn, "retry-t", None, kind::VERIFICATION, "cargo check failed", false).unwrap();
+        evidence::record(
+            &conn,
+            "retry-t",
+            None,
+            kind::VERIFICATION,
+            "cargo check failed",
+            false,
+        )
+        .unwrap();
         promotion::request_promotion(&conn, "retry-t", None).unwrap();
-        evidence::record(&conn, "retry-t", None, kind::VERIFICATION, "cargo check passed", true).unwrap();
+        evidence::record(
+            &conn,
+            "retry-t",
+            None,
+            kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
         // Ensure the later request sorts strictly after the first even at
         // 1-second timestamp resolution.
-        conn.execute("UPDATE promotion_requests SET requested_at = requested_at - 10", []).unwrap();
+        conn.execute(
+            "UPDATE promotion_requests SET requested_at = requested_at - 10",
+            [],
+        )
+        .unwrap();
         promotion::request_promotion(&conn, "retry-t", None).unwrap();
 
         let refreshed = registry::refresh_reliability(&conn, "coder-2").unwrap();
@@ -178,7 +254,12 @@ mod tests {
         run_task_for(&conn, "bad", "b1", false);
         run_task_for(&conn, "bad", "b2", false);
 
-        assert_eq!(registry::refresh_reliability(&conn, "good").unwrap().reliability_score, 1.0);
+        assert_eq!(
+            registry::refresh_reliability(&conn, "good")
+                .unwrap()
+                .reliability_score,
+            1.0
+        );
         let bad = registry::refresh_reliability(&conn, "bad").unwrap();
         assert_eq!(bad.reliability_score, 0.0);
         assert_eq!(bad.tasks_failed, 2);
@@ -197,25 +278,79 @@ mod tests {
         let (dir, conn) = temp_conn();
         registry::upsert(&conn, &worker("crashy")).unwrap();
 
-        agent::insert_task(&conn, "doomed-task", "objective", agent::task_type::EDIT_FILE, "f.rs", status::APPLYING, "old", "new", "low", None, None).unwrap();
+        agent::insert_task(
+            &conn,
+            "doomed-task",
+            "objective",
+            agent::task_type::EDIT_FILE,
+            "f.rs",
+            status::APPLYING,
+            "old",
+            "new",
+            "low",
+            None,
+            None,
+        )
+        .unwrap();
         registry::assign_task(&conn, "doomed-task", "crashy").unwrap();
 
         // The worker "fails": the task is finalized as rolled back with the
         // real failure text (this is what approve_task records on rollback).
-        agent::update_status(&conn, "doomed-task", status::ROLLED_BACK, Some("cargo check failed:\nerror[E0308]: mismatched types"), Some("verification failed - original content restored")).unwrap();
-        evidence::record(&conn, "doomed-task", None, kind::ROLLBACK, "original content restored after failed verification", false).unwrap();
+        agent::update_status(
+            &conn,
+            "doomed-task",
+            status::ROLLED_BACK,
+            Some("cargo check failed:\nerror[E0308]: mismatched types"),
+            Some("verification failed - original content restored"),
+        )
+        .unwrap();
+        evidence::record(
+            &conn,
+            "doomed-task",
+            None,
+            kind::ROLLBACK,
+            "original content restored after failed verification",
+            false,
+        )
+        .unwrap();
         promotion::request_promotion(&conn, "doomed-task", None).unwrap();
 
         // Terminal + informative, not stuck in APPLYING.
         let task = agent::get_task(&conn, "doomed-task").unwrap();
         assert_eq!(task.status, status::ROLLED_BACK);
-        assert!(task.error.as_deref().unwrap_or_default().contains("verification failed"), "error text must explain the failure: {:?}", task.error);
-        assert!(!agent::dag_runnable_tasks(&conn, "no-dag").unwrap().iter().any(|t| t.id == "doomed-task"));
+        assert!(
+            task.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("verification failed"),
+            "error text must explain the failure: {:?}",
+            task.error
+        );
+        assert!(!agent::dag_runnable_tasks(&conn, "no-dag")
+            .unwrap()
+            .iter()
+            .any(|t| t.id == "doomed-task"));
 
         // Recoverable: a fresh attempt at the same work is immediately valid.
-        agent::insert_task(&conn, "retry-attempt", "objective", agent::task_type::EDIT_FILE, "f.rs", status::AWAITING_APPROVAL, "old", "new", "low", None, None).unwrap();
+        agent::insert_task(
+            &conn,
+            "retry-attempt",
+            "objective",
+            agent::task_type::EDIT_FILE,
+            "f.rs",
+            status::AWAITING_APPROVAL,
+            "old",
+            "new",
+            "low",
+            None,
+            None,
+        )
+        .unwrap();
         registry::assign_task(&conn, "retry-attempt", "crashy").unwrap();
-        assert_eq!(agent::get_task(&conn, "retry-attempt").unwrap().status, status::AWAITING_APPROVAL);
+        assert_eq!(
+            agent::get_task(&conn, "retry-attempt").unwrap().status,
+            status::AWAITING_APPROVAL
+        );
 
         // And the worker's record honestly reflects the failure.
         let refreshed = registry::refresh_reliability(&conn, "crashy").unwrap();
@@ -245,7 +380,10 @@ mod tests {
 
         let profiles = registry::list(&conn).unwrap();
         let best = super::matcher::best_match(&profiles, &["testing".to_string()]).unwrap();
-        assert_eq!(best.profile.id, "tester", "derived reliability must drive the tie-break");
+        assert_eq!(
+            best.profile.id, "tester",
+            "derived reliability must drive the tie-break"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

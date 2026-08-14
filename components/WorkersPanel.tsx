@@ -22,7 +22,7 @@ function reliabilityColor(score: number): string {
 
 export default function WorkersPanel({ workspaceOpen }: WorkersPanelProps) {
   const [profiles, setProfiles] = useState<governance.WorkerProfile[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(workspaceOpen);
   const [error, setError] = useState<string | null>(null);
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
@@ -44,9 +44,9 @@ export default function WorkersPanel({ workspaceOpen }: WorkersPanelProps) {
   }
 
   useEffect(() => {
-    if (workspaceOpen) refresh();
-    else setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!workspaceOpen) return;
+    const initial = window.setTimeout(() => { void refresh(); }, 0);
+    return () => window.clearTimeout(initial);
   }, [workspaceOpen]);
 
   async function handleCreate() {

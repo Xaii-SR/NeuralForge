@@ -10,19 +10,24 @@ export interface PromptMakerProps { onClose: () => void; }
 
 interface TokenPayload { request_id: string; token: string; done: boolean; from_cache?: boolean; }
 
+function loadSavedPrompt(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem("nf_custom_prompt") ?? "";
+}
+
 const META_PROMPT_SYSTEM_INSTRUCTION =
   "You are an Elite 100% Precision System Prompt Architect. Given a target objective, generate a complete professional system prompt with clear Personas, strict constraints, and formatting parameters. Output only the system prompt template.";
 
 export default function PromptMaker({ onClose }: PromptMakerProps) {
   const [userIntent, setUserIntent] = useState("");
-  const [generatedPrompt, setGeneratedPrompt] = useState("");
-  const [genState, setGenState] = useState<"idle" | "checking" | "generating" | "complete" | "error">("idle");
+  const [initialPrompt] = useState(loadSavedPrompt);
+  const [generatedPrompt, setGeneratedPrompt] = useState(initialPrompt);
+  const [genState, setGenState] = useState<"idle" | "checking" | "generating" | "complete" | "error">(initialPrompt ? "complete" : "idle");
   const [generationError, setGenerationError] = useState("");
   const [effort, setEffort] = useState<"Light" | "Medium" | "High" | "Extra High">("High");
   const [copied, setCopied] = useState(false);
   const activeRequestId = useRef<string | null>(null);
 
-  useEffect(() => { const saved = localStorage.getItem("nf_custom_prompt"); if (saved) { setGeneratedPrompt(saved); setGenState("complete"); } }, []);
   useEffect(() => {
     function syncEffort() { getAppConfig().then((c) => setEffort(c.effort)); }
     syncEffort();

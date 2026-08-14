@@ -15,7 +15,9 @@ pub fn record_task_outcome(
     status: &str,
     verification: &str,
 ) -> AppResult<()> {
-    let memory_dir = workspace_root.join(MEMORY_DIR_NAME).join(MEMORY_SUBDIR_NAME);
+    let memory_dir = workspace_root
+        .join(MEMORY_DIR_NAME)
+        .join(MEMORY_SUBDIR_NAME);
     std::fs::create_dir_all(&memory_dir)?;
     let history_path = memory_dir.join("agent_history.md");
 
@@ -25,7 +27,10 @@ pub fn record_task_outcome(
     );
 
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&history_path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&history_path)?;
     file.write_all(entry.as_bytes())?;
     Ok(())
 }
@@ -38,7 +43,9 @@ pub fn record_task_outcome(
 /// reconstruction that proves the human-readable history and the
 /// structured ledger/evidence data never diverge.
 pub fn regenerate_history(conn: &Connection, workspace_root: &Path) -> AppResult<()> {
-    let memory_dir = workspace_root.join(MEMORY_DIR_NAME).join(MEMORY_SUBDIR_NAME);
+    let memory_dir = workspace_root
+        .join(MEMORY_DIR_NAME)
+        .join(MEMORY_SUBDIR_NAME);
     std::fs::create_dir_all(&memory_dir)?;
     let history_path = memory_dir.join("agent_history.md");
 
@@ -96,10 +103,31 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         crate::core::config::ensure_memory_scaffold(&dir).unwrap();
 
-        record_task_outcome(&dir, "task-1", "add logging", "main.rs", "completed", "cargo check passed").unwrap();
-        record_task_outcome(&dir, "task-2", "fix bug", "lib.rs", "rolled_back", "cargo check failed").unwrap();
+        record_task_outcome(
+            &dir,
+            "task-1",
+            "add logging",
+            "main.rs",
+            "completed",
+            "cargo check passed",
+        )
+        .unwrap();
+        record_task_outcome(
+            &dir,
+            "task-2",
+            "fix bug",
+            "lib.rs",
+            "rolled_back",
+            "cargo check failed",
+        )
+        .unwrap();
 
-        let content = std::fs::read_to_string(dir.join(".neuralforge").join("memory").join("agent_history.md")).unwrap();
+        let content = std::fs::read_to_string(
+            dir.join(".neuralforge")
+                .join("memory")
+                .join("agent_history.md"),
+        )
+        .unwrap();
         assert!(content.contains("task-1"));
         assert!(content.contains("add logging"));
         assert!(content.contains("task-2"));
@@ -154,7 +182,12 @@ mod tests {
 
         regenerate_history(&conn, &dir).unwrap();
 
-        let content = std::fs::read_to_string(dir.join(".neuralforge").join("memory").join("agent_history.md")).unwrap();
+        let content = std::fs::read_to_string(
+            dir.join(".neuralforge")
+                .join("memory")
+                .join("agent_history.md"),
+        )
+        .unwrap();
         assert!(content.contains("requirement_created"));
         assert!(content.contains(&req.correlation_id));
         assert!(content.contains("task_completed"));

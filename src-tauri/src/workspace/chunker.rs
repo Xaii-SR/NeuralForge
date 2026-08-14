@@ -64,9 +64,16 @@ mod tests {
 
     #[test]
     fn chunks_basic_overlap() {
-        let content = (1..=100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (1..=100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_file_text("test.rs", &content, 50, 10);
-        assert_eq!(chunks.len(), 3, "100 lines @ 50 chunk/10 overlap = 3 chunks");
+        assert_eq!(
+            chunks.len(),
+            3,
+            "100 lines @ 50 chunk/10 overlap = 3 chunks"
+        );
 
         // Chunk 0: lines 1..50
         assert_eq!(chunks[0].chunk_index, 0);
@@ -99,7 +106,10 @@ mod tests {
 
     #[test]
     fn chunks_exact_fit() {
-        let content = (1..=50).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (1..=50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_file_text("exact.rs", &content, 50, 10);
         assert_eq!(chunks.len(), 1, "50 lines @ 50 chunk = single chunk");
     }

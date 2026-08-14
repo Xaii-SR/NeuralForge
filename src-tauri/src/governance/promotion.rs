@@ -34,7 +34,10 @@ pub mod status {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 fn insert_request(conn: &Connection, req: &PromotionRequest) -> AppResult<()> {
@@ -61,15 +64,31 @@ fn insert_request(conn: &Connection, req: &PromotionRequest) -> AppResult<()> {
 /// and two ledger events (promotion_requested, then approved/blocked)
 /// under the task's correlation chain - refusals are as auditable as
 /// promotions.
-pub fn request_promotion(conn: &Connection, task_id: &str, correlation_id: Option<&str>) -> AppResult<PromotionRequest> {
+pub fn request_promotion(
+    conn: &Connection,
+    task_id: &str,
+    correlation_id: Option<&str>,
+) -> AppResult<PromotionRequest> {
     let all_evidence = evidence::for_task(conn, task_id)?;
     let latest = all_evidence.last();
 
     let requested_at = now_secs();
     let (evidence_id, verdict, reason) = match latest {
-        None => (String::new(), status::BLOCKED, "no evidence exists for this task"),
-        Some(ev) if !ev.success => (ev.id.clone(), status::BLOCKED, "latest evidence records a failure"),
-        Some(ev) => (ev.id.clone(), status::PROMOTED, "latest evidence records a pass"),
+        None => (
+            String::new(),
+            status::BLOCKED,
+            "no evidence exists for this task",
+        ),
+        Some(ev) if !ev.success => (
+            ev.id.clone(),
+            status::BLOCKED,
+            "latest evidence records a failure",
+        ),
+        Some(ev) => (
+            ev.id.clone(),
+            status::PROMOTED,
+            "latest evidence records a pass",
+        ),
     };
 
     let req = PromotionRequest {
@@ -78,7 +97,11 @@ pub fn request_promotion(conn: &Connection, task_id: &str, correlation_id: Optio
         task_id: task_id.to_string(),
         status: verdict.to_string(),
         requested_at,
-        promoted_at: if verdict == status::PROMOTED { Some(requested_at) } else { None },
+        promoted_at: if verdict == status::PROMOTED {
+            Some(requested_at)
+        } else {
+            None
+        },
     };
     insert_request(conn, &req)?;
 
@@ -108,16 +131,22 @@ pub fn request_promotion(conn: &Connection, task_id: &str, correlation_id: Optio
 }
 
 pub fn get(conn: &Connection, promotion_id: &str) -> AppResult<PromotionRequest> {
-    conn.query_row("SELECT * FROM promotion_requests WHERE id = ?1", params![promotion_id], |row| {
-        Ok(PromotionRequest {
-            id: row.get("id")?,
-            evidence_id: row.get::<_, Option<String>>("evidence_id")?.unwrap_or_default(),
-            task_id: row.get("task_id")?,
-            status: row.get("status")?,
-            requested_at: row.get("requested_at")?,
-            promoted_at: row.get("promoted_at")?,
-        })
-    })
+    conn.query_row(
+        "SELECT * FROM promotion_requests WHERE id = ?1",
+        params![promotion_id],
+        |row| {
+            Ok(PromotionRequest {
+                id: row.get("id")?,
+                evidence_id: row
+                    .get::<_, Option<String>>("evidence_id")?
+                    .unwrap_or_default(),
+                task_id: row.get("task_id")?,
+                status: row.get("status")?,
+                requested_at: row.get("requested_at")?,
+                promoted_at: row.get("promoted_at")?,
+            })
+        },
+    )
     .map_err(|_| AppError::NotFound(format!("promotion request {promotion_id}")))
 }
 
@@ -129,7 +158,9 @@ pub fn for_task(conn: &Connection, task_id: &str) -> AppResult<Vec<PromotionRequ
         .query_map(params![task_id], |row| {
             Ok(PromotionRequest {
                 id: row.get("id")?,
-                evidence_id: row.get::<_, Option<String>>("evidence_id")?.unwrap_or_default(),
+                evidence_id: row
+                    .get::<_, Option<String>>("evidence_id")?
+                    .unwrap_or_default(),
                 task_id: row.get("task_id")?,
                 status: row.get("status")?,
                 requested_at: row.get("requested_at")?,
@@ -172,9 +203,12 @@ pub fn apply_to_workspace(
 
     let target = workspace_root.join(file_path);
     let canonical_root = std::fs::canonicalize(workspace_root)?;
-    let canonical_target = std::fs::canonicalize(&target).map_err(|_| AppError::NotFound(file_path.to_string()))?;
+    let canonical_target =
+        std::fs::canonicalize(&target).map_err(|_| AppError::NotFound(file_path.to_string()))?;
     if !canonical_target.starts_with(&canonical_root) {
-        return Err(AppError::InvalidPath(format!("{file_path} is outside the workspace")));
+        return Err(AppError::InvalidPath(format!(
+            "{file_path} is outside the workspace"
+        )));
     }
 
     write_promoted_content(&canonical_target, content)?;
@@ -189,7 +223,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_promotion_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -218,9 +255,15 @@ mod tests {
 
         // apply_to_workspace refuses a blocked promotion outright.
         std::fs::write(dir.join("f.md"), "old").unwrap();
-        let err = apply_to_workspace(&conn, &req.id, &dir, "f.md", "new").unwrap_err().to_string();
+        let err = apply_to_workspace(&conn, &req.id, &dir, "f.md", "new")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("refusing to apply"), "got: {err}");
-        assert_eq!(std::fs::read_to_string(dir.join("f.md")).unwrap(), "old", "file must be untouched");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f.md")).unwrap(),
+            "old",
+            "file must be untouched"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -231,10 +274,21 @@ mod tests {
     fn promotion_with_failing_evidence_is_blocked() {
         let (dir, conn) = temp_conn();
 
-        evidence::record(&conn, "task-fail-ev", Some("corr-p2"), kind::VERIFICATION, "cargo check failed:\nerror[E0308]", false).unwrap();
+        evidence::record(
+            &conn,
+            "task-fail-ev",
+            Some("corr-p2"),
+            kind::VERIFICATION,
+            "cargo check failed:\nerror[E0308]",
+            false,
+        )
+        .unwrap();
         let req = request_promotion(&conn, "task-fail-ev", Some("corr-p2")).unwrap();
         assert_eq!(req.status, status::BLOCKED);
-        assert!(!req.evidence_id.is_empty(), "blocked-on-failure still references the evidence it judged");
+        assert!(
+            !req.evidence_id.is_empty(),
+            "blocked-on-failure still references the evidence it judged"
+        );
 
         let chain = ledger::list_by_correlation(&conn, "corr-p2").unwrap();
         assert!(chain.iter().any(|e| e.event_type == "promotion_blocked"));
@@ -253,7 +307,15 @@ mod tests {
     fn promotion_with_passing_evidence_promotes_and_applies() {
         let (dir, conn) = temp_conn();
 
-        evidence::record(&conn, "task-pass-ev", Some("corr-p3"), kind::VERIFICATION, "cargo check passed", true).unwrap();
+        evidence::record(
+            &conn,
+            "task-pass-ev",
+            Some("corr-p3"),
+            kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
         let req = request_promotion(&conn, "task-pass-ev", Some("corr-p3")).unwrap();
         assert_eq!(req.status, status::PROMOTED);
         assert!(req.promoted_at.is_some());
@@ -264,7 +326,11 @@ mod tests {
 
         std::fs::write(dir.join("f.md"), "old").unwrap();
         apply_to_workspace(&conn, &req.id, &dir, "f.md", "promoted content").unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("f.md")).unwrap(), "promoted content", "the file must actually change");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("f.md")).unwrap(),
+            "promoted content",
+            "the file must actually change"
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
@@ -276,13 +342,53 @@ mod tests {
     fn latest_evidence_wins() {
         let (dir, conn) = temp_conn();
 
-        evidence::record(&conn, "task-retry", None, kind::VERIFICATION, "cargo check failed", false).unwrap();
-        evidence::record(&conn, "task-retry", None, kind::VERIFICATION, "cargo check passed", true).unwrap();
-        assert_eq!(request_promotion(&conn, "task-retry", None).unwrap().status, status::PROMOTED);
+        evidence::record(
+            &conn,
+            "task-retry",
+            None,
+            kind::VERIFICATION,
+            "cargo check failed",
+            false,
+        )
+        .unwrap();
+        evidence::record(
+            &conn,
+            "task-retry",
+            None,
+            kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            request_promotion(&conn, "task-retry", None).unwrap().status,
+            status::PROMOTED
+        );
 
-        evidence::record(&conn, "task-regress", None, kind::VERIFICATION, "cargo check passed", true).unwrap();
-        evidence::record(&conn, "task-regress", None, kind::ROLLBACK, "restored after failed verification", false).unwrap();
-        assert_eq!(request_promotion(&conn, "task-regress", None).unwrap().status, status::BLOCKED);
+        evidence::record(
+            &conn,
+            "task-regress",
+            None,
+            kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
+        evidence::record(
+            &conn,
+            "task-regress",
+            None,
+            kind::ROLLBACK,
+            "restored after failed verification",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            request_promotion(&conn, "task-regress", None)
+                .unwrap()
+                .status,
+            status::BLOCKED
+        );
 
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();

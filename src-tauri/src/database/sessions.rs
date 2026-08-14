@@ -140,7 +140,13 @@ pub fn list_sessions(conn: &Connection, workspace_path: &str) -> AppResult<Vec<S
 /// appending several messages in a batch doesn't pay redundant UPDATEs,
 /// same reasoning as `agent::set_dag_membership` being its own call
 /// rather than folded into task creation).
-pub fn append_message(conn: &Connection, session_id: &str, role: &str, content: &str, status: &str) -> AppResult<()> {
+pub fn append_message(
+    conn: &Connection,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    status: &str,
+) -> AppResult<()> {
     conn.execute(
         "INSERT INTO session_messages (session_id, role, content, status, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![session_id, role, content, status, now_secs()],
@@ -185,7 +191,9 @@ pub fn append_message_with_metadata(
 /// conversation order).
 pub fn get_session_messages(conn: &Connection, session_id: &str) -> AppResult<Vec<SessionMessage>> {
     let mut stmt = conn
-        .prepare("SELECT * FROM session_messages WHERE session_id = ?1 ORDER BY timestamp ASC, id ASC")
+        .prepare(
+            "SELECT * FROM session_messages WHERE session_id = ?1 ORDER BY timestamp ASC, id ASC",
+        )
         .map_err(|e| AppError::Provider(format!("failed to query session messages: {e}")))?;
     let rows = stmt
         .query_map(params![session_id], row_to_message)
@@ -197,7 +205,12 @@ pub fn get_session_messages(conn: &Connection, session_id: &str) -> AppResult<Ve
 /// Updates a session's `title`/`last_message_preview` and bumps
 /// `updated_at` - the "this session was just active" signal `list_sessions`
 /// sorts on.
-pub fn update_session_metadata(conn: &Connection, session_id: &str, title: &str, last_message_preview: &str) -> AppResult<()> {
+pub fn update_session_metadata(
+    conn: &Connection,
+    session_id: &str,
+    title: &str,
+    last_message_preview: &str,
+) -> AppResult<()> {
     conn.execute(
         "UPDATE sessions SET title = ?1, last_message_preview = ?2, updated_at = ?3 WHERE id = ?4",
         params![title, last_message_preview, now_secs(), session_id],
@@ -225,7 +238,10 @@ mod tests {
 
     fn temp_conn() -> Connection {
         let mut dir = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_sessions_test_{nanos}"));
         crate::database::open_for_workspace(&dir).unwrap()
     }
@@ -233,7 +249,14 @@ mod tests {
     #[test]
     fn create_session_persists_and_returns_a_real_row() {
         let conn = temp_conn();
-        let session = create_session(&conn, "/workspace/a", "New chat", Some("ollama"), Some("qwen2.5-coder:7b")).unwrap();
+        let session = create_session(
+            &conn,
+            "/workspace/a",
+            "New chat",
+            Some("ollama"),
+            Some("qwen2.5-coder:7b"),
+        )
+        .unwrap();
 
         assert_eq!(session.workspace_path, "/workspace/a");
         assert_eq!(session.title, "New chat");
@@ -263,8 +286,15 @@ mod tests {
         update_session_metadata(&conn, &a.id, "Session A", "hello").unwrap();
 
         let sessions = list_sessions(&conn, "/workspace/a").unwrap();
-        assert_eq!(sessions.len(), 2, "must only return sessions for the requested workspace");
-        assert_eq!(sessions[0].id, a.id, "most recently updated session must come first");
+        assert_eq!(
+            sessions.len(),
+            2,
+            "must only return sessions for the requested workspace"
+        );
+        assert_eq!(
+            sessions[0].id, a.id,
+            "most recently updated session must come first"
+        );
         assert_eq!(sessions[1].id, b.id);
     }
 
@@ -287,8 +317,15 @@ mod tests {
         .unwrap();
 
         let sessions = list_sessions(&conn, "/workspace/a").unwrap();
-        assert_eq!(sessions.len(), 1, "the malformed row must be skipped, not crash the whole list");
-        assert_eq!(sessions[0].id, good.id, "the real, well-formed session must still be returned");
+        assert_eq!(
+            sessions.len(),
+            1,
+            "the malformed row must be skipped, not crash the whole list"
+        );
+        assert_eq!(
+            sessions[0].id, good.id,
+            "the real, well-formed session must still be returned"
+        );
     }
 
     #[test]
@@ -322,13 +359,25 @@ mod tests {
         let original_updated_at = session.updated_at;
 
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        update_session_metadata(&conn, &session.id, "Fix auth bug", "Let's fix the login flow").unwrap();
+        update_session_metadata(
+            &conn,
+            &session.id,
+            "Fix auth bug",
+            "Let's fix the login flow",
+        )
+        .unwrap();
 
         let sessions = list_sessions(&conn, "/workspace/a").unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].title, "Fix auth bug");
-        assert_eq!(sessions[0].last_message_preview.as_deref(), Some("Let's fix the login flow"));
-        assert!(sessions[0].updated_at > original_updated_at, "updated_at must advance on metadata update");
+        assert_eq!(
+            sessions[0].last_message_preview.as_deref(),
+            Some("Let's fix the login flow")
+        );
+        assert!(
+            sessions[0].updated_at > original_updated_at,
+            "updated_at must advance on metadata update"
+        );
     }
 
     #[test]
@@ -340,16 +389,26 @@ mod tests {
 
         delete_session(&conn, &session.id).unwrap();
 
-        assert!(list_sessions(&conn, "/workspace/a").unwrap().is_empty(), "session itself must be gone");
+        assert!(
+            list_sessions(&conn, "/workspace/a").unwrap().is_empty(),
+            "session itself must be gone"
+        );
 
         // Verify no orphaned message rows survive the cascade - query the
         // table directly rather than through get_session_messages, so this
         // test still catches an orphan even if get_session_messages itself
         // had a bug that hid them.
         let orphan_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM session_messages WHERE session_id = ?1", params![session.id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+                params![session.id],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(orphan_count, 0, "deleting a session must not leave orphaned session_messages rows");
+        assert_eq!(
+            orphan_count, 0,
+            "deleting a session must not leave orphaned session_messages rows"
+        );
     }
 
     #[test]
@@ -367,10 +426,12 @@ mod tests {
     #[test]
     fn append_message_with_metadata_updates_both_tables() {
         let conn = temp_conn();
-        let session = create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
+        let session =
+            create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
         let session_id = session.id.clone();
 
-        append_message_with_metadata(&conn, &session_id, "assistant", "Hello world!", "complete").unwrap();
+        append_message_with_metadata(&conn, &session_id, "assistant", "Hello world!", "complete")
+            .unwrap();
 
         // Message exists.
         let msgs = get_session_messages(&conn, &session_id).unwrap();
@@ -380,7 +441,10 @@ mod tests {
 
         // Metadata updated: preview is trimmed to 200 chars.
         let sessions = list_sessions(&conn, "/ws").unwrap();
-        assert_eq!(sessions[0].last_message_preview, Some("Hello world!".to_string()));
+        assert_eq!(
+            sessions[0].last_message_preview,
+            Some("Hello world!".to_string())
+        );
     }
 
     /// NF-SESSION-001: if the metadata UPDATE fails mid-transaction, the
@@ -388,30 +452,59 @@ mod tests {
     #[test]
     fn append_message_with_metadata_rolls_back_on_partial_failure() {
         let conn = temp_conn();
-        let session = create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
+        let session =
+            create_session(&conn, "/ws", "Test", Some("anthropic"), Some("claude-3")).unwrap();
         let session_id = session.id.clone();
         let messages_before: i64 = conn
-            .query_row("SELECT COUNT(*) FROM session_messages WHERE session_id = ?1", params![&session_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+                params![&session_id],
+                |r| r.get(0),
+            )
             .unwrap();
         let sessions_before: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sessions WHERE id = ?1", params![&session_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                params![&session_id],
+                |r| r.get(0),
+            )
             .unwrap();
 
         // Sabotage: rename sessions so the UPDATE fails mid-transaction.
-        conn.execute("ALTER TABLE sessions RENAME TO sessions_sabotaged", []).unwrap();
-        let result = append_message_with_metadata(&conn, &session_id, "assistant", "lost", "complete");
-        conn.execute("ALTER TABLE sessions_sabotaged RENAME TO sessions", []).unwrap();
+        conn.execute("ALTER TABLE sessions RENAME TO sessions_sabotaged", [])
+            .unwrap();
+        let result =
+            append_message_with_metadata(&conn, &session_id, "assistant", "lost", "complete");
+        conn.execute("ALTER TABLE sessions_sabotaged RENAME TO sessions", [])
+            .unwrap();
 
-        assert!(result.is_err(), "partial failure must be surfaced to the caller");
+        assert!(
+            result.is_err(),
+            "partial failure must be surfaced to the caller"
+        );
 
         // NOTHING partial persisted: no orphaned message, no phantom session.
         let messages_after: i64 = conn
-            .query_row("SELECT COUNT(*) FROM session_messages WHERE session_id = ?1", params![&session_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM session_messages WHERE session_id = ?1",
+                params![&session_id],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(messages_after, messages_before, "no orphaned message may survive the rollback");
+        assert_eq!(
+            messages_after, messages_before,
+            "no orphaned message may survive the rollback"
+        );
         let sessions_after: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sessions WHERE id = ?1", params![&session_id], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                params![&session_id],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(sessions_after, sessions_before, "no phantom session metadata may survive the rollback");
+        assert_eq!(
+            sessions_after, sessions_before,
+            "no phantom session metadata may survive the rollback"
+        );
     }
 }

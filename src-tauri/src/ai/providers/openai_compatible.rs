@@ -38,7 +38,9 @@ impl OpenAiCompatibleProvider {
 
     fn api_url(&self, path: &str) -> String {
         let root = self.base_url.trim_end_matches('/');
-        let has_versioned_path = ["/v1", "/v2", "/v3", "/v4"].iter().any(|segment| root.contains(segment));
+        let has_versioned_path = ["/v1", "/v2", "/v3", "/v4"]
+            .iter()
+            .any(|segment| root.contains(segment));
         if has_versioned_path {
             format!("{}/{}", root, path)
         } else {
@@ -67,7 +69,9 @@ impl OpenAiCompatibleProvider {
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .map_err(|e| AppError::Provider(format!("OpenAI-compatible endpoint unreachable: {e}")))?;
+            .map_err(|e| {
+                AppError::Provider(format!("OpenAI-compatible endpoint unreachable: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             return Err(AppError::Provider(format!(
@@ -87,9 +91,21 @@ impl OpenAiCompatibleProvider {
             .map(|arr| {
                 arr.iter()
                     .map(|m| OpenAiModel {
-                        id: m.get("id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                        object: m.get("object").and_then(|v| v.as_str()).unwrap_or("model").to_string(),
-                        owned_by: m.get("owned_by").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                        id: m
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        object: m
+                            .get("object")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("model")
+                            .to_string(),
+                        owned_by: m
+                            .get("owned_by")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
                     })
                     .collect()
             })
@@ -167,7 +183,9 @@ impl OpenAiCompatibleProvider {
                         if let Some(choices) = parsed.get("choices").and_then(|c| c.as_array()) {
                             for choice in choices {
                                 if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+                                    if let Some(content) =
+                                        delta.get("content").and_then(|v| v.as_str())
+                                    {
                                         if !content.is_empty() {
                                             on_token(content, false);
                                             token_count += 1;
@@ -176,7 +194,9 @@ impl OpenAiCompatibleProvider {
                                 }
                                 // Check for finish reason
                                 if let Some(finish) = choice.get("finish_reason") {
-                                    if finish.as_str() == Some("stop") || finish.as_str() == Some("length") {
+                                    if finish.as_str() == Some("stop")
+                                        || finish.as_str() == Some("length")
+                                    {
                                         on_token("", true);
                                     }
                                 }
@@ -185,7 +205,10 @@ impl OpenAiCompatibleProvider {
                         // Track usage if present
                         if let Some(usage) = parsed.get("usage") {
                             total_tokens = total_tokens.max(
-                                usage.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0)
+                                usage
+                                    .get("total_tokens")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
                             );
                         }
                     }
@@ -242,7 +265,10 @@ mod tests {
             "https://api.openai.com".to_string(),
             "sk-test".to_string(),
         );
-        assert_eq!(provider.api_url("models"), "https://api.openai.com/v1/models");
+        assert_eq!(
+            provider.api_url("models"),
+            "https://api.openai.com/v1/models"
+        );
     }
 
     #[test]
@@ -251,7 +277,10 @@ mod tests {
             "https://openrouter.ai/api/v1".to_string(),
             "sk-test".to_string(),
         );
-        assert_eq!(provider.api_url("chat/completions"), "https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(
+            provider.api_url("chat/completions"),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -260,6 +289,9 @@ mod tests {
             "https://ark.cn-beijing.volces.com/api/v3".to_string(),
             "sk-test".to_string(),
         );
-        assert_eq!(provider.api_url("models"), "https://ark.cn-beijing.volces.com/api/v3/models");
+        assert_eq!(
+            provider.api_url("models"),
+            "https://ark.cn-beijing.volces.com/api/v3/models"
+        );
     }
 }

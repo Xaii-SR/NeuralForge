@@ -24,10 +24,10 @@ pub async fn search_web(query: String) -> Result<String, String> {
     let document = Html::parse_document(&html);
 
     // Select all result containers
-    let result_selector = Selector::parse(".result")
-        .map_err(|_| "Failed to parse result selector".to_string())?;
-    let url_selector = Selector::parse(".result__url")
-        .map_err(|_| "Failed to parse URL selector".to_string())?;
+    let result_selector =
+        Selector::parse(".result").map_err(|_| "Failed to parse result selector".to_string())?;
+    let url_selector =
+        Selector::parse(".result__url").map_err(|_| "Failed to parse URL selector".to_string())?;
     let snippet_selector = Selector::parse(".result__snippet")
         .map_err(|_| "Failed to parse snippet selector".to_string())?;
 

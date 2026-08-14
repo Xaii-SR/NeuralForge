@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 pub const WRAP_SENTINEL: u32 = u32::MAX;
@@ -45,15 +45,26 @@ pub struct NativeMapper;
 impl MemoryMapper for NativeMapper {
     fn map(&self, capacity: usize) -> Result<*mut u8, ArenaError> {
         unsafe {
-            let fd = libc::memfd_create(b"neural_forge_arena\0".as_ptr() as *const libc::c_char, libc::MFD_ALLOW_SEALING);
+            let fd = libc::memfd_create(
+                b"neural_forge_arena\0".as_ptr() as *const libc::c_char,
+                libc::MFD_ALLOW_SEALING,
+            );
             if fd < 0 {
-                return Err(ArenaError::MappingError("Failed to create memfd".to_string()));
+                return Err(ArenaError::MappingError(
+                    "Failed to create memfd".to_string(),
+                ));
             }
             if libc::ftruncate(fd, capacity as libc::off_t) < 0 {
                 libc::close(fd);
-                return Err(ArenaError::MappingError("Failed to truncate memfd".to_string()));
+                return Err(ArenaError::MappingError(
+                    "Failed to truncate memfd".to_string(),
+                ));
             }
-            libc::fcntl(fd, libc::F_ADD_SEALS, libc::F_SEAL_SHRINK | libc::F_SEAL_GROW);
+            libc::fcntl(
+                fd,
+                libc::F_ADD_SEALS,
+                libc::F_SEAL_SHRINK | libc::F_SEAL_GROW,
+            );
 
             let ptr = libc::mmap(
                 ptr::null_mut(),
@@ -144,9 +155,18 @@ extern "system" {
 impl MemoryMapper for NativeMapper {
     fn map(&self, capacity: usize) -> Result<*mut u8, ArenaError> {
         unsafe {
-            let handle = CreateFileMappingW(-1, ptr::null(), 0x04, (capacity >> 32) as u32, (capacity & 0xFFFFFFFF) as u32, ptr::null());
+            let handle = CreateFileMappingW(
+                -1,
+                ptr::null(),
+                0x04,
+                (capacity >> 32) as u32,
+                (capacity & 0xFFFFFFFF) as u32,
+                ptr::null(),
+            );
             if handle == 0 {
-                return Err(ArenaError::MappingError("CreateFileMappingW failed".to_string()));
+                return Err(ArenaError::MappingError(
+                    "CreateFileMappingW failed".to_string(),
+                ));
             }
             let ptr = MapViewOfFile(handle, 0x000F001F, 0, 0, capacity);
             CloseHandle(handle);
@@ -160,7 +180,9 @@ impl MemoryMapper for NativeMapper {
     fn unmap(&self, ptr: *mut u8, _capacity: usize) -> Result<(), ArenaError> {
         unsafe {
             if UnmapViewOfFile(ptr as *const std::ffi::c_void) == 0 {
-                return Err(ArenaError::MappingError("UnmapViewOfFile failed".to_string()));
+                return Err(ArenaError::MappingError(
+                    "UnmapViewOfFile failed".to_string(),
+                ));
             }
             Ok(())
         }
@@ -190,7 +212,11 @@ impl SharedRingBufferArena {
             (*control_ptr).epoch.store(1, Ordering::SeqCst);
         }
 
-        Ok(Self { storage_ptr, capacity, mapper })
+        Ok(Self {
+            storage_ptr,
+            capacity,
+            mapper,
+        })
     }
 
     pub fn get_control(&self) -> &ArenaControl {
@@ -227,25 +253,31 @@ impl SharedRingBufferArena {
                     return Err(ArenaError::Backpressure);
                 }
             } else {
-                if current_write < current_read && current_write + total_size as u64 >= current_read {
+                if current_write < current_read && current_write + total_size as u64 >= current_read
+                {
                     return Err(ArenaError::Backpressure);
                 }
             }
 
             let next_write = target_write + total_size as u64;
 
-            if control.write_head.compare_exchange_weak(
-                current_write,
-                next_write,
-                Ordering::Release,
-                Ordering::Relaxed,
-            ).is_ok() {
+            if control
+                .write_head
+                .compare_exchange_weak(
+                    current_write,
+                    next_write,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
                 // Write WRAP_SENTINEL AFTER CAS succeeds, using the old tail position
                 if wrap_needed && target_write == ctrl_size {
                     let old_space_left = control.capacity - current_write;
                     if old_space_left >= header_size as u64 {
                         unsafe {
-                            let header_ptr = self.storage_ptr.add(current_write as usize) as *mut SlotHeader;
+                            let header_ptr =
+                                self.storage_ptr.add(current_write as usize) as *mut SlotHeader;
                             (*header_ptr).len = WRAP_SENTINEL;
                             (*header_ptr).kind = 0;
                             (*header_ptr).flags = FLAG_COMMITTED;
@@ -279,7 +311,10 @@ impl SharedRingBufferArena {
         }
     }
 
-    pub fn read_next_slot(&self, expected_seq: u64) -> Result<Option<(u64, u32, u16, &[u8])>, ArenaError> {
+    pub fn read_next_slot(
+        &self,
+        expected_seq: u64,
+    ) -> Result<Option<(u64, u32, u16, &[u8])>, ArenaError> {
         let control = self.get_control();
         let current_read = control.read_head.load(Ordering::Acquire);
         let current_write = control.write_head.load(Ordering::Acquire);

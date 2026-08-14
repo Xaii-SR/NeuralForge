@@ -14,7 +14,7 @@ export interface DiffEditorProps {
 
 export default function DiffEditor({ original, modified, language, originalPath, modifiedPath }: DiffEditorProps) {
   const modifiedEditorRef = useRef<any>(null);
-  const { isAutoScrollLocked } = useSmartScroll(modifiedEditorRef.current);
+  const { isAutoScrollLocked } = useSmartScroll(modifiedEditorRef);
   const prevModifiedLengthRef = useRef(modified.length);
 
   // Capture the modified editor instance when diff is mounted

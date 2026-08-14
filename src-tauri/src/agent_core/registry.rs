@@ -36,8 +36,16 @@ impl AgentRegistry {
     /// than resetting it - registration is idempotent, not a reset. A
     /// different `role` under the same `task_id` is a distinct entry, not a
     /// collision.
-    pub fn register(&self, task_id: String, role: AgentRole, initial_state: AgentLifecycleState) -> Result<AgentLifecycleState, AgentError> {
-        let mut services = self.services.write().map_err(|_| AgentError::LockPoisoned)?;
+    pub fn register(
+        &self,
+        task_id: String,
+        role: AgentRole,
+        initial_state: AgentLifecycleState,
+    ) -> Result<AgentLifecycleState, AgentError> {
+        let mut services = self
+            .services
+            .write()
+            .map_err(|_| AgentError::LockPoisoned)?;
         let roles = services.entry(task_id).or_default();
         if let Some(existing) = roles.get(&role) {
             return existing.current_state();
@@ -50,7 +58,12 @@ impl AgentRegistry {
     /// `AgentError::TaskNotFound` if that exact `(task_id, role)` pair was
     /// never registered - callers must `register` before transitioning.
     /// Never affects any other role registered under the same `task_id`.
-    pub fn transition(&self, task_id: &str, role: AgentRole, event: AgentEventType) -> Result<AgentLifecycleState, AgentError> {
+    pub fn transition(
+        &self,
+        task_id: &str,
+        role: AgentRole,
+        event: AgentEventType,
+    ) -> Result<AgentLifecycleState, AgentError> {
         let services = self.services.read().map_err(|_| AgentError::LockPoisoned)?;
         let service = services
             .get(task_id)
@@ -59,7 +72,11 @@ impl AgentRegistry {
         service.transition(event)
     }
 
-    pub fn current_state(&self, task_id: &str, role: AgentRole) -> Result<AgentLifecycleState, AgentError> {
+    pub fn current_state(
+        &self,
+        task_id: &str,
+        role: AgentRole,
+    ) -> Result<AgentLifecycleState, AgentError> {
         let services = self.services.read().map_err(|_| AgentError::LockPoisoned)?;
         let service = services
             .get(task_id)
@@ -83,7 +100,10 @@ impl AgentRegistry {
     /// lock is itself poisoned, this call fails with `LockPoisoned` too,
     /// same as every other method here.
     pub fn recover_task(&self, task_id: &str, role: AgentRole) -> Result<(), AgentError> {
-        let mut services = self.services.write().map_err(|_| AgentError::LockPoisoned)?;
+        let mut services = self
+            .services
+            .write()
+            .map_err(|_| AgentError::LockPoisoned)?;
         let Some(roles) = services.get_mut(task_id) else {
             return Err(AgentError::TaskNotFound);
         };
@@ -104,27 +124,64 @@ mod tests {
     #[test]
     fn register_starts_a_new_task_at_the_given_initial_state() {
         let registry = AgentRegistry::new();
-        let result = registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        let result = registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
         assert_eq!(result, AgentLifecycleState::Created);
-        assert_eq!(registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 
     #[test]
     fn register_is_idempotent_and_does_not_reset_an_existing_task() {
         let registry = AgentRegistry::new();
-        registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.transition("task-1", AgentRole::Architect, AgentEventType::PlanningStarted).unwrap();
+        registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .transition(
+                "task-1",
+                AgentRole::Architect,
+                AgentEventType::PlanningStarted,
+            )
+            .unwrap();
 
-        let result = registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        let result = registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        assert_eq!(result, AgentLifecycleState::Planning, "re-registering must not reset in-progress state");
+        assert_eq!(
+            result,
+            AgentLifecycleState::Planning,
+            "re-registering must not reset in-progress state"
+        );
     }
 
     #[test]
     fn transition_on_an_unregistered_task_returns_task_not_found() {
         let registry = AgentRegistry::new();
         assert_eq!(
-            registry.transition("missing", AgentRole::Architect, AgentEventType::PlanningStarted),
+            registry.transition(
+                "missing",
+                AgentRole::Architect,
+                AgentEventType::PlanningStarted
+            ),
             Err(AgentError::TaskNotFound)
         );
     }
@@ -132,48 +189,114 @@ mod tests {
     #[test]
     fn current_state_on_an_unregistered_task_returns_task_not_found() {
         let registry = AgentRegistry::new();
-        assert_eq!(registry.current_state("missing", AgentRole::Architect), Err(AgentError::TaskNotFound));
+        assert_eq!(
+            registry.current_state("missing", AgentRole::Architect),
+            Err(AgentError::TaskNotFound)
+        );
     }
 
     #[test]
     fn recover_task_evicts_a_registered_task() {
         let registry = AgentRegistry::new();
-        registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        registry.recover_task("task-1", AgentRole::Architect).unwrap();
+        registry
+            .recover_task("task-1", AgentRole::Architect)
+            .unwrap();
 
-        assert_eq!(registry.current_state("task-1", AgentRole::Architect), Err(AgentError::TaskNotFound));
+        assert_eq!(
+            registry.current_state("task-1", AgentRole::Architect),
+            Err(AgentError::TaskNotFound)
+        );
     }
 
     #[test]
     fn recover_task_on_an_unregistered_task_returns_task_not_found() {
         let registry = AgentRegistry::new();
-        assert_eq!(registry.recover_task("missing", AgentRole::Architect), Err(AgentError::TaskNotFound));
+        assert_eq!(
+            registry.recover_task("missing", AgentRole::Architect),
+            Err(AgentError::TaskNotFound)
+        );
     }
 
     #[test]
     fn re_registering_after_recover_task_starts_fresh() {
         let registry = AgentRegistry::new();
-        registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.transition("task-1", AgentRole::Architect, AgentEventType::PlanningStarted).unwrap();
+        registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .transition(
+                "task-1",
+                AgentRole::Architect,
+                AgentEventType::PlanningStarted,
+            )
+            .unwrap();
 
-        registry.recover_task("task-1", AgentRole::Architect).unwrap();
-        let result = registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        registry
+            .recover_task("task-1", AgentRole::Architect)
+            .unwrap();
+        let result = registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        assert_eq!(result, AgentLifecycleState::Created, "recovered task must not retain pre-recovery state");
+        assert_eq!(
+            result,
+            AgentLifecycleState::Created,
+            "recovered task must not retain pre-recovery state"
+        );
     }
 
     #[test]
     fn two_tasks_transition_independently_without_interfering() {
         let registry = AgentRegistry::new();
-        registry.register("task-1".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.register("task-2".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        registry
+            .register(
+                "task-1".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "task-2".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        registry.transition("task-1", AgentRole::Architect, AgentEventType::PlanningStarted).unwrap();
+        registry
+            .transition(
+                "task-1",
+                AgentRole::Architect,
+                AgentEventType::PlanningStarted,
+            )
+            .unwrap();
 
-        assert_eq!(registry.current_state("task-1", AgentRole::Architect).unwrap(), AgentLifecycleState::Planning);
         assert_eq!(
-            registry.current_state("task-2", AgentRole::Architect).unwrap(),
+            registry
+                .current_state("task-1", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Planning
+        );
+        assert_eq!(
+            registry
+                .current_state("task-2", AgentRole::Architect)
+                .unwrap(),
             AgentLifecycleState::Created,
             "task-2 must be unaffected by task-1's transition"
         );
@@ -186,20 +309,53 @@ mod tests {
     #[test]
     fn registry_can_hold_multiple_roles_under_the_same_task_id_independently() {
         let registry = AgentRegistry::new();
-        registry.register("council-task".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.register("council-task".to_string(), AgentRole::Critic, AgentLifecycleState::Created).unwrap();
-        registry.register("council-task".to_string(), AgentRole::Judge, AgentLifecycleState::Created).unwrap();
+        registry
+            .register(
+                "council-task".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "council-task".to_string(),
+                AgentRole::Critic,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "council-task".to_string(),
+                AgentRole::Judge,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        registry.transition("council-task", AgentRole::Architect, AgentEventType::PlanningStarted).unwrap();
+        registry
+            .transition(
+                "council-task",
+                AgentRole::Architect,
+                AgentEventType::PlanningStarted,
+            )
+            .unwrap();
 
-        assert_eq!(registry.current_state("council-task", AgentRole::Architect).unwrap(), AgentLifecycleState::Planning);
         assert_eq!(
-            registry.current_state("council-task", AgentRole::Critic).unwrap(),
+            registry
+                .current_state("council-task", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Planning
+        );
+        assert_eq!(
+            registry
+                .current_state("council-task", AgentRole::Critic)
+                .unwrap(),
             AgentLifecycleState::Created,
             "Critic must be unaffected by Architect's transition under the same task_id"
         );
         assert_eq!(
-            registry.current_state("council-task", AgentRole::Judge).unwrap(),
+            registry
+                .current_state("council-task", AgentRole::Judge)
+                .unwrap(),
             AgentLifecycleState::Created,
             "Judge must be unaffected by Architect's transition under the same task_id"
         );
@@ -211,18 +367,49 @@ mod tests {
     #[test]
     fn transition_and_recover_task_operate_on_the_correct_task_role_pair_only() {
         let registry = AgentRegistry::new();
-        registry.register("task-a".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.register("task-a".to_string(), AgentRole::Critic, AgentLifecycleState::Created).unwrap();
-        registry.register("task-b".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        registry
+            .register(
+                "task-a".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "task-a".to_string(),
+                AgentRole::Critic,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "task-b".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
         registry.recover_task("task-a", AgentRole::Critic).unwrap();
 
         // Evicted pair is gone.
-        assert_eq!(registry.current_state("task-a", AgentRole::Critic), Err(AgentError::TaskNotFound));
+        assert_eq!(
+            registry.current_state("task-a", AgentRole::Critic),
+            Err(AgentError::TaskNotFound)
+        );
         // Same task_id, different role: untouched.
-        assert_eq!(registry.current_state("task-a", AgentRole::Architect).unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            registry
+                .current_state("task-a", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Created
+        );
         // Same role, different task_id: untouched.
-        assert_eq!(registry.current_state("task-b", AgentRole::Architect).unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            registry
+                .current_state("task-b", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 
     /// Evicting the last role under a task_id must not leak an empty inner
@@ -230,12 +417,34 @@ mod tests {
     #[test]
     fn recover_task_removes_the_outer_task_entry_once_its_last_role_is_evicted() {
         let registry = AgentRegistry::new();
-        registry.register("task-a".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
-        registry.register("task-b".to_string(), AgentRole::Architect, AgentLifecycleState::Created).unwrap();
+        registry
+            .register(
+                "task-a".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
+        registry
+            .register(
+                "task-b".to_string(),
+                AgentRole::Architect,
+                AgentLifecycleState::Created,
+            )
+            .unwrap();
 
-        registry.recover_task("task-a", AgentRole::Architect).unwrap();
+        registry
+            .recover_task("task-a", AgentRole::Architect)
+            .unwrap();
 
-        assert_eq!(registry.recover_task("task-a", AgentRole::Architect), Err(AgentError::TaskNotFound));
-        assert_eq!(registry.current_state("task-b", AgentRole::Architect).unwrap(), AgentLifecycleState::Created);
+        assert_eq!(
+            registry.recover_task("task-a", AgentRole::Architect),
+            Err(AgentError::TaskNotFound)
+        );
+        assert_eq!(
+            registry
+                .current_state("task-b", AgentRole::Architect)
+                .unwrap(),
+            AgentLifecycleState::Created
+        );
     }
 }

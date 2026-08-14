@@ -8,23 +8,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// one-line entries could never carry. Each row is one artifact produced
 /// while executing a task (verification output, rollback note, run_code
 /// stdout), referenced by ID from the ledger event that closed the task.
-/// 
+///
 /// IMPORTANT ARCHITECTURAL CONTRACT:
-/// 
+///
 /// Evidence retrieval MUST preserve true chronological insertion order.
-/// 
+///
 /// Why timestamps cannot guarantee ordering:
 /// - UUIDv4 identifiers are randomly generated and have no relationship to insertion sequence
 /// - Wall-clock timestamps (created_at) cannot distinguish order when multiple records are inserted within the same second
 /// - Database storage order is not guaranteed to match insertion sequence
 /// - Relying on UUID sorting or timestamp ordering violates traceability contract
-/// 
+///
 /// Deterministic monotonic ordering mechanism:
 /// - Added `insertion_sequence INTEGER` column via additive migration
 /// - Sequence numbers are allocated transactionally using a monotonic counter
 /// - Evidence retrieval orders by `insertion_sequence ASC` to guarantee INSERT ORDER == RETRIEVAL ORDER
 /// - This preserves the NeuralForge traceability contract: historical timeline reconstruction must be exact
-/// 
+///
 /// Future NeuralForge development MUST preserve this contract. Evidence ordering is not optional - it's a core requirement for complete traceability.
 #[derive(Serialize, Type, Clone)]
 pub struct EvidenceRecord {
@@ -48,7 +48,10 @@ pub mod kind {
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 /// Allocates the next monotonic sequence number for evidence insertion.
@@ -58,14 +61,15 @@ fn allocate_sequence(conn: &Connection) -> AppResult<i64> {
     conn.execute(
         "INSERT OR IGNORE INTO evidence_sequence (next_sequence) VALUES (1)",
         [],
-    ).map_err(|e| AppError::Provider(format!("failed to initialize evidence sequence: {e}")))?;
-    
+    )
+    .map_err(|e| AppError::Provider(format!("failed to initialize evidence sequence: {e}")))?;
+
     let seq: i64 = conn.query_row(
         "UPDATE evidence_sequence SET next_sequence = next_sequence + 1 RETURNING next_sequence - 1",
         [],
         |row| row.get(0),
     ).map_err(|e| AppError::Provider(format!("failed to allocate evidence sequence: {e}")))?;
-    
+
     Ok(seq)
 }
 
@@ -78,7 +82,7 @@ pub fn record(
     success: bool,
 ) -> AppResult<EvidenceRecord> {
     let sequence = allocate_sequence(conn)?;
-    
+
     let rec = EvidenceRecord {
         id: uuid::Uuid::new_v4().to_string(),
         insertion_sequence: sequence,
@@ -93,13 +97,13 @@ pub fn record(
         "INSERT INTO evidence (id, insertion_sequence, task_id, correlation_id, kind, content, success, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
-            rec.id, 
-            rec.insertion_sequence, 
-            rec.task_id, 
-            rec.correlation_id, 
-            rec.kind, 
-            rec.content, 
-            rec.success as i64, 
+            rec.id,
+            rec.insertion_sequence,
+            rec.task_id,
+            rec.correlation_id,
+            rec.kind,
+            rec.content,
+            rec.success as i64,
             rec.created_at
         ],
     )
@@ -149,7 +153,10 @@ mod tests {
 
     fn temp_conn() -> (std::path::PathBuf, Connection) {
         let mut dir = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         dir.push(format!("neuralforge_evidence_test_{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::database::open_for_workspace(&dir).unwrap();
@@ -161,18 +168,42 @@ mod tests {
         let (dir, conn) = temp_conn();
 
         // Test strict chronological ordering with identical timestamps
-        record(&conn, "task-chrono-1", Some("corr-chrono"), kind::VERIFICATION, "first", true).unwrap();
-        record(&conn, "task-chrono-1", Some("corr-chrono"), kind::ROLLBACK, "second", false).unwrap();
-        record(&conn, "task-chrono-1", Some("corr-chrono"), kind::EXECUTION_OUTPUT, "third", true).unwrap();
+        record(
+            &conn,
+            "task-chrono-1",
+            Some("corr-chrono"),
+            kind::VERIFICATION,
+            "first",
+            true,
+        )
+        .unwrap();
+        record(
+            &conn,
+            "task-chrono-1",
+            Some("corr-chrono"),
+            kind::ROLLBACK,
+            "second",
+            false,
+        )
+        .unwrap();
+        record(
+            &conn,
+            "task-chrono-1",
+            Some("corr-chrono"),
+            kind::EXECUTION_OUTPUT,
+            "third",
+            true,
+        )
+        .unwrap();
 
         let by_task = for_task(&conn, "task-chrono-1").unwrap();
         assert_eq!(by_task.len(), 3, "Expected 3 evidence items");
-        
+
         // Strict chronological ordering validation: INSERT ORDER == RETRIEVAL ORDER
         assert_eq!(by_task[0].kind, kind::VERIFICATION);
         assert_eq!(by_task[1].kind, kind::ROLLBACK);
         assert_eq!(by_task[2].kind, kind::EXECUTION_OUTPUT);
-        
+
         drop(conn);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -181,17 +212,54 @@ mod tests {
     fn record_and_fetch_by_task_and_correlation() {
         let (dir, conn) = temp_conn();
 
-        record(&conn, "task-1", Some("corr-1"), kind::VERIFICATION, "cargo check passed", true).unwrap();
-        record(&conn, "task-1", Some("corr-1"), kind::ROLLBACK, "restored after failed verification", false).unwrap();
-        record(&conn, "task-2", Some("corr-2"), kind::EXECUTION_OUTPUT, "42", true).unwrap();
+        record(
+            &conn,
+            "task-1",
+            Some("corr-1"),
+            kind::VERIFICATION,
+            "cargo check passed",
+            true,
+        )
+        .unwrap();
+        record(
+            &conn,
+            "task-1",
+            Some("corr-1"),
+            kind::ROLLBACK,
+            "restored after failed verification",
+            false,
+        )
+        .unwrap();
+        record(
+            &conn,
+            "task-2",
+            Some("corr-2"),
+            kind::EXECUTION_OUTPUT,
+            "42",
+            true,
+        )
+        .unwrap();
 
         let by_task = for_task(&conn, "task-1").unwrap();
-        assert_eq!(by_task.len(), 2, "Expected 2 evidence items, got {}", by_task.len());
-        
+        assert_eq!(
+            by_task.len(),
+            2,
+            "Expected 2 evidence items, got {}",
+            by_task.len()
+        );
+
         // Strict chronological ordering validation: INSERT ORDER == RETRIEVAL ORDER
-        assert_eq!(by_task[0].kind, kind::VERIFICATION, "First evidence must be VERIFICATION (chronological order)");
+        assert_eq!(
+            by_task[0].kind,
+            kind::VERIFICATION,
+            "First evidence must be VERIFICATION (chronological order)"
+        );
         assert!(by_task[0].success);
-        assert_eq!(by_task[1].kind, kind::ROLLBACK, "Second evidence must be ROLLBACK (chronological order)");
+        assert_eq!(
+            by_task[1].kind,
+            kind::ROLLBACK,
+            "Second evidence must be ROLLBACK (chronological order)"
+        );
         assert!(!by_task[1].success, "a rollback documents a failure");
 
         let by_corr = for_correlation(&conn, "corr-2").unwrap();
