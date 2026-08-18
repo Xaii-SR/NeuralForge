@@ -9,6 +9,10 @@ export interface OllamaModel {
   family: string;
 }
 
+export interface OfficialOllamaModel {
+  name: string;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -57,6 +61,10 @@ export function ollamaHealthCheck(): Promise<boolean> {
 
 export function listModels(): Promise<OllamaModel[]> {
   return invoke("list_models");
+}
+
+export function listOfficialOllamaModels(): Promise<OfficialOllamaModel[]> {
+  return invoke("list_official_ollama_models");
 }
 
 export function listChatModels(): Promise<ChatModelDescriptor[]> {

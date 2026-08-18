@@ -2,7 +2,7 @@ use crate::core::config::ensure_memory_scaffold;
 use crate::core::errors::{AppError, AppResult};
 use crate::core::events::emit_file_changed;
 use crate::core::state::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs;
 use std::fs::OpenOptions;
@@ -21,6 +21,24 @@ pub struct FileEntry {
 pub struct WorkspaceInfo {
     pub root: String,
     pub generation: u64,
+}
+
+/// A durable, app-wide project entry. Conversation contents continue to live
+/// in each workspace's `.neuralforge/index.db`; this registry deliberately
+/// contains only navigation metadata needed before a workspace is opened.
+#[derive(Serialize, Deserialize, Type, Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceProject {
+    pub root: String,
+    pub name: String,
+    pub last_session_id: Option<String>,
+    pub last_opened_at: i64,
+    pub available: bool,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct WorkspaceRegistry {
+    version: u32,
+    projects: Vec<WorkspaceProject>,
 }
 
 fn workspace_root(state: &State<AppState>) -> AppResult<PathBuf> {
@@ -193,6 +211,136 @@ fn list_dir(dir: &Path) -> AppResult<Vec<FileEntry>> {
 /// an explicit dir so they're testable with temp dirs, per this codebase's
 /// pure-core/thin-wrapper pattern.
 const LAST_WORKSPACE_FILE: &str = "last_workspace.txt";
+const WORKSPACE_REGISTRY_FILE: &str = "workspace_projects.json";
+const WORKSPACE_REGISTRY_VERSION: u32 = 1;
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn registry_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(WORKSPACE_REGISTRY_FILE)
+}
+
+fn load_workspace_registry(data_dir: &Path) -> std::io::Result<WorkspaceRegistry> {
+    let path = registry_path(data_dir);
+    if !path.exists() {
+        return Ok(WorkspaceRegistry {
+            version: WORKSPACE_REGISTRY_VERSION,
+            projects: Vec::new(),
+        });
+    }
+    let contents = fs::read_to_string(path)?;
+    let registry: WorkspaceRegistry = serde_json::from_str(&contents).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("workspace project registry is invalid JSON: {error}"),
+        )
+    })?;
+    if registry.version != WORKSPACE_REGISTRY_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "unsupported workspace project registry version {}",
+                registry.version
+            ),
+        ));
+    }
+    Ok(registry)
+}
+
+/// Writes a complete replacement to a sibling temporary file, flushes it,
+/// then renames it into place. Existing project records are never updated in
+/// place, avoiding a partially-written JSON registry after an interrupted
+/// process. A corrupt existing file is surfaced rather than overwritten.
+fn save_workspace_registry(data_dir: &Path, registry: &WorkspaceRegistry) -> std::io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let target = registry_path(data_dir);
+    let temp = data_dir.join(format!(
+        ".{WORKSPACE_REGISTRY_FILE}.{}.tmp",
+        uuid::Uuid::new_v4()
+    ));
+    let serialized = serde_json::to_vec_pretty(registry).map_err(std::io::Error::other)?;
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(&serialized)?;
+        file.sync_all()?;
+    }
+    if let Err(error) = fs::rename(&temp, &target) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn default_workspace_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Workspace")
+        .to_string()
+}
+
+fn validate_workspace_name(name: &str) -> AppResult<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 80 || trimmed.chars().any(char::is_control) {
+        return Err(AppError::CommandRejected(
+            "workspace name must be 1-80 printable characters".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn canonical_project_root(path: &str) -> AppResult<PathBuf> {
+    let root = fs::canonicalize(path)?;
+    if !root.is_dir() {
+        return Err(AppError::InvalidPath(format!("{path} is not a directory")));
+    }
+    Ok(root)
+}
+
+fn upsert_project_opened(data_dir: &Path, root: &Path) -> std::io::Result<()> {
+    let mut registry = load_workspace_registry(data_dir)?;
+    let root = root.to_string_lossy().to_string();
+    let now = unix_now_secs();
+    if let Some(project) = registry
+        .projects
+        .iter_mut()
+        .find(|project| project.root == root)
+    {
+        project.last_opened_at = now;
+        project.available = true;
+    } else {
+        registry.projects.push(WorkspaceProject {
+            name: default_workspace_name(Path::new(&root)),
+            root,
+            last_session_id: None,
+            last_opened_at: now,
+            available: true,
+        });
+    }
+    registry
+        .projects
+        .sort_by(|left, right| right.last_opened_at.cmp(&left.last_opened_at));
+    save_workspace_registry(data_dir, &registry)
+}
+
+fn load_workspace_projects(data_dir: &Path) -> std::io::Result<Vec<WorkspaceProject>> {
+    let mut registry = load_workspace_registry(data_dir)?;
+    for project in &mut registry.projects {
+        project.available = Path::new(&project.root).is_dir();
+    }
+    registry
+        .projects
+        .sort_by(|left, right| right.last_opened_at.cmp(&left.last_opened_at));
+    Ok(registry.projects)
+}
 
 fn save_last_workspace_path(data_dir: &Path, workspace: &Path) -> std::io::Result<()> {
     fs::create_dir_all(data_dir)?;
@@ -244,6 +392,81 @@ pub fn get_last_workspace(app: AppHandle) -> Option<String> {
     load_last_workspace_path(&data_dir)
 }
 
+/// Lists known projects without opening them. The registry is app-data only;
+/// it never reads arbitrary project files and marks missing paths unavailable
+/// instead of silently deleting the user's project history.
+#[tauri::command]
+pub fn list_workspace_projects(app: AppHandle) -> AppResult<Vec<WorkspaceProject>> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        AppError::Provider(format!(
+            "could not locate application data directory: {error}"
+        ))
+    })?;
+    load_workspace_projects(&data_dir)
+        .map_err(|error| AppError::Provider(format!("could not read workspace projects: {error}")))
+}
+
+#[tauri::command]
+pub fn rename_workspace_project(app: AppHandle, path: String, name: String) -> AppResult<()> {
+    use tauri::Manager;
+    let root = canonical_project_root(&path)?;
+    let name = validate_workspace_name(&name)?;
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        AppError::Provider(format!(
+            "could not locate application data directory: {error}"
+        ))
+    })?;
+    let mut registry = load_workspace_registry(&data_dir).map_err(|error| {
+        AppError::Provider(format!("could not read workspace projects: {error}"))
+    })?;
+    let key = root.to_string_lossy();
+    let project = registry
+        .projects
+        .iter_mut()
+        .find(|project| project.root == key)
+        .ok_or_else(|| AppError::NotFound("workspace project is not registered".to_string()))?;
+    project.name = name;
+    project.available = true;
+    save_workspace_registry(&data_dir, &registry)
+        .map_err(|error| AppError::Provider(format!("could not save workspace project: {error}")))
+}
+
+#[tauri::command]
+pub fn set_workspace_active_session(
+    app: AppHandle,
+    path: String,
+    session_id: Option<String>,
+) -> AppResult<()> {
+    use tauri::Manager;
+    if let Some(id) = &session_id {
+        if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+            return Err(AppError::CommandRejected(
+                "invalid session identifier".to_string(),
+            ));
+        }
+    }
+    let root = canonical_project_root(&path)?;
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        AppError::Provider(format!(
+            "could not locate application data directory: {error}"
+        ))
+    })?;
+    let mut registry = load_workspace_registry(&data_dir).map_err(|error| {
+        AppError::Provider(format!("could not read workspace projects: {error}"))
+    })?;
+    let key = root.to_string_lossy();
+    let project = registry
+        .projects
+        .iter_mut()
+        .find(|project| project.root == key)
+        .ok_or_else(|| AppError::NotFound("workspace project is not registered".to_string()))?;
+    project.last_session_id = session_id;
+    project.last_opened_at = unix_now_secs();
+    save_workspace_registry(&data_dir, &registry)
+        .map_err(|error| AppError::Provider(format!("could not save workspace project: {error}")))
+}
+
 #[tauri::command]
 pub fn open_workspace(
     app: AppHandle,
@@ -268,6 +491,13 @@ pub fn open_workspace(
         if let Ok(data_dir) = app.path().app_data_dir() {
             if let Err(e) = save_last_workspace_if_current(&state, &data_dir, &root, generation) {
                 tracing::warn!(target: "filesystem", event = "last_workspace_save_failed", error = %e);
+            }
+            if let Err(e) = upsert_project_opened(&data_dir, &root) {
+                // Project navigation is a convenience layer. It must never
+                // turn a valid workspace open into a failed launch, and a
+                // malformed registry is preserved for recovery rather than
+                // overwritten here.
+                tracing::warn!(target: "filesystem", event = "workspace_registry_save_failed", error = %e);
             }
         }
     }
@@ -973,5 +1203,28 @@ mod tests {
 
         drop(conn);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn workspace_registry_keeps_project_identity_and_last_session() {
+        let root = temp_workspace();
+        let data_dir = temp_workspace();
+
+        upsert_project_opened(&data_dir, &root).unwrap();
+        let mut registry = load_workspace_registry(&data_dir).unwrap();
+        assert_eq!(registry.projects.len(), 1);
+        assert_eq!(registry.projects[0].name, default_workspace_name(&root));
+
+        registry.projects[0].name = "Renamed project".to_string();
+        registry.projects[0].last_session_id = Some("session-123".to_string());
+        save_workspace_registry(&data_dir, &registry).unwrap();
+
+        let projects = load_workspace_projects(&data_dir).unwrap();
+        assert_eq!(projects[0].name, "Renamed project");
+        assert_eq!(projects[0].last_session_id.as_deref(), Some("session-123"));
+        assert!(projects[0].available);
+
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&data_dir).unwrap();
     }
 }

@@ -58,6 +58,8 @@ A local‑first, Cursor‑parity AI development environment built with Tauri, Ne
 
 ### AI Backend
 - Ollama model management (list, pull, remove, health)
+- Searchable live catalog of model families from the official Ollama Library,
+  with an explicit exact-ID field for supported tags and namespaces
 - Model auto‑selection based on task, VRAM, and benchmarks
 - Response caching with hit/miss diagnostics
 - `stream_inline_edit` for character‑by‑character inline streaming
@@ -69,6 +71,15 @@ A local‑first, Cursor‑parity AI development environment built with Tauri, Ne
 - DiffActionBar with `◀ File X of Y ▶`, Accept, and Reject
 - Monaco DiffEditor for side‑by‑side comparison
 - Transactional file writes on Accept, clean dismissal on Reject
+
+### Workspace Continuity
+- Opened folders become remembered projects with an independent display name
+- Every project retains its own saved chats, last active chat, and open editor
+  files; reopening the app returns to the last valid workspace
+- The project menu lets you switch folders without mixing chats or editor
+  context between workspaces
+- Missing folders are shown as unavailable and are never silently removed from
+  the project history
 
 ## Quick Start
 

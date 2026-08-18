@@ -18,6 +18,7 @@ import BootstrapManager from "@/components/BootstrapManager";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import EmptyState from "@/components/ui/EmptyState";
 import ResizeHandle from "@/components/ui/ResizeHandle";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useEvent } from "@/hooks/useEvent";
 import { useTheme } from "@/hooks/useTheme";
@@ -66,7 +67,8 @@ export default function Home() {
     <main className="flex h-screen w-screen flex-col bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-200 bg-neutral-50 px-3 dark:border-neutral-800 dark:bg-neutral-900">
         <button onClick={workspace.openFolder} className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">Open Folder</button>
-        {workspace.workspaceRoot && <span className="truncate text-xs text-neutral-500 dark:text-neutral-500">{workspace.workspaceRoot}</span>}
+        <WorkspaceSwitcher workspaceRoot={workspace.workspaceRoot} onOpenWorkspace={workspace.openWorkspacePath} />
+        {workspace.workspaceRoot && <span className="hidden max-w-[360px] truncate text-xs text-neutral-500 lg:inline dark:text-neutral-500">{workspace.workspaceRoot}</span>}
         <div className="ml-auto flex items-center gap-1">
           <button onClick={() => setPromptMakerOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-purple-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500"><span>🛠️</span><span>Prompt Maker</span></button>
           <button onClick={() => setAiTeamOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-green-500 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-green-400"><span>🤝</span><span>AI Team</span></button>

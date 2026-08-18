@@ -43,6 +43,11 @@ pub async fn list_models() -> AppResult<Vec<ollama::OllamaModel>> {
 }
 
 #[tauri::command]
+pub async fn list_official_ollama_models() -> AppResult<Vec<ollama::OfficialOllamaModel>> {
+    ollama::list_official_library_models().await
+}
+
+#[tauri::command]
 pub async fn pull_model(app: AppHandle, name: String) -> AppResult<()> {
     ollama::pull_model(&app, &name).await
 }

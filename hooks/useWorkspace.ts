@@ -24,6 +24,28 @@ export interface PendingUnsavedChanges {
   error: string | null;
 }
 
+interface PersistedEditorState {
+  paths: string[];
+  activePath: string | null;
+}
+
+function editorStateKey(root: string) {
+  return `nf_workspace_editor_state:${root}`;
+}
+
+function readPersistedEditorState(root: string): PersistedEditorState | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(editorStateKey(root)) ?? "null");
+    if (!value || !Array.isArray(value.paths)) return null;
+    return {
+      paths: value.paths.filter((path: unknown): path is string => typeof path === "string").slice(0, 20),
+      activePath: typeof value.activePath === "string" ? value.activePath : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function useWorkspace() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [workspaceGeneration, setWorkspaceGeneration] = useState(0);
@@ -65,6 +87,25 @@ export function useWorkspace() {
       acknowledgeSavedRevision(current, file.path, file.revision)
     );
   }, [mutateOpenFiles]);
+
+  const restoreEditorState = useCallback(async (root: string, generation: number) => {
+    const saved = readPersistedEditorState(root);
+    if (!saved || saved.paths.length === 0) return;
+    const restored = await Promise.all(saved.paths.map(async (path) => {
+      try {
+        return createBuffer(path, await fs.readFile(path));
+      } catch {
+        // A renamed/deleted file must not prevent restoration of the rest.
+        return null;
+      }
+    }));
+    if (workspaceGenerationRef.current !== generation) return;
+    const files = restored.filter((file): file is OpenFile => file !== null);
+    replaceOpenFiles(files);
+    setActivePath(files.some((file) => file.path === saved.activePath)
+      ? saved.activePath
+      : files[0]?.path ?? null);
+  }, [replaceOpenFiles]);
 
   const requestUnsavedDecision = useCallback(
     (paths: string[], reason: PendingUnsavedChanges["reason"]): Promise<boolean> => {
@@ -154,11 +195,25 @@ export function useWorkspace() {
         workspaceGenerationRef.current = workspace.generation;
         setWorkspaceRoot(workspace.root);
         setWorkspaceGeneration(workspace.generation);
+        void restoreEditorState(workspace.root, workspace.generation);
       } catch {
         // A failed restore leaves the normal no-workspace state intact.
       }
     })();
-  }, []);
+  }, [restoreEditorState]);
+
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    try {
+      localStorage.setItem(editorStateKey(workspaceRoot), JSON.stringify({
+        paths: openFiles.map((file) => file.path),
+        activePath,
+      } satisfies PersistedEditorState));
+    } catch {
+      // Browser storage is a convenience layer; open files remain usable
+      // even if storage is unavailable or full.
+    }
+  }, [activePath, openFiles, workspaceRoot]);
 
   useEffect(() => () => {
     const resolve = unsavedResolver.current;
@@ -197,10 +252,8 @@ export function useWorkspace() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  const openFolder = useCallback(async () => {
+  const openWorkspacePath = useCallback(async (selected: string) => {
     if (workspaceTransitioningRef.current) return;
-    const selected = await open({ directory: true, multiple: false });
-    if (!selected || typeof selected !== "string") return;
     const request = ++workspaceRequestRef.current;
     workspaceTransitioningRef.current = true;
     setWorkspaceTransitioning(true);
@@ -223,13 +276,21 @@ export function useWorkspace() {
       setWorkspaceGeneration(workspace.generation);
       replaceOpenFiles([]);
       setActivePath(null);
+      void restoreEditorState(workspace.root, workspace.generation);
     } finally {
       if (request === workspaceRequestRef.current) {
         workspaceTransitioningRef.current = false;
         setWorkspaceTransitioning(false);
       }
     }
-  }, [replaceOpenFiles, requestUnsavedDecision]);
+  }, [replaceOpenFiles, requestUnsavedDecision, restoreEditorState]);
+
+  const openFolder = useCallback(async () => {
+    if (workspaceTransitioningRef.current) return;
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || typeof selected !== "string") return;
+    await openWorkspacePath(selected);
+  }, [openWorkspacePath]);
 
   const openFile = useCallback(async (path: string) => {
     const existing = openFilesRef.current.find((file) => file.path === path);
@@ -293,6 +354,7 @@ export function useWorkspace() {
     editingLocked: workspaceTransitioning || pendingUnsaved?.saving === true,
     setActivePath,
     openFolder,
+    openWorkspacePath,
     openFile,
     closeFile,
     updateContent,

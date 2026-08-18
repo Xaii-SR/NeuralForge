@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as ai from "@/lib/ai";
+import * as fs from "@/lib/fs";
 import ChatPane from "@/components/ChatPane";
 
 export interface SessionTabsProps {
@@ -10,7 +11,7 @@ export interface SessionTabsProps {
   selectedContext?: string | null;
 }
 
-const TAB_BUTTON = "group flex shrink-0 items-center gap-1 rounded-t px-2.5 py-1 text-xs font-medium transition-colors border-b-2 max-w-[140px]";
+const TAB_BUTTON = "group flex w-56 shrink-0 items-center gap-1 rounded-t px-2.5 py-1 text-xs font-medium transition-colors border-b-2 max-w-[280px]";
 const TAB_ACTIVE = "border-blue-500 bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100";
 const TAB_INACTIVE = "border-transparent text-neutral-500 hover:text-neutral-700 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:text-neutral-300 dark:hover:bg-neutral-800";
 
@@ -56,9 +57,15 @@ export default function SessionTabs({ workspaceRoot, workspaceGeneration, select
     const generation = workspaceGeneration;
     (async () => {
       try {
-        const list = await ai.listSessions(generation);
+        const [list, projects] = await Promise.all([
+          ai.listSessions(generation),
+          fs.listWorkspaceProjects().catch(() => []),
+        ]);
         if (cancelled || workspaceGenerationRef.current !== generation) return;
-        const session = list[0] ?? (await ai.createSession(generation, "New Chat"));
+        const savedSessionId = projects.find((project) => project.root === workspaceRoot)?.last_session_id;
+        const session = list.find((candidate) => candidate.id === savedSessionId)
+          ?? list[0]
+          ?? (await ai.createSession(generation, "New Chat"));
         if (cancelled || workspaceGenerationRef.current !== generation) return;
         setSessions(list[0] ? list : [session]);
         setActiveSessionId(session.id);
@@ -71,6 +78,14 @@ export default function SessionTabs({ workspaceRoot, workspaceGeneration, select
     })();
     return () => { cancelled = true; };
   }, [workspaceRoot, workspaceGeneration]);
+
+  useEffect(() => {
+    if (!workspaceRoot || !activeSessionId) return;
+    void fs.setWorkspaceActiveSession(workspaceRoot, activeSessionId).catch(() => {
+      // Session content remains safely persisted in the workspace database;
+      // failure here only means the startup selection is not remembered.
+    });
+  }, [activeSessionId, workspaceRoot]);
 
   async function handleCreate() {
     if (sending) return;

@@ -47,14 +47,6 @@ const PROVIDER_TYPES = [
 
 const providerTypeByValue = new Map(PROVIDER_TYPES.map((provider) => [provider.value, provider]));
 
-const OLLAMA_MODEL_CATALOG = [
-  "qwen2.5-coder:7b",
-  "llama3.1:8b",
-  "deepseek-r1:7b",
-  "mistral:7b",
-  "gemma3:4b",
-];
-
 const PROVIDER_MODEL_PRESETS: Record<string, string[]> = {
   openai: ["gpt-4.1", "gpt-4.1-mini", "o4-mini"],
   anthropic: ["claude-sonnet-4-20250514", "claude-3-5-haiku-latest"],
@@ -93,6 +85,11 @@ export default function ProviderManager() {
   const [ollamaModels, setOllamaModels] = useState<ai.OllamaModel[]>([]);
   const [installMenu, setInstallMenu] = useState<string | null>(null);
   const [installingModel, setInstallingModel] = useState<string | null>(null);
+  const [officialOllamaModels, setOfficialOllamaModels] = useState<ai.OfficialOllamaModel[]>([]);
+  const [officialCatalogLoading, setOfficialCatalogLoading] = useState(false);
+  const [officialCatalogError, setOfficialCatalogError] = useState<string | null>(null);
+  const [modelFilter, setModelFilter] = useState("");
+  const [customOllamaModel, setCustomOllamaModel] = useState("");
   const [editModel, setEditModel] = useState("");
   const [editKey, setEditKey] = useState("");
   const selectedProviderType = useMemo(() => providerTypeByValue.get(newType), [newType]);
@@ -149,6 +146,26 @@ export default function ProviderManager() {
       setTestResult(`Installed ${model}`);
     } catch (e: any) { setTestResult(`Install failed: ${e}`); }
     finally { setInstallingModel(null); }
+  }
+
+  async function openInstallMenu(config: ProviderConfig) {
+    if (installMenu === config.id) {
+      setInstallMenu(null);
+      return;
+    }
+    setInstallMenu(config.id);
+    setModelFilter("");
+    setOfficialCatalogError(null);
+    try { setOllamaModels(await ai.listModels()); } catch { setOllamaModels([]); }
+    if (officialOllamaModels.length > 0 || officialCatalogLoading) return;
+    setOfficialCatalogLoading(true);
+    try {
+      setOfficialOllamaModels(await ai.listOfficialOllamaModels());
+    } catch (error: any) {
+      setOfficialCatalogError(error?.message ? String(error.message) : "The official Ollama catalog could not be loaded.");
+    } finally {
+      setOfficialCatalogLoading(false);
+    }
   }
 
   function handleProviderTypeChange(value: string) {
@@ -235,6 +252,11 @@ export default function ProviderManager() {
   }
 
   if (loading) return <div className="flex items-center justify-center py-8"><Spinner /></div>;
+
+  const normalizedFilter = modelFilter.trim().toLowerCase();
+  const visibleOfficialModels = officialOllamaModels.filter((model) =>
+    !normalizedFilter || model.name.toLowerCase().includes(normalizedFilter)
+  );
 
   return (
     <div className="space-y-4 text-xs">
@@ -348,15 +370,26 @@ export default function ProviderManager() {
                     )}
                     {cfg.provider_type === "ollama" && (
                       <div className="relative">
-                        <button onClick={async () => { if (installMenu === cfg.id) { setInstallMenu(null); return; } setInstallMenu(cfg.id); try { setOllamaModels(await ai.listModels()); } catch {} }} className="rounded bg-blue-50 px-2.5 py-1 text-[10px] font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50">
+                        <button onClick={() => void openInstallMenu(cfg)} className="rounded bg-blue-50 px-2.5 py-1 text-[10px] font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50">
                           Install Models
                         </button>
                         {installMenu === cfg.id && (
-                          <div className="absolute left-0 top-8 z-10 w-56 rounded border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
-                            {OLLAMA_MODEL_CATALOG.map((model) => {
+                          <div className="absolute left-0 top-8 z-10 w-80 rounded border border-neutral-200 bg-white p-2 shadow-lg dark:border-neutral-700 dark:bg-neutral-900">
+                            <div className="mb-2 text-[10px] text-neutral-500 dark:text-neutral-400">Official Ollama catalog. Selecting a model starts an Ollama download only after you click its install button.</div>
+                            <input value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="Search every official model family" className="mb-2 w-full rounded border border-neutral-200 bg-white px-2 py-1.5 text-[10px] outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
+                            <div className="mb-2 flex gap-1">
+                              <input value={customOllamaModel} onChange={(event) => setCustomOllamaModel(event.target.value)} placeholder="Exact model ID or tag (e.g. qwen3:8b)" className="min-w-0 flex-1 rounded border border-neutral-200 bg-white px-2 py-1 text-[10px] outline-none focus:border-blue-500 dark:border-neutral-700 dark:bg-neutral-800" />
+                              <button disabled={!customOllamaModel.trim() || installingModel !== null} onClick={() => void handleInstallModel(cfg, customOllamaModel.trim())} className="rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white disabled:opacity-50">Install</button>
+                            </div>
+                            {officialCatalogLoading && <div className="px-2 py-3 text-[10px] text-neutral-400">Loading official catalog…</div>}
+                            {officialCatalogError && <div className="mb-2 rounded bg-red-50 px-2 py-1 text-[10px] text-red-700 dark:bg-red-950/30 dark:text-red-300">{officialCatalogError}</div>}
+                            {!officialCatalogLoading && !officialCatalogError && <div className="mb-1 text-[10px] text-neutral-400">{visibleOfficialModels.length} of {officialOllamaModels.length} official model families</div>}
+                            <div className="max-h-80 overflow-y-auto">
+                            {visibleOfficialModels.map(({ name: model }) => {
                               const installed = ollamaModels.some((item) => item.name === model) || cfg.models.includes(model);
                               return <button key={model} disabled={installed || installingModel !== null} onClick={() => handleInstallModel(cfg, model)} className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-[10px] ${installed ? "text-neutral-700 dark:text-neutral-200" : "text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800"}`}><span>{model}</span><span>{installed ? "Installed" : installingModel === model ? "Installing..." : "↓"}</span></button>;
                             })}
+                            </div>
                           </div>
                         )}
                       </div>

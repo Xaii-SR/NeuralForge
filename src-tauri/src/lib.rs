@@ -58,6 +58,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             filesystem::open_workspace,
             filesystem::get_last_workspace,
+            filesystem::list_workspace_projects,
+            filesystem::rename_workspace_project,
+            filesystem::set_workspace_active_session,
             filesystem::read_dir,
             filesystem::read_file,
             filesystem::write_file,
@@ -76,6 +79,7 @@ pub fn run() {
             hardware::get_hardware_info,
             ai::ollama_health_check,
             ai::list_models,
+            ai::list_official_ollama_models,
             ai::pull_model,
             ai::remove_model,
             ai::list_providers,

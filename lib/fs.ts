@@ -11,6 +11,14 @@ export interface WorkspaceInfo {
   generation: number;
 }
 
+export interface WorkspaceProject {
+  root: string;
+  name: string;
+  last_session_id: string | null;
+  last_opened_at: number;
+  available: boolean;
+}
+
 export function openWorkspace(path: string): Promise<WorkspaceInfo> {
   return invoke("open_workspace", { path });
 }
@@ -18,6 +26,18 @@ export function openWorkspace(path: string): Promise<WorkspaceInfo> {
 /** Last successfully opened workspace path, if it still exists on disk (v1.4.0 restoration). */
 export function getLastWorkspace(): Promise<string | null> {
   return invoke("get_last_workspace");
+}
+
+export function listWorkspaceProjects(): Promise<WorkspaceProject[]> {
+  return invoke("list_workspace_projects");
+}
+
+export function renameWorkspaceProject(path: string, name: string): Promise<void> {
+  return invoke("rename_workspace_project", { path, name });
+}
+
+export function setWorkspaceActiveSession(path: string, sessionId: string | null): Promise<void> {
+  return invoke("set_workspace_active_session", { path, sessionId });
 }
 
 export function readDir(path: string): Promise<FileEntry[]> {

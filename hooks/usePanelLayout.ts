@@ -6,8 +6,8 @@ export type PanelId = "sidebar" | "chat" | "bottom";
 
 const STORAGE_KEY = "nf_layout_v1";
 
-const DEFAULTS: Record<PanelId, number> = { sidebar: 256, chat: 320, bottom: 288 };
-const MIN: Record<PanelId, number> = { sidebar: 160, chat: 240, bottom: 120 };
+const DEFAULTS: Record<PanelId, number> = { sidebar: 256, chat: 420, bottom: 288 };
+const MIN: Record<PanelId, number> = { sidebar: 160, chat: 280, bottom: 120 };
 const MAX: Record<PanelId, number> = { sidebar: 520, chat: 680, bottom: 720 };
 
 /** The center (editor) column may never be squeezed below this width. */

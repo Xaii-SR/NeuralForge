@@ -2,9 +2,11 @@ use crate::core::errors::{AppError, AppResult};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::BTreeSet;
 use tauri::{AppHandle, Emitter};
 
 const BASE_URL: &str = "http://localhost:11434";
+const OFFICIAL_LIBRARY_URL: &str = "https://ollama.com/library?sort=popular";
 /// A local model may need time to load and generate, but a workflow must not
 /// remain indefinitely pending when the Ollama service stops responding.
 const CHAT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
@@ -17,6 +19,14 @@ pub struct OllamaModel {
     pub quantization_level: String,
     pub context_length: u64,
     pub family: String,
+}
+
+/// A model family advertised by Ollama's official public library. Individual
+/// tags remain selectable through the validated exact-model input because a
+/// family can have many changing tags and quantizations.
+#[derive(Serialize, Type, Clone, Debug, PartialEq, Eq)]
+pub struct OfficialOllamaModel {
+    pub name: String,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +66,78 @@ fn endpoint(base_url: &str, path: &str) -> String {
         base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
+}
+
+/// Model references are data sent to the local Ollama API, never shell
+/// fragments. Keep the accepted grammar deliberately small while supporting
+/// official namespaces and tags such as `qwen3:8b` and `acme/model:latest`.
+pub fn valid_model_reference(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 160
+        && !name.starts_with('/')
+        && !name.contains("..")
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':')
+        })
+}
+
+fn extract_official_library_models(html: &str) -> Vec<OfficialOllamaModel> {
+    let mut models = BTreeSet::new();
+    let marker = "href=\"/library/";
+    let mut remainder = html;
+    while let Some(start) = remainder.find(marker) {
+        let after_marker = &remainder[start + marker.len()..];
+        let Some(end) = after_marker.find('"') else {
+            break;
+        };
+        let candidate = &after_marker[..end];
+        // The trusted catalog lists family IDs here. Ignore links such as
+        // `/library` itself and anything that does not satisfy the exact
+        // local pull grammar.
+        if valid_model_reference(candidate) {
+            models.insert(candidate.to_string());
+        }
+        remainder = &after_marker[end + 1..];
+    }
+    models
+        .into_iter()
+        .map(|name| OfficialOllamaModel { name })
+        .collect()
+}
+
+/// Reads only the hard-coded official Ollama library URL. The response is
+/// treated as untrusted catalog data: it cannot alter endpoints, commands,
+/// filesystem roots, or provider settings; invalid entries are discarded.
+pub async fn list_official_library_models() -> AppResult<Vec<OfficialOllamaModel>> {
+    let response = client()
+        .get(OFFICIAL_LIBRARY_URL)
+        .timeout(std::time::Duration::from_secs(12))
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::Provider(format!("official Ollama catalog unavailable: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::Provider(format!(
+            "official Ollama catalog returned status {}",
+            response.status()
+        )));
+    }
+    let body = response.text().await.map_err(|error| {
+        AppError::Provider(format!("could not read official Ollama catalog: {error}"))
+    })?;
+    if body.len() > 3_000_000 {
+        return Err(AppError::Provider(
+            "official Ollama catalog response was unexpectedly large".to_string(),
+        ));
+    }
+    let models = extract_official_library_models(&body);
+    if models.is_empty() {
+        return Err(AppError::Provider(
+            "official Ollama catalog did not contain valid model entries".to_string(),
+        ));
+    }
+    Ok(models)
 }
 
 pub async fn health_check() -> bool {
@@ -175,6 +257,11 @@ pub async fn remove_model(name: &str) -> AppResult<()> {
 }
 
 pub async fn remove_model_at(base_url: &str, name: &str) -> AppResult<()> {
+    if !valid_model_reference(name) {
+        return Err(AppError::CommandRejected(
+            "invalid Ollama model reference".to_string(),
+        ));
+    }
     let resp = client()
         .delete(endpoint(base_url, "api/delete"))
         .json(&serde_json::json!({ "name": name }))
@@ -196,6 +283,11 @@ pub async fn pull_model(app: &AppHandle, name: &str) -> AppResult<()> {
 }
 
 pub async fn pull_model_at(app: &AppHandle, base_url: &str, name: &str) -> AppResult<()> {
+    if !valid_model_reference(name) {
+        return Err(AppError::CommandRejected(
+            "invalid Ollama model reference".to_string(),
+        ));
+    }
     let resp = client()
         .post(endpoint(base_url, "api/pull"))
         .json(&serde_json::json!({ "name": name, "stream": true }))
@@ -347,6 +439,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn official_catalog_parser_accepts_only_safe_library_model_ids() {
+        let html = r#"
+            <a href="/library/qwen3">Qwen</a>
+            <a href="/library/acme/model:latest">Namespaced</a>
+            <a href="/library/../../not-a-model">Bad</a>
+            <a href="/library/qwen3">Duplicate</a>
+        "#;
+        let names = extract_official_library_models(html)
+            .into_iter()
+            .map(|model| model.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["acme/model:latest", "qwen3"]);
+    }
+
+    #[test]
+    fn model_reference_validation_rejects_shell_and_path_injection() {
+        assert!(valid_model_reference("qwen3:8b"));
+        assert!(valid_model_reference("org/model-name:latest"));
+        assert!(!valid_model_reference("qwen3; rm -rf /"));
+        assert!(!valid_model_reference("../qwen3"));
+        assert!(!valid_model_reference("qwen3 name"));
+    }
 
     #[test]
     fn chat_requests_have_a_finite_deadline() {

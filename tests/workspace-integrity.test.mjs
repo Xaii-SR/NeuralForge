@@ -83,3 +83,21 @@ test("unmount resolves any pending unsaved decision", async () => {
   assert.match(workspace, /unsavedResolver\.current = null/);
   assert.match(workspace, /resolve\?\.\(false\)/);
 });
+
+test("project navigation and model catalog stay durable and bounded", async () => {
+  const [filesystem, switcher, providerManager, ollama] = await Promise.all([
+    read("src-tauri/src/filesystem/mod.rs"),
+    read("components/WorkspaceSwitcher.tsx"),
+    read("components/ProviderManager.tsx"),
+    read("src-tauri/src/ai/providers/ollama.rs"),
+  ]);
+
+  assert.match(filesystem, /WORKSPACE_REGISTRY_FILE/);
+  assert.match(filesystem, /set_workspace_active_session/);
+  assert.match(filesystem, /save_workspace_registry/);
+  assert.match(switcher, /Rename current project/);
+  assert.match(providerManager, /listOfficialOllamaModels/);
+  assert.doesNotMatch(providerManager, /OLLAMA_MODEL_CATALOG/);
+  assert.match(ollama, /https:\/\/ollama\.com\/library\?sort=popular/);
+  assert.match(ollama, /valid_model_reference/);
+});
