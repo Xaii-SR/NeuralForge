@@ -5,7 +5,7 @@ import AITeamPanel from "@/components/AITeamPanel";
 
 /**
  * Council is intentionally a single, bounded review pass. It shares the
- * typed sequential runner with AI TEAM but exposes only reviewer, critic,
+ * typed sequential runner with AI Team but exposes only reviewer, critic,
  * and final-editor roles rather than a persistent autonomous workflow.
  */
 export default function CouncilPanel({ workspaceGeneration }: { workspaceGeneration: number }) {

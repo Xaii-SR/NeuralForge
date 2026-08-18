@@ -4,7 +4,7 @@ import test from "node:test";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("AI TEAM is a bounded, typed, local-first staged workflow", async () => {
+test("AI Team is a bounded, typed, local-first staged workflow", async () => {
   const [workflow, panel, page] = await Promise.all([
     read("lib/agent-workflow.ts"),
     read("components/AITeamPanel.tsx"),
@@ -21,9 +21,10 @@ test("AI TEAM is a bounded, typed, local-first staged workflow", async () => {
   assert.match(panel, /buildStageMessages\(variant, objective, stage\.role, finished\)/);
   assert.match(panel, /void ai\.cancelAiRequest\(requestId\)/);
   assert.match(panel, /activeRequestIdsRef\.current\.delete\(requestId\)/);
+  assert.match(panel, /activeRequestIds\.clear\(\)/);
   assert.match(panel, /mountedRef\.current = false/);
   assert.match(panel, /Auto —/);
-  assert.match(page, />AI TEAM</);
+  assert.match(page, />AI Team</);
 });
 
 test("terminal and bottom workspace are contained inside the center column", async () => {

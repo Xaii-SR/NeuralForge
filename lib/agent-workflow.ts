@@ -95,7 +95,7 @@ export function buildStageMessages(
   priorResults: WorkflowStageResult[],
 ): ChatMessage[] {
   const evidence = sharedEvidence(priorResults);
-  const workflowName = variant === "team" ? "AI TEAM" : "AI Council";
+  const workflowName = variant === "team" ? "AI Team" : "AI Council";
   return [
     {
       role: "system",

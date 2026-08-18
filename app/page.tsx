@@ -69,7 +69,7 @@ export default function Home() {
         {workspace.workspaceRoot && <span className="truncate text-xs text-neutral-500 dark:text-neutral-500">{workspace.workspaceRoot}</span>}
         <div className="ml-auto flex items-center gap-1">
           <button onClick={() => setPromptMakerOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-purple-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-purple-500"><span>🛠️</span><span>Prompt Maker</span></button>
-          <button onClick={() => setAiTeamOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-green-500 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-green-400"><span>🤝</span><span>AI TEAM</span></button>
+          <button onClick={() => setAiTeamOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-green-500 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-green-400"><span>🤝</span><span>AI Team</span></button>
           <button onClick={() => setCouncilOpen(true)} className="mr-1 flex items-center gap-1.5 rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500"><span>⚖️</span><span>Council</span></button>
           <button onClick={toggleTheme} aria-label="Toggle theme" title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} className="rounded px-2 py-1 text-xs text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">{theme === "dark" ? "☀" : "🌙"}</button>
           <button onClick={() => setSettingsOpen(true)} className="rounded px-2.5 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:text-neutral-200 dark:hover:bg-neutral-800">Settings</button>
@@ -81,8 +81,8 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[1px]" onClick={() => setAiTeamOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white p-5 text-sm text-neutral-800 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
             <div className="mb-4 flex shrink-0 items-center justify-between">
-              <h2 className="text-base font-semibold">🤝 AI TEAM</h2>
-              <button onClick={() => setAiTeamOpen(false)} aria-label="Close AI TEAM" className="rounded px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
+              <h2 className="text-base font-semibold">🤝 AI Team</h2>
+              <button onClick={() => setAiTeamOpen(false)} aria-label="Close AI Team" className="rounded px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:bg-neutral-800">✕</button>
             </div>
             <div className="min-h-0 flex-1"><AITeamPanel key={workspace.workspaceGeneration} workspaceGeneration={workspace.workspaceGeneration} /></div>
             <div className="mt-4 flex shrink-0 justify-end border-t border-neutral-100 pt-3 dark:border-neutral-800">

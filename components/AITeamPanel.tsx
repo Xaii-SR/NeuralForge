@@ -99,13 +99,14 @@ export default function AITeamPanel({ variant = "team", workspaceGeneration }: A
   // work running in the background. The backend treats cancellation as an
   // explicit terminal state and emits no successful result afterward.
   useEffect(() => {
+    const activeRequestIds = activeRequestIdsRef.current;
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      for (const requestId of activeRequestIdsRef.current) {
+      for (const requestId of activeRequestIds) {
         void ai.cancelAiRequest(requestId);
       }
-      activeRequestIdsRef.current.clear();
+      activeRequestIds.clear();
     };
   }, []);
 
@@ -183,7 +184,7 @@ export default function AITeamPanel({ variant = "team", workspaceGeneration }: A
     }
   }
 
-  const title = variant === "team" ? "🤝 AI TEAM" : "⚖️ AI Council";
+  const title = variant === "team" ? "🤝 AI Team" : "⚖️ AI Council";
   const description = variant === "team"
     ? "A bounded, sequential team: each specialist receives relevant prior evidence and the final lead produces one answer. Local models are preferred automatically; every role can be overridden."
     : "One bounded review pass: reviewer, critic, and final editor. It completes once and returns one final review; it does not become an ongoing chat.";
@@ -235,7 +236,7 @@ export default function AITeamPanel({ variant = "team", workspaceGeneration }: A
         className={`flex shrink-0 items-center justify-center gap-2 rounded px-4 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variant === "team" ? "bg-green-600 hover:bg-green-500" : "bg-red-600 hover:bg-red-500"}`}
       >
         {running && <Spinner size={14} />}
-        {running ? (variant === "team" ? "AI TEAM is coordinating…" : "Council is reviewing…") : (variant === "team" ? "Run AI TEAM" : "Run one Council review")}
+        {running ? (variant === "team" ? "AI Team is coordinating…" : "Council is reviewing…") : (variant === "team" ? "Run AI Team" : "Run one Council review")}
       </button>
 
       {finalStage?.status === "complete" && (
