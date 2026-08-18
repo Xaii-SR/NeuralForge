@@ -280,7 +280,7 @@ pub fn open_workspace(
     //
     // Why: the original synchronous call blocked this IPC command until
     // indexing finished. On a huge real-world folder (reproduced against
-    // Z:\Steam\...\assettocorsa\content\cars: three opens logged
+    // Reopening the same workspace three times must remain observable.
     // workspace_opened with no auto_index_completed ever following), the
     // recursive walk alone can take minutes, the window goes Not
     // Responding, and the user kills the app - a release-blocking crash

@@ -184,6 +184,16 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
             </label>
             <ProviderManager />
           </div>
+          <div className="mb-5 rounded border border-amber-200 bg-amber-50 p-3 text-[11px] leading-4 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100">
+            <div className="font-semibold">Official subscription sign-in boundary</div>
+            <p className="mt-1">NeuralForge never imports browser sessions, cookies, OAuth tokens, or credentials from another AI client. Its built-in provider adapters use the provider credentials that their public APIs authorize.</p>
+            <ul className="mt-2 list-disc space-y-1 pl-4">
+              <li>ChatGPT subscription sign-in is supported by OpenAI&apos;s official Codex app, CLI, and IDE extension; NeuralForge does not reuse that client-bound sign-in. Use an authorized OpenAI API credential for direct NeuralForge requests.</li>
+              <li>Claude Pro/Max sign-in is supported by Anthropic&apos;s official Claude Code client; direct NeuralForge Anthropic requests require the supported API credential path.</li>
+              <li>GitHub Copilot&apos;s SDK can support user or OAuth authentication only for a registered GitHub application. NeuralForge does not ship an unregistered or simulated OAuth client.</li>
+            </ul>
+            <p className="mt-2">This prevents fake subscription support and makes an unavailable official integration visible instead of silently falling back to cloud access.</p>
+          </div>
           <div className="mb-5"><div className="mb-2 text-xs font-medium uppercase tracking-wide text-neutral-400">Response Cache</div><div className="flex items-center gap-2"><button onClick={handleClearCache} className="rounded bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700">Clear Cache</button>{cacheStatus && <span className="text-xs text-neutral-500">{cacheStatus}</span>}</div></div>
           {buildInfo && (
             <div className="mb-5 border-t border-neutral-100 pt-4 dark:border-neutral-800">

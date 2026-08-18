@@ -5,6 +5,9 @@ use specta::Type;
 use tauri::{AppHandle, Emitter};
 
 const BASE_URL: &str = "http://localhost:11434";
+/// A local model may need time to load and generate, but a workflow must not
+/// remain indefinitely pending when the Ollama service stops responding.
+const CHAT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 #[derive(Serialize, Type, Clone)]
 pub struct OllamaModel {
@@ -288,6 +291,7 @@ where
             "messages": messages,
             "stream": true,
         }))
+        .timeout(CHAT_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|e| AppError::Provider(format!("chat request failed: {e}")))?;
@@ -343,6 +347,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_requests_have_a_finite_deadline() {
+        assert_eq!(CHAT_REQUEST_TIMEOUT, std::time::Duration::from_secs(180));
+    }
 
     /// Requires a real local Ollama instance with deepseek-coder:latest
     /// pulled - not mocked, verifies the actual streaming round trip.

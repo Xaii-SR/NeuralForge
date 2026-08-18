@@ -73,10 +73,13 @@ export default function Terminal() {
       }
     };
     window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(containerRef.current);
 
     return () => {
       disposed = true;
       window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       dataDisposable.dispose();
       unlistenOutput?.();
       unlistenClosed?.();
@@ -88,8 +91,8 @@ export default function Terminal() {
   }, [appendTerminalOutput, clearTerminalError]);
 
   return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="h-full w-full bg-[#1e1e1e]" />
+    <div className="relative h-full w-full overflow-hidden">
+      <div ref={containerRef} className="h-full w-full overflow-hidden bg-[#1e1e1e]" />
     </div>
   );
 }

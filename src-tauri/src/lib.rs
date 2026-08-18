@@ -173,10 +173,23 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+        .run(|app_handle, event| match event {
+            // A close request on the last window is not guaranteed to become
+            // an ExitRequested event on every Windows/WebView lifecycle. Make
+            // the shutdown intent explicit so terminal children cannot keep a
+            // hidden desktop process alive after the user closes the app.
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } => {
+                let registry = app_handle.state::<TerminalRegistry>();
+                terminal::kill_all(&registry);
+                app_handle.exit(0);
+            }
+            tauri::RunEvent::ExitRequested { .. } => {
                 let registry = app_handle.state::<TerminalRegistry>();
                 terminal::kill_all(&registry);
             }
+            _ => {}
         });
 }

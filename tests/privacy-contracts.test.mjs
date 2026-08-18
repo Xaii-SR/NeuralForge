@@ -76,12 +76,11 @@ test("retained workspace search derives its root in Rust", async () => {
 });
 
 test("cloud workspace context sharing is explicit and defaults off", async () => {
-  const [store, settings, chat, council, councilApi, inline] = await Promise.all([
+  const [store, settings, chat, team, inline] = await Promise.all([
     read("lib/store.ts"),
     read("components/SettingsPanel.tsx"),
     read("components/ChatPane.tsx"),
-    read("components/CouncilPanel.tsx"),
-    read("lib/council.ts"),
+    read("components/AITeamPanel.tsx"),
     read("src-tauri/src/ai/inline.rs"),
   ]);
 
@@ -89,8 +88,7 @@ test("cloud workspace context sharing is explicit and defaults off", async () =>
   assert.match(settings, /Share workspace context with cloud providers/);
   assert.match(settings, /Off by default/);
   assert.match(chat, /appConfig\.shareWorkspaceContextWithCloud/);
-  assert.match(council, /config\.shareWorkspaceContextWithCloud/);
-  assert.match(councilApi, /shareWorkspaceContext/);
+  assert.match(team, /config\.shareWorkspaceContextWithCloud/);
   assert.match(inline, /AdapterKind::Ollama/);
   assert.doesNotMatch(inline, /resolve_provider_for_model/);
 });
