@@ -21,6 +21,7 @@ mod hardware;
 mod intelligence;
 mod knowledge_store;
 mod multi_agent;
+mod official_signin;
 mod parsers;
 mod performance;
 mod planning;
@@ -90,6 +91,8 @@ pub fn run() {
             ai::test_provider_connection,
             ai::list_provider_models,
             ai::list_chat_models,
+            official_signin::list_official_signin_clients,
+            official_signin::start_official_signin,
             ai::provider_registry::list_provider_configs,
             ai::provider_registry::add_provider_config,
             ai::provider_registry::update_provider_config,

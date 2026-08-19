@@ -6,6 +6,7 @@ import Spinner from "@/components/ui/Spinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAppConfig, inferEffortForModel, saveAppConfig } from "@/lib/store";
 import ProviderManager from "@/components/ProviderManager";
+import OfficialSignInPanel from "@/components/OfficialSignInPanel";
 import * as providers from "@/lib/providers";
 import { getBuildInfo, type BuildInfo } from "@/lib/buildInfo";
 
@@ -183,6 +184,7 @@ export default function SettingsPanel({ onClose }: SettingsPanelProps) {
               </span>
             </label>
             <ProviderManager />
+            <OfficialSignInPanel />
           </div>
           <div className="mb-5 rounded border border-amber-200 bg-amber-50 p-3 text-[11px] leading-4 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-100">
             <div className="font-semibold">Official subscription sign-in boundary</div>

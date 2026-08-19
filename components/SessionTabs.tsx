@@ -11,7 +11,10 @@ export interface SessionTabsProps {
   selectedContext?: string | null;
 }
 
-const TAB_BUTTON = "group flex w-56 shrink-0 items-center gap-1 rounded-t px-2.5 py-1 text-xs font-medium transition-colors border-b-2 max-w-[280px]";
+// The session strip must leave room for the always-visible New button at the
+// smallest supported chat-pane width. A fixed 14rem tab made the strip wider
+// than the pane and clipped that control.
+const TAB_BUTTON = "group flex min-w-0 max-w-32 shrink items-center gap-1 rounded-t px-2 py-1 text-xs font-medium transition-colors border-b-2";
 const TAB_ACTIVE = "border-blue-500 bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100";
 const TAB_INACTIVE = "border-transparent text-neutral-500 hover:text-neutral-700 hover:bg-neutral-100 dark:text-neutral-500 dark:hover:text-neutral-300 dark:hover:bg-neutral-800";
 
@@ -166,7 +169,7 @@ export default function SessionTabs({ workspaceRoot, workspaceGeneration, select
                 onClick={() => handleSelect(s.id)}
                 onDoubleClick={() => startRename(s)}
                 title={s.title}
-                className="min-w-0 truncate"
+                className="min-w-0 flex-1 truncate text-left"
               >
                 {s.title}
               </button>

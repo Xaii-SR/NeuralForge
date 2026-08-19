@@ -92,3 +92,17 @@ test("cloud workspace context sharing is explicit and defaults off", async () =>
   assert.match(inline, /AdapterKind::Ollama/);
   assert.doesNotMatch(inline, /resolve_provider_for_model/);
 });
+
+test("official sign-in launchers are explicit and allowlisted", async () => {
+  const [signInPanel, launcher] = await Promise.all([
+    read("components/OfficialSignInPanel.tsx"),
+    read("src-tauri/src/official_signin.rs"),
+  ]);
+
+  assert.match(signInPanel, /Official account sign-in/);
+  assert.match(signInPanel, /Add Provider remains the explicit API-credential path/);
+  assert.match(signInPanel, /GitHub Copilot additionally requires a registered GitHub App/);
+  assert.match(launcher, /Unknown official sign-in client/);
+  assert.match(launcher, /No renderer-provided text is passed through to the OS command line/);
+  assert.doesNotMatch(launcher, /Command::new\(&client_id\)/);
+});
